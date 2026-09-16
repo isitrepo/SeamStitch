@@ -39,6 +39,20 @@ import folder_paths
 VIDEO_EXTENSIONS = ('.mp4', '.webm', '.mkv', '.avi', '.mov', '.m4v', '.flv', '.wmv')
 
 
+def _safe_upload_filename(filename):
+    """Reduce a client-supplied upload filename to a bare basename and reject
+    anything that could escape the input directory (empty name, ".." segments,
+    or an embedded path separator from either OS)."""
+    if not filename:
+        return None
+    base = os.path.basename(filename)
+    if not base or base in (".", ".."):
+        return None
+    if "/" in filename or "\\" in filename or ".." in filename:
+        return None
+    return base
+
+
 def _next_free_path(directory, prefix, ext):
     os.makedirs(directory, exist_ok=True)
     counter = 1
@@ -265,7 +279,9 @@ async def seamstitch_check_file(request):
 async def seamstitch_upload_chunk(request):
     post = await request.post()
     file = post.get("file")
-    filename = post.get("filename")
+    filename = _safe_upload_filename(post.get("filename"))
+    if filename is None:
+        return web.Response(status=400, text="Invalid filename")
     chunk_index = int(post.get("chunk_index"))
     total_chunks = int(post.get("total_chunks"))
 

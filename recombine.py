@@ -390,7 +390,7 @@ class SeamStitchRecombine:
                 "max_dedup_frames": ("INT", {"default": 6, "min": 0, "max": 60, "step": 1,
                                               "tooltip": "Cap on how many leading/trailing frames can be stripped from the regenerated segment as held duplicates."}),
                 "filename_prefix": ("STRING", {"default": "seamstitch_recombined"}),
-                "format": (ffmpeg_formats, {'formats': format_widgets}),
+                "format": (ffmpeg_formats, {'default': 'video/h264-mp4', 'formats': format_widgets}),
                 "save_output": ("BOOLEAN", {"default": True}),
             },
             "optional": {

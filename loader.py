@@ -9,15 +9,45 @@ from aiohttp import web
 import comfy.utils
 from PIL import Image
 
+_VIDEO_EXTENSIONS = ('.mp4', '.webm', '.mkv', '.avi', '.mov', '.m4v', '.flv', '.wmv')
+
+
 # Custom API route to serve video files from anywhere on the user's system for the frontend preview.
 # Namespaced under /seamstitch/ so this doesn't collide with the upstream loader project's own
 # view route if both are installed side by side.
+#
+# Deliberately not restricted to the ComfyUI input directory - the "choose file to upload"
+# flow has a fast path (js/loader.js) that points this straight at a desktop absolute path,
+# skipping the upload entirely. Restricted instead to real, existing files with a known video
+# extension, with any ".." path segment rejected outright, to shrink an arbitrary-file-read
+# down to "read video files that already exist on disk".
 @PromptServer.instance.routes.get("/seamstitch/loader/view")
 async def custom_view(request):
     file_path = request.query.get("filename", "")
+    if not file_path:
+        return web.Response(status=404, text="File not found")
+    normalized = file_path.replace("\\", "/")
+    if any(part == ".." for part in normalized.split("/")):
+        return web.Response(status=404, text="File not found")
+    if not file_path.lower().endswith(_VIDEO_EXTENSIONS):
+        return web.Response(status=404, text="File not found")
     if os.path.exists(file_path) and os.path.isfile(file_path):
         return web.FileResponse(file_path)
     return web.Response(status=404, text="File not found")
+
+
+def _safe_upload_filename(filename):
+    """Reduce a client-supplied upload filename to a bare basename and reject
+    anything that could escape the input directory (empty name, ".." segments,
+    or an embedded path separator from either OS)."""
+    if not filename:
+        return None
+    base = os.path.basename(filename)
+    if not base or base in (".", ".."):
+        return None
+    if "/" in filename or "\\" in filename or ".." in filename:
+        return None
+    return base
 
 
 def _read_and_write_file_chunk(file, file_path, mode):
@@ -48,7 +78,9 @@ def _save_frame_png(image_tensor, filename_prefix):
 async def upload_chunk(request):
     post = await request.post()
     file = post.get("file")
-    filename = post.get("filename")
+    filename = _safe_upload_filename(post.get("filename"))
+    if filename is None:
+        return web.Response(status=400, text="Invalid filename")
     chunk_index = int(post.get("chunk_index"))
     total_chunks = int(post.get("total_chunks"))
 
