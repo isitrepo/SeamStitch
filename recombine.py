@@ -157,8 +157,23 @@ def _decode_range(video_path, frame_rate, start_frame_idx, end_frame_idx,
 
     fr = float(frame_rate) if frame_rate > 0 else 24.0
     frame_interval = 1.0 / fr
-    start_time = start_frame_idx / fr
-    end_time = end_frame_idx / fr if end_frame_idx is not None else None
+
+    # Frame indices count from the stream's own first frame, which is not
+    # necessarily at t=0. SeamStitchCombine's concat demuxer leaves a small
+    # positive start offset on its output (+31 ms measured on real 48 fps
+    # footage), and mapping index -> time as a bare idx/fr silently ignored it:
+    # once the offset exceeded one frame interval, the "after" range began one
+    # frame early, so the last frame of the span being replaced was re-emitted
+    # verbatim immediately after the regenerated segment - one extra frame in
+    # the output and a held frame at the trailing join. Anchor on the real
+    # start time instead. The "before" range was unaffected (it starts at
+    # index 0 and its end is capped by a frame count, not a time).
+    if video_stream.start_time is not None and video_stream.time_base:
+        base_time = float(video_stream.start_time * video_stream.time_base)
+    else:
+        base_time = 0.0
+    start_time = base_time + start_frame_idx / fr
+    end_time = base_time + end_frame_idx / fr if end_frame_idx is not None else None
 
     video_stream.thread_type = "AUTO"
     if video_stream.time_base:
@@ -192,7 +207,11 @@ def _decode_range(video_path, frame_rate, start_frame_idx, end_frame_idx,
             frame_rgb = frame_rgb[manual_crop_top:orig_h - manual_crop_bottom,
                                    manual_crop_left:orig_w - manual_crop_right, :]
 
-        while expected_target_time <= frame_time:
+        # Tolerance of a thousandth of a frame (~21 us at 48 fps): the target is
+        # derived from frame_idx rather than accumulated, but pts -> float still
+        # lands a hair either side of an exactly-equal target, and losing that
+        # comparison drops the range's final frame.
+        while expected_target_time <= frame_time + frame_interval * 1e-3:
             if end_frame_idx is not None and frame_idx >= end_frame_idx:
                 break
             if (frame_rgb.shape[1], frame_rgb.shape[0]) != (target_w, target_h):
@@ -201,7 +220,9 @@ def _decode_range(video_path, frame_rate, start_frame_idx, end_frame_idx,
                 resized = frame_rgb
             frames_out.append(resized)
             frame_idx += 1
-            expected_target_time += frame_interval
+            # Derived from the index, never accumulated: adding frame_interval
+            # 239 times drifted far enough to lose the final frame of a range.
+            expected_target_time = base_time + frame_idx / fr
 
         if end_frame_idx is not None and frame_idx >= end_frame_idx:
             break
