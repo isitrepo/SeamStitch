@@ -1,0 +1,64 @@
+<svg width="1000" height="440" viewBox="0 0 1000 440" xmlns="http://www.w3.org/2000/svg" font-family="Segoe UI, Helvetica, Arial, sans-serif">
+<rect width="1000" height="440" fill="#1a1a1a"/>
+<text x="20" y="28" fill="#e8e8e8" font-size="15" font-weight="600">SeamStitch — recommended wiring</text>
+
+<g id="combine">
+  <rect x="40" y="90" width="220" height="90" rx="10" fill="#2a2a2a" stroke="#4c4c4c" stroke-width="1.5"/>
+  <path d="M 40 118 Q 40 90 50 90 L 250 90 Q 260 90 260 118 Z" fill="#2f8f5b"/>
+  <text x="150.0" y="109" fill="#fff" font-size="13" font-weight="600" text-anchor="middle">Combine Clips (Simple)</text>
+</g>
+<text x="54" y="140" fill="#9a9a9a" font-size="11">video_a, video_b</text>
+<text x="54" y="158" fill="#9a9a9a" font-size="11">(losslessly concatenated)</text>
+
+<g id="loadvid">
+  <rect x="380" y="60" width="260" height="110" rx="10" fill="#2a2a2a" stroke="#4c4c4c" stroke-width="1.5"/>
+  <path d="M 380 88 Q 380 60 390 60 L 630 60 Q 640 60 640 88 Z" fill="#2f6fa5"/>
+  <text x="510.0" y="79" fill="#fff" font-size="13" font-weight="600" text-anchor="middle">Load Video UI (First/Last Frame)</text>
+</g>
+<text x="394" y="110" fill="#9a9a9a" font-size="11">scrub / trim to the broken segment</text>
+<text x="394" y="128" fill="#9a9a9a" font-size="11">first_frame, last_frame → your</text>
+<text x="394" y="144" fill="#9a9a9a" font-size="11">regeneration pipeline (FLF, etc.)</text>
+
+<g id="gen">
+  <rect x="400" y="300" width="260" height="90" rx="10" fill="#2a2a2a" stroke="#4c4c4c" stroke-width="1.5"/>
+  <path d="M 400 328 Q 400 300 410 300 L 650 300 Q 660 300 660 328 Z" fill="#5c5c5c"/>
+  <text x="530.0" y="319" fill="#fff" font-size="13" font-weight="600" text-anchor="middle">Your regeneration pipeline</text>
+</g>
+<text x="414" y="350" fill="#9a9a9a" font-size="11">e.g. MiniMax / LTX first-last-frame</text>
+<text x="414" y="368" fill="#9a9a9a" font-size="11">(not part of this pack)</text>
+
+<g id="recombine">
+  <rect x="740" y="170" width="230" height="110" rx="10" fill="#2a2a2a" stroke="#4c4c4c" stroke-width="1.5"/>
+  <path d="M 740 198 Q 740 170 750 170 L 960 170 Q 970 170 970 198 Z" fill="#a15a2f"/>
+  <text x="855.0" y="189" fill="#fff" font-size="13" font-weight="600" text-anchor="middle">Video Combine (Segment Recombine)</text>
+</g>
+<text x="754" y="220" fill="#9a9a9a" font-size="11">splices the regenerated segment</text>
+<text x="754" y="238" fill="#9a9a9a" font-size="11">back into the original video</text>
+
+<g>
+  <defs><marker id="arr-55111" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#2f8f5b"/></marker></defs>
+  <line x1="260" y1="130" x2="380" y2="100" stroke="#2f8f5b" stroke-width="1.6"  marker-end="url(#arr-55111)"/>
+  <rect x="272.6" y="98.0" width="94.8" height="15" fill="#1a1a1a"/>
+  <text x="320.0" y="109.0" fill="#2f8f5b" font-size="11" text-anchor="middle" font-family="Consolas, monospace">images / audio</text>
+</g>
+
+<g>
+  <defs><marker id="arr-92693" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#2f6fa5"/></marker></defs>
+  <line x1="450" y1="170" x2="440" y2="300" stroke="#2f6fa5" stroke-width="1.6"  marker-end="url(#arr-92693)"/>
+  <rect x="366.6" y="216.0" width="156.8" height="15" fill="#1a1a1a"/>
+  <text x="445.0" y="227.0" fill="#2f6fa5" font-size="11" text-anchor="middle" font-family="Consolas, monospace">first_frame / last_frame</text>
+</g>
+<path d="M 620 60 C 760 15, 620 115, 750 170" fill="none" stroke="#2f6fa5" stroke-width="1.6" stroke-dasharray="5,4" marker-end="url(#arrhead2)"/>
+<defs><marker id="arrhead2" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#2f6fa5"/></marker></defs>
+<text x="690.0" y="30" fill="#2f6fa5" font-size="11" text-anchor="middle" font-family="Consolas, monospace">source_video_path, start_frame, end_frame, frame_rate</text>
+<path d="M 600 176 C 680 260, 700 350, 780 280" fill="none" stroke="#ff8a80" stroke-width="1.6" stroke-dasharray="5,4" marker-end="url(#arrhead3)"/>
+<defs><marker id="arrhead3" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#ff8a80"/></marker></defs>
+<text x="540.0" y="410" fill="#ff8a80" font-size="11" text-anchor="middle" font-family="Consolas, monospace">full_clip_audio → original_audio_override (optional)</text>
+
+<g>
+  <defs><marker id="arr-19402" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#5c5c5c"/></marker></defs>
+  <line x1="660" y1="335" x2="740" y2="250" stroke="#5c5c5c" stroke-width="1.6"  marker-end="url(#arr-19402)"/>
+  <rect x="640.2" y="295.5" width="119.60000000000001" height="15" fill="#1a1a1a"/>
+  <text x="700.0" y="306.5" fill="#5c5c5c" font-size="11" text-anchor="middle" font-family="Consolas, monospace">regenerated_images</text>
+</g>
+</svg>
