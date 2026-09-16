@@ -129,12 +129,20 @@ def splice_audio(source, sample_rate, frame_rate, start_frame, end_frame,
     after_start = offset + q(end_frame + 1)
     after = _Piece(source, after_start, source.shape[-1] - after_start)
 
+    fill = None
     if bridge is not None:
-        gap = _Piece(bridge, q(lead_dropped), gap_len)
-        if q(lead_dropped) + gap_len > bridge.shape[-1]:
-            notes.append(f"bridge audio is {bridge.shape[-1]} samples, "
-                         f"{q(lead_dropped) + gap_len - bridge.shape[-1]} short of its "
-                         f"frames; padded with silence")
+        real = max(0, min(gap_len, bridge.shape[-1] - q(lead_dropped)))
+        gap = _Piece(bridge, q(lead_dropped), real)
+        if real < gap_len:
+            # The audio VAE decodes a little short of the latent's nominal length
+            # (17 latents -> 0.65 s for a 0.6875 s bridge, measured). Silence there
+            # would be an audible dip in steady ambience right before the join, so
+            # the shortfall is filled with the source's own audio behind those
+            # frames - which also makes the join into `after` sample-continuous.
+            missing = gap_len - real
+            fill = _Piece(source, after_start - missing, missing)
+            notes.append(f"bridge audio ends {missing} samples ({1000.0 * missing / sample_rate:.1f} ms) "
+                         f"before its frames do; that tail uses the source's own audio")
     else:
         first = start_frame + lead_dropped
         if first + kept == end_frame + 1 and lead_dropped > 0:
@@ -148,25 +156,29 @@ def splice_audio(source, sample_rate, frame_rate, start_frame, end_frame,
             notes.append(f"{first + kept - end_frame - 1} regenerated frame(s) have no "
                          f"source audio behind them; padded with silence")
 
-    pieces = [before, gap, after]
+    pieces = [before, gap] + ([fill] if fill is not None else []) + [after]
     out = torch.cat([p.render() for p in pieces], dim=-1)
 
-    # Gap audio that runs out before its frames do stops dead into silence; fade it.
+    # Source gap audio that runs out before its frames do (more regenerated frames
+    # than the gap had) stops dead into silence; fade it so that cannot click.
     real = min(gap.length, gap.limit - gap.start)
-    if 0 < real < gap.length and fade > 0:
+    if bridge is None and 0 < real < gap.length and fade > 0:
         m = min(fade, real)
         j = before.length + real
         out[:, j - m:j] *= torch.cos((torch.arange(m, dtype=out.dtype) + 0.5) / m * math.pi / 2)
 
     j = 0
-    for prev, nxt in zip(pieces, pieces[1:]):
-        j += prev.length
-        if prev.length == 0 and nxt is after and prev is gap:
-            prev = before
-        if prev.length == 0 or nxt.length == 0 or prev.continues(nxt) or fade == 0:
+    live = []
+    for piece in pieces:
+        live.append((j, piece))
+        j += piece.length
+    live = [(at, piece) for at, piece in live if piece.length > 0]
+    for (_, prev), (at, nxt) in zip(live, live[1:]):
+        if prev.continues(nxt) or fade == 0:
             continue
-        notes.append(f"join at frame {start_frame if nxt is gap else start_frame + kept}: "
-                     + _crossfade(out, j, prev, nxt, fade))
+        frame = round(at * frame_rate / sample_rate)
+        notes.append(f"join at output frame {frame}: " + _crossfade(out, at, prev, nxt, fade))
     if gap_frames != kept and bridge is None:
-        notes.append(f"gap audio cut from {gap_frames} to {kept} frame(s) to match the picture")
+        notes.append(f"gap audio {'shortened' if kept < gap_frames else 'lengthened'} from "
+                     f"{gap_frames} to {kept} frame(s) to match the picture")
     return out, notes
