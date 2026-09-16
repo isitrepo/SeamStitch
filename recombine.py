@@ -64,6 +64,8 @@ from videohelpersuite.nodes import (
     get_video_formats, apply_format_widgets, tensor_to_bytes, tensor_to_shorts, ffmpeg_process,
 )
 
+from .audio_splice import splice_audio, match_format, frame_sample
+
 
 # ---------------------------------------------------------------------------
 # Dedup: strip held/duplicate frames from the regenerated segment's own
@@ -76,13 +78,15 @@ def _frame_diff(a: torch.Tensor, b: torch.Tensor) -> float:
     return torch.mean(torch.abs(a.float() - b.float())).item()
 
 
-def _strip_held_duplicates(images: torch.Tensor, threshold: float, max_strip: int) -> torch.Tensor:
-    """Drop leading/trailing frames that are near-identical holds of their neighbor,
-    up to max_strip frames from each end. Always keeps at least one frame at each
-    boundary and never collapses the clip to zero length."""
+def _held_duplicate_bounds(images: torch.Tensor, threshold: float, max_strip: int):
+    """Inclusive (first, last) indices that survive stripping leading/trailing frames
+    that are near-identical holds of their neighbor, up to max_strip frames from each
+    end. Always keeps at least one frame at each boundary and never collapses the
+    clip to zero length. The bounds, not just the frames, are needed so the audio
+    can be cut at the same place."""
     n = images.shape[0]
     if n <= 1 or max_strip <= 0 or threshold <= 0:
-        return images
+        return 0, n - 1
 
     start = 0
     while start < min(max_strip, n - 1) and _frame_diff(images[start], images[start + 1]) < threshold:
@@ -93,7 +97,12 @@ def _strip_held_duplicates(images: torch.Tensor, threshold: float, max_strip: in
         end -= 1
 
     if start >= end:
-        return images
+        return 0, n - 1
+    return start, end
+
+
+def _strip_held_duplicates(images: torch.Tensor, threshold: float, max_strip: int) -> torch.Tensor:
+    start, end = _held_duplicate_bounds(images, threshold, max_strip)
     return images[start:end + 1]
 
 
@@ -419,12 +428,17 @@ class SeamStitchRecombine:
                 "save_output": ("BOOLEAN", {"default": True}),
             },
             "optional": {
-                "original_audio_override": ("AUDIO",),
+                "original_audio_override": ("AUDIO", {"tooltip": "Replaces the source file's audio track. Must be on the source file's own timeline (SeamStitchLoader's full_clip_audio is); it is cut to match the picture exactly as the file's own track would be."}),
+                "bridge_audio": ("AUDIO", {"tooltip": "Audio generated alongside the regenerated frames (e.g. LTXVAudioVAEDecode on the bridge's audio latent), starting at its first frame. Used when audio_mode is 'bridge'."}),
                 "crop_x": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.001,
                                       "tooltip": "Only needed if the same crop was applied in LoadVideoUI when the regenerated segment was produced."}),
                 "crop_y": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.001}),
                 "crop_w": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.001}),
                 "crop_h": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.001}),
+                "audio_mode": (["original", "bridge"], {"default": "original",
+                               "tooltip": "What plays under the regenerated frames. 'original': the source's own audio for exactly the frames that survived dedup, so dropped frames take their sound with them. 'bridge': the bridge_audio input. Either way the audio is cut at the same frames as the picture, so both stay in sync after the splice."}),
+                "audio_crossfade_ms": ("FLOAT", {"default": 20.0, "min": 0.0, "max": 500.0, "step": 1.0,
+                                       "tooltip": "Equal-power crossfade at each audio join that is not already continuous, so a cut mid-waveform cannot click. Length-preserving: it never moves either side of the join. 0 = hard cut."}),
             },
             "hidden": {
                 "prompt": "PROMPT",
@@ -440,14 +454,17 @@ class SeamStitchRecombine:
 
     def recombine(self, regenerated_images, original_video_path, start_frame, end_frame,
                   frame_rate, dedup_threshold, max_dedup_frames, filename_prefix, format,
-                  save_output=True, original_audio_override=None,
+                  save_output=True, original_audio_override=None, bridge_audio=None,
                   crop_x=0.0, crop_y=0.0, crop_w=1.0, crop_h=1.0,
+                  audio_mode="original", audio_crossfade_ms=20.0,
                   prompt=None, extra_pnginfo=None, **kwargs):
 
         if not original_video_path or not os.path.exists(original_video_path):
             raise FileNotFoundError(f"original_video_path not found: {original_video_path}")
         if end_frame < start_frame:
             raise ValueError(f"end_frame ({end_frame}) must be >= start_frame ({start_frame})")
+        if audio_mode == "bridge" and bridge_audio is None:
+            raise ValueError("audio_mode is 'bridge' but nothing is connected to bridge_audio.")
 
         # Regenerated segment is the resolution ground truth for the splice.
         regenerated = regenerated_images
@@ -457,11 +474,13 @@ class SeamStitchRecombine:
         target_w = regenerated.shape[2]
 
         # 1. Drop held/duplicate frames at the regenerated segment's own boundaries.
-        deduped = _strip_held_duplicates(regenerated, dedup_threshold, max_dedup_frames)
+        first_kept, last_kept = _held_duplicate_bounds(regenerated, dedup_threshold, max_dedup_frames)
+        deduped = regenerated[first_kept:last_kept + 1]
         dropped = regenerated.shape[0] - deduped.shape[0]
         if dropped > 0:
-            print(f"[SeamStitch] Dropped {dropped} held/duplicate frame(s) "
-                  f"from the regenerated segment's boundaries.")
+            print(f"[SeamStitch] Dropped {dropped} held/duplicate frame(s) from the regenerated "
+                  f"segment's boundaries ({first_kept} leading, "
+                  f"{regenerated.shape[0] - 1 - last_kept} trailing).")
 
         # 2. Decode the original video's "before" and "after" chunks on the same
         #    timeline the segment was cut from, resized to match its resolution.
@@ -493,13 +512,62 @@ class SeamStitchRecombine:
                   f"frame_rate={frame_rate}. The combined video's total duration will differ "
                   f"from the original by that much at this splice point.")
 
-        # 3. Full original audio, untouched end to end, unless explicitly overridden.
-        if original_audio_override is not None:
-            audio = original_audio_override
-        else:
-            audio = get_audio(original_video_path, start_time=0, duration=0)
+        # 3. Audio, cut at the same frames as the picture. Laying the original track
+        #    down untouched from t=0 shifted everything after the splice by
+        #    (expected_gap - kept) / frame_rate - 20.8 ms per dropped frame at 48 fps.
+        audio = self._splice_audio(original_video_path, original_audio_override, bridge_audio,
+                                   audio_mode, audio_crossfade_ms, frame_rate,
+                                   start_frame, end_frame, first_kept, deduped.shape[0])
 
         result = _encode_video(combined, frame_rate, filename_prefix, format, save_output,
                                 audio, prompt, extra_pnginfo)
         result["result"] = result["result"] + (combined, audio)
         return result
+
+    @staticmethod
+    def _splice_audio(video_path, override, bridge_audio, audio_mode, crossfade_ms, frame_rate,
+                      start_frame, end_frame, first_kept, kept):
+        with av.open(video_path) as container:
+            v = container.streams.video[0] if container.streams.video else None
+            a = container.streams.audio[0] if container.streams.audio else None
+            v_start = float(v.start_time * v.time_base) if v is not None and v.start_time is not None else 0.0
+            a_start = float(a.start_time * a.time_base) if a is not None and a.start_time is not None else 0.0
+            has_audio = a is not None
+            duration_s = float(container.duration) / av.time_base if container.duration else 0.0
+
+        if override is not None:
+            source = override
+        elif has_audio:
+            source = get_audio(video_path, start_time=0, duration=0)
+        else:
+            source = None
+        use_bridge = audio_mode == "bridge"
+        if source is None and not use_bridge:
+            return None
+
+        if source is not None:
+            sample_rate = int(source["sample_rate"])
+            wave = source["waveform"][0].detach().to("cpu", torch.float32)
+            # Source frame f plays at v_start + f/fps, against the audio sample at
+            # (v_start - a_start + f/fps). SeamStitchCombine's output delays its
+            # video 31 ms with an empty edit to cover AAC priming it does not skip,
+            # so this offset is real, not rounding.
+            av_offset = v_start - a_start
+        else:
+            sample_rate = int(bridge_audio["sample_rate"])
+            channels = bridge_audio["waveform"].shape[1]
+            # No source track to cut: silence either side of the bridge's own audio.
+            wave = torch.zeros((channels, int(round(duration_s * sample_rate))))
+            av_offset = 0.0
+
+        bridge = None
+        if use_bridge:
+            bridge = match_format(bridge_audio["waveform"][0], bridge_audio["sample_rate"],
+                                  wave.shape[0], sample_rate)
+
+        out, notes = splice_audio(wave, sample_rate, frame_rate, start_frame, end_frame,
+                                  first_kept, kept, av_offset_s=av_offset, bridge=bridge,
+                                  crossfade_ms=crossfade_ms)
+        for note in notes:
+            print(f"[SeamStitch] audio: {note}")
+        return {"waveform": out.unsqueeze(0), "sample_rate": sample_rate}
