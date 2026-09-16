@@ -1,6 +1,6 @@
-<svg width="620" height="469" viewBox="0 0 620 469" xmlns="http://www.w3.org/2000/svg" font-family="Segoe UI, Helvetica, Arial, sans-serif">
-<rect x="0" y="0" width="620" height="469" fill="#1a1a1a"/>
-<rect x="24" y="10" width="572" height="449" rx="10" fill="#2a2a2a" stroke="#454545" stroke-width="1.5"/>
+<svg width="620" height="517" viewBox="0 0 620 517" xmlns="http://www.w3.org/2000/svg" font-family="Segoe UI, Helvetica, Arial, sans-serif">
+<rect x="0" y="0" width="620" height="517" fill="#1a1a1a"/>
+<rect x="24" y="10" width="572" height="497" rx="10" fill="#2a2a2a" stroke="#454545" stroke-width="1.5"/>
 <path d="M 24 40 Q 24 10 34 10 L 586 10 Q 596 10 596 40 Z" fill="#a15a2f"/>
 <text x="38" y="30" fill="#ffffff" font-size="14" font-weight="600">SeamStitch Recombine</text>
 <rect x="25" y="39" width="570" height="24" fill="#242424" opacity="0.4"/>
@@ -13,6 +13,8 @@
 <circle cx="596" cy="75.0" r="5.5" fill="#64b5f6" stroke="#1a1a1a" stroke-width="1.5"/>
 <text x="584" y="79.0" fill="#e8e8e8" font-size="12" text-anchor="end">combined_images</text>
 <rect x="25" y="87" width="570" height="24" fill="#242424" opacity="0.4"/>
+<circle cx="24" cy="99.0" r="5.5" fill="#ff8a80" stroke="#1a1a1a" stroke-width="1.5"/>
+<text x="36" y="103.0" fill="#e8e8e8" font-size="12" font-style="italic">bridge_audio</text>
 <circle cx="596" cy="99.0" r="5.5" fill="#ff8a80" stroke="#1a1a1a" stroke-width="1.5"/>
 <text x="584" y="103.0" fill="#e8e8e8" font-size="12" text-anchor="end">audio</text>
 <line x1="34" y1="120" x2="586" y2="120" stroke="#454545" stroke-width="1"/>
@@ -61,4 +63,11 @@
 <rect x="34" y="411" width="552" height="19" rx="4" fill="#3a3a3a" stroke="#555" stroke-width="1"/>
 <text x="42" y="424" fill="#9a9a9a" font-size="11">crop_h</text>
 <text x="578" y="424" fill="#e8e8e8" font-size="11" text-anchor="end">1.0</text>
+<rect x="25" y="432" width="570" height="24" fill="#242424" opacity="0.4"/>
+<rect x="34" y="435" width="552" height="19" rx="4" fill="#3a3a3a" stroke="#555" stroke-width="1"/>
+<text x="42" y="448" fill="#9a9a9a" font-size="11">audio_mode</text>
+<text x="578" y="448" fill="#e8e8e8" font-size="11" text-anchor="end">original</text>
+<rect x="34" y="459" width="552" height="19" rx="4" fill="#3a3a3a" stroke="#555" stroke-width="1"/>
+<text x="42" y="472" fill="#9a9a9a" font-size="11">audio_crossfade_ms</text>
+<text x="578" y="472" fill="#e8e8e8" font-size="11" text-anchor="end">20.0</text>
 </svg>

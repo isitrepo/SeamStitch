@@ -130,9 +130,22 @@ cut out of it (wire these straight from **SeamStitch Loader**'s matching outputs
    keyframe-anchored generation sometimes holds its first/last frame for an extra tick or two,
    which shows up as a stutter at the seam left in).
 3. Concatenates `before + deduped_regenerated + after`.
-4. Reuses the original video's full audio track end to end (override via
-   `original_audio_override` if only the video frames were regenerated and you want to supply
-   audio some other way).
+4. Cuts the audio at the same frames as the picture, so sound and picture stay in sync on both
+   sides of the splice even when step 2 dropped frames. `audio_mode` picks what plays under the
+   regenerated frames:
+   - `original` (default) — the source's own audio for exactly the frames that survived, so
+     dropped frames take their sound with them. If nothing was dropped, the track is
+     sample-identical to the source.
+   - `bridge` — the `bridge_audio` input, e.g. audio generated alongside the frames by an
+     audio-video model such as LTX-2.5 (`LTXVAudioVAEDecode` on the bridge's audio latent).
+     Resampled and channel-matched to the source; if it runs short, the tail falls back to the
+     source's audio. Never time-stretched.
+
+   Each join that is not already continuous gets a length-preserving equal-power crossfade
+   (`audio_crossfade_ms`, default 20) so a cut mid-waveform cannot click. The source track comes
+   from the file itself, or from `original_audio_override` (which must be on the source file's own
+   timeline, as `SeamStitchLoader`'s `full_clip_audio` is). The file's own video/audio start
+   offset is honoured — `SeamStitchCombine`'s output delays its video 31 ms to cover AAC priming.
 5. Encodes the result via ffmpeg. The `format` widget defaults to `video/h264-mp4`.
 
 **Scope vs. the real VHS_VideoCombine:** video formats only (no gif/webp — pipe
@@ -149,6 +162,8 @@ SeamStitchLoader    ──images────────────────
                      ──end_frame───────────────────► SeamStitchRecombine.end_frame
                      ──frame_rate──────────────────► SeamStitchRecombine.frame_rate
                      ──full_clip_audio─────────────► SeamStitchRecombine.original_audio_override (optional)
+
+(bridge audio, optional, audio_mode = bridge) ─────► SeamStitchRecombine.bridge_audio
 
 (regeneration pipeline output) ───────────────────► SeamStitchRecombine.regenerated_images
 ```

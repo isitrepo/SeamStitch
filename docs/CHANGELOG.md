@@ -1,5 +1,26 @@
 # Changelog
 
+## 2026-09-16 — Recombine keeps audio in sync after the dedup drops frames
+
+`SeamStitchRecombine` built the picture as `before + deduped + after` but laid the source audio
+down untouched from t=0, so every held frame the dedup dropped shifted the rest of the file
+against its own sound — 20.8 ms per frame at 48 fps, silently.
+
+- **Audio is spliced like the picture** (new `audio_splice.py`): cut at the same frame
+  boundaries, with a length-preserving equal-power crossfade at each discontinuous join
+  (`audio_crossfade_ms`, default 20).
+- **`audio_mode`**: `original` (default) keeps the source audio of the surviving frames; `bridge`
+  uses the new `bridge_audio` input (e.g. LTX-2.5's own generated audio), resampled, padded from
+  the source when short, never stretched.
+- **Start-offset fix**: frames map to audio on the file's real video-minus-audio start offset.
+  `SeamStitchCombine`'s output delays its video 31 ms with an empty edit, which put every
+  Combine-based splice 31 ms out even with nothing dropped.
+- Measured on the live instance, same seed before/after, picture bit-identical: a repair in
+  place on a 48 fps clip that dropped one frame went from +20.84 ms to 0.00 ms sync error after
+  the splice; a Combine-based join went from +31.03 / +51.84 ms (before / after the splice) to
+  0.00 / 0.00 ms.
+- New widgets are appended after `crop_h`, so saved UI workflows keep their widget order.
+
 ## 2026-09-16 — Licence correction, attribution headers, dependency cleanup, generated diagrams
 
 Findings 2, 3, 5-9, and 12 from the pre-release review
