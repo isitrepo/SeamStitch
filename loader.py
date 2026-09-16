@@ -1,3 +1,7 @@
+# Based on WhatDreamsCost-ComfyUI's Load Video UI node
+# (https://github.com/WhatDreamsCost/WhatDreamsCost-ComfyUI), licensed GPL-3.0.
+# Modified 2026 for SeamStitch (https://github.com/isitrepo/SeamStitch).
+
 import os
 import asyncio
 import torch

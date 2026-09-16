@@ -1,3 +1,5 @@
+// Copyright 2026 SeamStitch contributors (https://github.com/isitrepo/SeamStitch), licensed GPL-3.0-only.
+
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
 

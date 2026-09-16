@@ -1,50 +1,64 @@
-<svg width="520" height="354" viewBox="0 0 520 354" xmlns="http://www.w3.org/2000/svg" font-family="Segoe UI, Helvetica, Arial, sans-serif">
-<rect x="0" y="0" width="520" height="354" fill="#1a1a1a"/>
-<rect x="24" y="10" width="472" height="334" rx="10" fill="#2a2a2a" stroke="#454545" stroke-width="1.5"/>
-<path d="M 24 40 Q 24 10 34 10 L 486 10 Q 496 10 496 40 Z" fill="#a15a2f"/>
-<text x="38" y="30" fill="#ffffff" font-size="14" font-weight="600">Video Combine (Segment Recombine)</text>
-<rect x="25" y="39" width="470" height="24" fill="#242424" opacity="0.4"/>
-<circle cx="24" cy="48" r="5.5" fill="#64b5f6" stroke="#1a1a1a" stroke-width="1.5"/>
-<text x="36" y="52" fill="#e8e8e8" font-size="12" >regenerated_images</text>
-<circle cx="496" cy="48" r="5.5" fill="#ce93d8" stroke="#1a1a1a" stroke-width="1.5"/>
-<text x="484" y="52" fill="#e8e8e8" font-size="12" text-anchor="end">Filenames</text>
-<circle cx="24" cy="72" r="5.5" fill="#ff8a80" stroke="#1a1a1a" stroke-width="1.5"/>
-<text x="36" y="76" fill="#e8e8e8" font-size="12" font-style="italic">original_audio_override</text>
-<circle cx="496" cy="72" r="5.5" fill="#64b5f6" stroke="#1a1a1a" stroke-width="1.5"/>
-<text x="484" y="76" fill="#e8e8e8" font-size="12" text-anchor="end">combined_images</text>
-<rect x="25" y="87" width="470" height="24" fill="#242424" opacity="0.4"/>
-<circle cx="496" cy="96" r="5.5" fill="#ff8a80" stroke="#1a1a1a" stroke-width="1.5"/>
-<text x="484" y="100" fill="#e8e8e8" font-size="12" text-anchor="end">audio</text>
-<line x1="34" y1="108" x2="486" y2="108" stroke="#454545" stroke-width="1"/>
-<rect x="34" y="111" width="452" height="19" rx="4" fill="#3a3a3a" stroke="#555" stroke-width="1"/>
-<text x="42" y="124" fill="#9a9a9a" font-size="11">original_video_path</text>
-<text x="478" y="124" fill="#e8e8e8" font-size="11" text-anchor="end">(wire from source_video_path)</text>
-<rect x="25" y="135" width="470" height="24" fill="#242424" opacity="0.4"/>
-<rect x="34" y="135" width="452" height="19" rx="4" fill="#3a3a3a" stroke="#555" stroke-width="1"/>
-<text x="42" y="148" fill="#9a9a9a" font-size="11">start_frame / end_frame</text>
-<text x="478" y="148" fill="#e8e8e8" font-size="11" text-anchor="end">(wire from Load Video UI)</text>
-<rect x="34" y="159" width="452" height="19" rx="4" fill="#3a3a3a" stroke="#555" stroke-width="1"/>
-<text x="42" y="172" fill="#9a9a9a" font-size="11">frame_rate</text>
-<text x="478" y="172" fill="#e8e8e8" font-size="11" text-anchor="end">24</text>
-<rect x="25" y="183" width="470" height="24" fill="#242424" opacity="0.4"/>
-<rect x="34" y="183" width="452" height="19" rx="4" fill="#3a3a3a" stroke="#555" stroke-width="1"/>
-<text x="42" y="196" fill="#9a9a9a" font-size="11">dedup_threshold</text>
-<text x="478" y="196" fill="#e8e8e8" font-size="11" text-anchor="end">0.008</text>
-<rect x="34" y="207" width="452" height="19" rx="4" fill="#3a3a3a" stroke="#555" stroke-width="1"/>
-<text x="42" y="220" fill="#9a9a9a" font-size="11">max_dedup_frames</text>
-<text x="478" y="220" fill="#e8e8e8" font-size="11" text-anchor="end">6</text>
-<rect x="25" y="231" width="470" height="24" fill="#242424" opacity="0.4"/>
-<rect x="34" y="231" width="452" height="19" rx="4" fill="#3a3a3a" stroke="#555" stroke-width="1"/>
-<text x="42" y="244" fill="#9a9a9a" font-size="11">filename_prefix</text>
-<text x="478" y="244" fill="#e8e8e8" font-size="11" text-anchor="end">VideoSegmentRecombine</text>
-<rect x="34" y="255" width="452" height="19" rx="4" fill="#3a3a3a" stroke="#555" stroke-width="1"/>
-<text x="42" y="268" fill="#9a9a9a" font-size="11">format</text>
-<text x="478" y="268" fill="#e8e8e8" font-size="11" text-anchor="end">video/h264-mp4</text>
-<rect x="25" y="279" width="470" height="24" fill="#242424" opacity="0.4"/>
-<rect x="34" y="279" width="452" height="19" rx="4" fill="#3a3a3a" stroke="#555" stroke-width="1"/>
-<text x="42" y="292" fill="#9a9a9a" font-size="11">save_output</text>
-<text x="478" y="292" fill="#e8e8e8" font-size="11" text-anchor="end">true</text>
-<rect x="34" y="303" width="452" height="19" rx="4" fill="#3a3a3a" stroke="#555" stroke-width="1"/>
-<text x="42" y="316" fill="#9a9a9a" font-size="11">crop_x/y/w/h</text>
-<text x="478" y="316" fill="#e8e8e8" font-size="11" text-anchor="end">0.0, 0.0, 1.0, 1.0</text>
+<svg width="620" height="469" viewBox="0 0 620 469" xmlns="http://www.w3.org/2000/svg" font-family="Segoe UI, Helvetica, Arial, sans-serif">
+<rect x="0" y="0" width="620" height="469" fill="#1a1a1a"/>
+<rect x="24" y="10" width="572" height="449" rx="10" fill="#2a2a2a" stroke="#454545" stroke-width="1.5"/>
+<path d="M 24 40 Q 24 10 34 10 L 586 10 Q 596 10 596 40 Z" fill="#a15a2f"/>
+<text x="38" y="30" fill="#ffffff" font-size="14" font-weight="600">SeamStitch Recombine</text>
+<rect x="25" y="39" width="570" height="24" fill="#242424" opacity="0.4"/>
+<circle cx="24" cy="51.0" r="5.5" fill="#64b5f6" stroke="#1a1a1a" stroke-width="1.5"/>
+<text x="36" y="55.0" fill="#e8e8e8" font-size="12">regenerated_images</text>
+<circle cx="596" cy="51.0" r="5.5" fill="#ce93d8" stroke="#1a1a1a" stroke-width="1.5"/>
+<text x="584" y="55.0" fill="#e8e8e8" font-size="12" text-anchor="end">Filenames</text>
+<circle cx="24" cy="75.0" r="5.5" fill="#ff8a80" stroke="#1a1a1a" stroke-width="1.5"/>
+<text x="36" y="79.0" fill="#e8e8e8" font-size="12" font-style="italic">original_audio_override</text>
+<circle cx="596" cy="75.0" r="5.5" fill="#64b5f6" stroke="#1a1a1a" stroke-width="1.5"/>
+<text x="584" y="79.0" fill="#e8e8e8" font-size="12" text-anchor="end">combined_images</text>
+<rect x="25" y="87" width="570" height="24" fill="#242424" opacity="0.4"/>
+<circle cx="596" cy="99.0" r="5.5" fill="#ff8a80" stroke="#1a1a1a" stroke-width="1.5"/>
+<text x="584" y="103.0" fill="#e8e8e8" font-size="12" text-anchor="end">audio</text>
+<line x1="34" y1="120" x2="586" y2="120" stroke="#454545" stroke-width="1"/>
+<rect x="34" y="123" width="552" height="19" rx="4" fill="#3a3a3a" stroke="#555" stroke-width="1"/>
+<text x="42" y="136" fill="#9a9a9a" font-size="11">original_video_path</text>
+<text x="578" y="136" fill="#e8e8e8" font-size="11" text-anchor="end"></text>
+<rect x="25" y="144" width="570" height="24" fill="#242424" opacity="0.4"/>
+<rect x="34" y="147" width="552" height="19" rx="4" fill="#3a3a3a" stroke="#555" stroke-width="1"/>
+<text x="42" y="160" fill="#9a9a9a" font-size="11">start_frame</text>
+<text x="578" y="160" fill="#e8e8e8" font-size="11" text-anchor="end">0</text>
+<rect x="34" y="171" width="552" height="19" rx="4" fill="#3a3a3a" stroke="#555" stroke-width="1"/>
+<text x="42" y="184" fill="#9a9a9a" font-size="11">end_frame</text>
+<text x="578" y="184" fill="#e8e8e8" font-size="11" text-anchor="end">0</text>
+<rect x="25" y="192" width="570" height="24" fill="#242424" opacity="0.4"/>
+<rect x="34" y="195" width="552" height="19" rx="4" fill="#3a3a3a" stroke="#555" stroke-width="1"/>
+<text x="42" y="208" fill="#9a9a9a" font-size="11">frame_rate</text>
+<text x="578" y="208" fill="#e8e8e8" font-size="11" text-anchor="end">24</text>
+<rect x="34" y="219" width="552" height="19" rx="4" fill="#3a3a3a" stroke="#555" stroke-width="1"/>
+<text x="42" y="232" fill="#9a9a9a" font-size="11">dedup_threshold</text>
+<text x="578" y="232" fill="#e8e8e8" font-size="11" text-anchor="end">0.008</text>
+<rect x="25" y="240" width="570" height="24" fill="#242424" opacity="0.4"/>
+<rect x="34" y="243" width="552" height="19" rx="4" fill="#3a3a3a" stroke="#555" stroke-width="1"/>
+<text x="42" y="256" fill="#9a9a9a" font-size="11">max_dedup_frames</text>
+<text x="578" y="256" fill="#e8e8e8" font-size="11" text-anchor="end">6</text>
+<rect x="34" y="267" width="552" height="19" rx="4" fill="#3a3a3a" stroke="#555" stroke-width="1"/>
+<text x="42" y="280" fill="#9a9a9a" font-size="11">filename_prefix</text>
+<text x="578" y="280" fill="#e8e8e8" font-size="11" text-anchor="end">seamstitch_recombined</text>
+<rect x="25" y="288" width="570" height="24" fill="#242424" opacity="0.4"/>
+<rect x="34" y="291" width="552" height="19" rx="4" fill="#3a3a3a" stroke="#555" stroke-width="1"/>
+<text x="42" y="304" fill="#9a9a9a" font-size="11">format</text>
+<text x="578" y="304" fill="#e8e8e8" font-size="11" text-anchor="end">video/h264-mp4</text>
+<rect x="34" y="315" width="552" height="19" rx="4" fill="#3a3a3a" stroke="#555" stroke-width="1"/>
+<text x="42" y="328" fill="#9a9a9a" font-size="11">save_output</text>
+<text x="578" y="328" fill="#e8e8e8" font-size="11" text-anchor="end">True</text>
+<rect x="25" y="336" width="570" height="24" fill="#242424" opacity="0.4"/>
+<rect x="34" y="339" width="552" height="19" rx="4" fill="#3a3a3a" stroke="#555" stroke-width="1"/>
+<text x="42" y="352" fill="#9a9a9a" font-size="11">crop_x</text>
+<text x="578" y="352" fill="#e8e8e8" font-size="11" text-anchor="end">0.0</text>
+<rect x="34" y="363" width="552" height="19" rx="4" fill="#3a3a3a" stroke="#555" stroke-width="1"/>
+<text x="42" y="376" fill="#9a9a9a" font-size="11">crop_y</text>
+<text x="578" y="376" fill="#e8e8e8" font-size="11" text-anchor="end">0.0</text>
+<rect x="25" y="384" width="570" height="24" fill="#242424" opacity="0.4"/>
+<rect x="34" y="387" width="552" height="19" rx="4" fill="#3a3a3a" stroke="#555" stroke-width="1"/>
+<text x="42" y="400" fill="#9a9a9a" font-size="11">crop_w</text>
+<text x="578" y="400" fill="#e8e8e8" font-size="11" text-anchor="end">1.0</text>
+<rect x="34" y="411" width="552" height="19" rx="4" fill="#3a3a3a" stroke="#555" stroke-width="1"/>
+<text x="42" y="424" fill="#9a9a9a" font-size="11">crop_h</text>
+<text x="578" y="424" fill="#e8e8e8" font-size="11" text-anchor="end">1.0</text>
 </svg>

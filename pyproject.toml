@@ -2,18 +2,17 @@
 name = "seamstitch"
 description = "Video load/trim, lossless combine, and generative-segment-recombine nodes for ComfyUI."
 version = "0.1.0"
-license = { text = "GPL-3.0-or-later" }
+license = { text = "GPL-3.0-only" }
 dependencies = [
     "av",
-    "numpy",
-    "torch",
     "opencv-python",
     "pillow",
     "aiohttp",
+    "imageio-ffmpeg",
 ]
 
-[project.optional-dependencies]
-ffmpeg = ["imageio-ffmpeg"]
+[project.urls]
+Repository = "https://github.com/isitrepo/SeamStitch"
 
 [tool.comfy]
 PublisherId = ""

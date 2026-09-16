@@ -1,3 +1,7 @@
+# Based on ComfyUI-VideoHelperSuite's VHS_VideoCombine node
+# (https://github.com/kosinkadink/ComfyUI-VideoHelperSuite), licensed GPL-3.0.
+# Modified 2026 for SeamStitch (https://github.com/isitrepo/SeamStitch).
+
 import os
 import sys
 import json

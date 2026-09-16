@@ -1,4 +1,6 @@
-"""SeamStitchCombine - concatenate two clips, no seam logic.
+"""Copyright 2026 SeamStitch contributors (https://github.com/isitrepo/SeamStitch), licensed GPL-3.0-only.
+
+SeamStitchCombine - concatenate two clips, no seam logic.
 
 Deliberately dumb, and now actually fast: clip A followed by clip B, done via
 ffmpeg's concat demuxer with ``-c copy`` - a container-level splice of the
