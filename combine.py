@@ -1,4 +1,4 @@
-"""SeamweaveSimpleCombine - concatenate two clips, no seam logic.
+"""SeamStitchCombine - concatenate two clips, no seam logic.
 
 Deliberately dumb, and now actually fast: clip A followed by clip B, done via
 ffmpeg's concat demuxer with ``-c copy`` - a container-level splice of the
@@ -98,7 +98,7 @@ def _probe_geometry(path):
     try:
         vstream = container.streams.video[0] if container.streams.video else None
         if vstream is None:
-            raise RuntimeError(f"SeamweaveSimpleCombine: no video stream in {path}")
+            raise RuntimeError(f"SeamStitchCombine: no video stream in {path}")
         return {
             "width": vstream.codec_context.width,
             "height": vstream.codec_context.height,
@@ -136,7 +136,7 @@ def _concat_stream_copy(path_a, path_b, out_path):
         )
         if result.returncode != 0 or not os.path.exists(out_path):
             raise RuntimeError(
-                "SeamweaveSimpleCombine: lossless concat failed - clip A and clip B "
+                "SeamStitchCombine: lossless concat failed - clip A and clip B "
                 "are probably not stream-copy compatible (different codec, profile, "
                 "or audio format). No fancy logic here - re-export them to matching "
                 f"settings. ffmpeg said:\n{result.stderr[-2000:]}"
@@ -188,7 +188,7 @@ def _concat_transcode(path_a, path_b, out_path, fps):
     )
     if result.returncode != 0 or not os.path.exists(out_path):
         raise RuntimeError(
-            "SeamweaveSimpleCombine: transcoding clip A and clip B together "
+            "SeamStitchCombine: transcoding clip A and clip B together "
             f"failed. ffmpeg said:\n{result.stderr[-2000:]}"
         )
 
@@ -202,12 +202,12 @@ def _decode_for_outputs(path):
     try:
         vstream = container.streams.video[0] if container.streams.video else None
         if vstream is None:
-            raise RuntimeError(f"SeamweaveSimpleCombine: no video stream in {path}")
+            raise RuntimeError(f"SeamStitchCombine: no video stream in {path}")
         vstream.thread_type = "AUTO"
 
         frames = [frame.to_ndarray(format="rgb24") for frame in container.decode(vstream)]
         if not frames:
-            raise RuntimeError(f"SeamweaveSimpleCombine: no frames decoded from {path}")
+            raise RuntimeError(f"SeamStitchCombine: no frames decoded from {path}")
         images = torch.from_numpy(np.stack(frames).astype(np.float32) / 255.0)
     finally:
         container.close()
@@ -241,8 +241,8 @@ def _decode_for_outputs(path):
 # header-only probe so the node's "Load Video" button can confirm a pick is
 # valid without paying for a full decode. ---
 
-@PromptServer.instance.routes.get("/seamweave_combine_check_file")
-async def seamweave_check_file(request):
+@PromptServer.instance.routes.get("/seamstitch/combine/check_file")
+async def seamstitch_check_file(request):
     filename = request.query.get("filename", "")
     file_size = request.query.get("size", "")
     if not filename:
@@ -261,8 +261,8 @@ async def seamweave_check_file(request):
     return web.json_response({"exists": False})
 
 
-@PromptServer.instance.routes.post("/seamweave_combine_upload_chunk")
-async def seamweave_upload_chunk(request):
+@PromptServer.instance.routes.post("/seamstitch/combine/upload_chunk")
+async def seamstitch_upload_chunk(request):
     post = await request.post()
     file = post.get("file")
     filename = post.get("filename")
@@ -281,8 +281,8 @@ async def seamweave_upload_chunk(request):
     return web.json_response({"status": "ok"})
 
 
-@PromptServer.instance.routes.get("/seamweave_combine_probe")
-async def seamweave_probe(request):
+@PromptServer.instance.routes.get("/seamstitch/combine/probe")
+async def seamstitch_probe(request):
     filename = request.query.get("filename", "")
     path = _resolve_video_path(filename)
     if not path:
@@ -309,7 +309,7 @@ async def seamweave_probe(request):
         return web.json_response({"ok": False, "error": str(e)}, status=500)
 
 
-class SeamweaveSimpleCombine:
+class SeamStitchCombine:
     @classmethod
     def INPUT_TYPES(cls):
         files = _list_input_videos()
@@ -317,7 +317,7 @@ class SeamweaveSimpleCombine:
             "required": {
                 "video_a": (files,),
                 "video_b": (files,),
-                "filename_prefix": ("STRING", {"default": "seamweave_combined"}),
+                "filename_prefix": ("STRING", {"default": "seamstitch_combined"}),
                 "free_vram_first": ("BOOLEAN", {"default": True, "tooltip":
                     "Unload all models and clear the VRAM/CUDA cache before "
                     "combining - this node has no upstream dependencies, so "
@@ -355,13 +355,13 @@ class SeamweaveSimpleCombine:
         geom_a, geom_b = _probe_geometry(path_a), _probe_geometry(path_b)
         if (geom_a["width"], geom_a["height"]) != (geom_b["width"], geom_b["height"]):
             raise RuntimeError(
-                "SeamweaveSimpleCombine: clip A and clip B don't match "
+                "SeamStitchCombine: clip A and clip B don't match "
                 f"({geom_a['width']}x{geom_a['height']} vs {geom_b['width']}x{geom_b['height']}). "
                 "No fancy logic here - resize/crop upstream so both sides agree."
             )
         if geom_a["has_audio"] != geom_b["has_audio"]:
             raise RuntimeError(
-                "SeamweaveSimpleCombine: clip A and clip B don't both have audio "
+                "SeamStitchCombine: clip A and clip B don't both have audio "
                 f"(A: {'yes' if geom_a['has_audio'] else 'no'}, B: {'yes' if geom_b['has_audio'] else 'no'}). "
                 "A lossless concat needs both sides to match - add a silent audio "
                 "track to the one missing it, or strip audio from the one that has it."
@@ -391,7 +391,7 @@ class SeamweaveSimpleCombine:
                 images, audio = _decode_for_outputs(out_path)
 
         # A full, resolved path (not just the basename) - wire it straight into
-        # anything expecting a real file on disk, e.g. VideoSegmentRecombine's
+        # anything expecting a real file on disk, e.g. SeamStitchRecombine's
         # original_video_path, without depending on it also being the file
         # picked in some other node's own dropdown.
         #
@@ -406,7 +406,7 @@ class SeamweaveSimpleCombine:
         path = _resolve_video_path(video)
         if path is None:
             raise RuntimeError(
-                f"SeamweaveSimpleCombine: clip {label}'s file ('{video}') was not found. "
+                f"SeamStitchCombine: clip {label}'s file ('{video}') was not found. "
                 "Choose a file (or upload one) in the node."
             )
         return path

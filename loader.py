@@ -10,9 +10,9 @@ import comfy.utils
 from PIL import Image
 
 # Custom API route to serve video files from anywhere on the user's system for the frontend preview.
-# Namespaced separately from WhatDreamsCost-ComfyUI's /video_ui_custom_view so both packages can
-# be installed side by side without route collisions.
-@PromptServer.instance.routes.get("/load_video_ui_fl_view")
+# Namespaced under /seamstitch/ so this doesn't collide with the upstream loader project's own
+# view route if both are installed side by side.
+@PromptServer.instance.routes.get("/seamstitch/loader/view")
 async def custom_view(request):
     file_path = request.query.get("filename", "")
     if os.path.exists(file_path) and os.path.isfile(file_path):
@@ -44,7 +44,7 @@ def _save_frame_png(image_tensor, filename_prefix):
 
 
 # Custom API route for Chunked Uploads to bypass the 413 Payload Too Large error
-@PromptServer.instance.routes.post("/load_video_ui_fl_upload_chunk")
+@PromptServer.instance.routes.post("/seamstitch/loader/upload_chunk")
 async def upload_chunk(request):
     post = await request.post()
     file = post.get("file")
@@ -70,7 +70,7 @@ async def upload_chunk(request):
 
 # File-exists dedup check, used by the "choose file to upload" flow to avoid re-uploading
 # a file that's already sitting in the input directory.
-@PromptServer.instance.routes.get("/load_video_ui_fl_check_file")
+@PromptServer.instance.routes.get("/seamstitch/loader/check_file")
 async def check_file(request):
     filename = request.query.get("filename", "")
     file_size = request.query.get("size", "")
@@ -177,12 +177,12 @@ def _list_input_videos():
 # own option list is only ever set once, at node-creation time, so a file written to
 # disk afterwards (e.g. by a combine node upstream) would otherwise need the node
 # deleted and re-added before it could be picked.
-@PromptServer.instance.routes.get("/load_video_ui_fl_list_files")
+@PromptServer.instance.routes.get("/seamstitch/loader/list_files")
 async def list_files(request):
     return web.json_response({"files": _list_input_videos()})
 
 
-class LoadVideoUIFirstLast:
+class SeamStitchLoader:
     @classmethod
     def INPUT_TYPES(cls):
         files = _list_input_videos()
@@ -427,7 +427,7 @@ class LoadVideoUIFirstLast:
                     frame_rgb = frame.to_ndarray(format='rgb24')
                 except Exception as e:
                     # Fallback: if explicit color reformat fails, use PyAV's default conversion
-                    print(f"[LoadVideoUIFirstLast] Color reformat failed, using default: {e}")
+                    print(f"[SeamStitch] Color reformat failed, using default: {e}")
                     frame_rgb = frame.to_ndarray(format='rgb24')
 
                 # Apply interactive crop first
@@ -455,7 +455,7 @@ class LoadVideoUIFirstLast:
                         try:
                             image_tensor = torch.zeros((alloc_frames, height, width, 3), dtype=torch.float32)
                         except Exception as e:
-                            print(f"[LoadVideoUIFirstLast] Pre-allocation failed, falling back to list: {e}")
+                            print(f"[SeamStitch] Pre-allocation failed, falling back to list: {e}")
                             expected_frames = 0 # Disable pre-allocation
 
                     if image_tensor is not None:
@@ -556,7 +556,7 @@ class LoadVideoUIFirstLast:
 
             except Exception as e:
                 # Catch gracefully without breaking the pipeline execution
-                print(f"[LoadVideoUIFirstLast] Audio track extraction skipped or failed: {e}")
+                print(f"[SeamStitch] Audio track extraction skipped or failed: {e}")
 
         # 3b. Full clip's audio (entire source file, ignoring the trim range) — for feeding
         # into a final combine step that reuses the original audio end to end, independent
@@ -592,7 +592,7 @@ class LoadVideoUIFirstLast:
 
             except Exception as e:
                 # Catch gracefully without breaking the pipeline execution
-                print(f"[LoadVideoUIFirstLast] Full-clip audio extraction skipped or failed: {e}")
+                print(f"[SeamStitch] Full-clip audio extraction skipped or failed: {e}")
             finally:
                 if full_container is not None:
                     full_container.close()
@@ -619,10 +619,10 @@ class LoadVideoUIFirstLast:
         video_stem = os.path.splitext(os.path.basename(video))[0]
         if save_first_frame:
             saved_path = _save_frame_png(first_frame, f"{video_stem}_first_frame")
-            print(f"[LoadVideoUIFirstLast] Saved first frame to {saved_path}")
+            print(f"[SeamStitch] Saved first frame to {saved_path}")
         if save_last_frame:
             saved_path = _save_frame_png(last_frame, f"{video_stem}_last_frame")
-            print(f"[LoadVideoUIFirstLast] Saved last frame to {saved_path}")
+            print(f"[SeamStitch] Saved last frame to {saved_path}")
 
         # 5. Frame-index bounds of the selection, in the ORIGINAL video's own timeline at
         # this same forced frame_rate — lets a downstream node re-decode source_video_path

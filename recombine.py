@@ -46,7 +46,7 @@ def _locate_vhs_package_dir():
 _vhs_dir = _locate_vhs_package_dir()
 if _vhs_dir is None:
     raise ImportError(
-        "Comfyui-VideoSegmentRecombine requires ComfyUI-VideoHelperSuite to be installed "
+        "SeamStitchRecombine requires ComfyUI-VideoHelperSuite to be installed "
         "alongside it in custom_nodes (looked for a 'videohelpersuite' package inside every "
         "custom_nodes subfolder and found none)."
     )
@@ -370,7 +370,7 @@ def _encode_video(images, frame_rate, filename_prefix, format, save_output,
     return {"ui": {"gifs": [preview]}, "result": ((save_output, output_files),)}
 
 
-class VideoSegmentRecombine:
+class SeamStitchRecombine:
     """Fork of VHS_VideoCombine that splices a regenerated replacement clip back into
     the original video at the exact location it was cut from, then encodes the result —
     instead of encoding `images` as a standalone clip."""
@@ -389,7 +389,7 @@ class VideoSegmentRecombine:
                                                "tooltip": "Mean abs pixel difference (0-1) below which two adjacent frames at the regenerated segment's boundary are treated as a held duplicate and dropped. 0 disables detection."}),
                 "max_dedup_frames": ("INT", {"default": 6, "min": 0, "max": 60, "step": 1,
                                               "tooltip": "Cap on how many leading/trailing frames can be stripped from the regenerated segment as held duplicates."}),
-                "filename_prefix": ("STRING", {"default": "VideoSegmentRecombine"}),
+                "filename_prefix": ("STRING", {"default": "seamstitch_recombined"}),
                 "format": (ffmpeg_formats, {'formats': format_widgets}),
                 "save_output": ("BOOLEAN", {"default": True}),
             },
@@ -435,7 +435,7 @@ class VideoSegmentRecombine:
         deduped = _strip_held_duplicates(regenerated, dedup_threshold, max_dedup_frames)
         dropped = regenerated.shape[0] - deduped.shape[0]
         if dropped > 0:
-            print(f"[VideoSegmentRecombine] Dropped {dropped} held/duplicate frame(s) "
+            print(f"[SeamStitch] Dropped {dropped} held/duplicate frame(s) "
                   f"from the regenerated segment's boundaries.")
 
         # 2. Decode the original video's "before" and "after" chunks on the same
@@ -463,7 +463,7 @@ class VideoSegmentRecombine:
 
         expected_gap = end_frame - start_frame + 1
         if abs(deduped.shape[0] - expected_gap) > max_dedup_frames:
-            print(f"[VideoSegmentRecombine] Warning: regenerated segment has {deduped.shape[0]} "
+            print(f"[SeamStitch] Warning: regenerated segment has {deduped.shape[0]} "
                   f"frames after dedup, but the original gap was {expected_gap} frames at "
                   f"frame_rate={frame_rate}. The combined video's total duration will differ "
                   f"from the original by that much at this splice point.")

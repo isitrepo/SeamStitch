@@ -38,9 +38,9 @@ function showWidget(w) {
 }
 
 app.registerExtension({
-    name: "Comfy.LoadVideoUIFirstLast",
+    name: "SeamStitch.Loader",
     async beforeRegisterNodeDef(nodeType, nodeData, app) {
-        if (nodeData.name === "LoadVideoUIFirstLast") {
+        if (nodeData.name === "SeamStitchLoader") {
             const onNodeCreated = nodeType.prototype.onNodeCreated;
             const onConfigure = nodeType.prototype.onConfigure;
             const onResize = nodeType.prototype.onResize;
@@ -240,7 +240,7 @@ app.registerExtension({
 
                     // Check if absolute path (Starts with C:\ or /)
                     if (filename.match(/^[a-zA-Z]:\\/) || filename.startsWith('/')) {
-                        url = api.apiURL(`/load_video_ui_fl_view?filename=${encodeURIComponent(filename)}`);
+                        url = api.apiURL(`/seamstitch/loader/view?filename=${encodeURIComponent(filename)}`);
                     } else {
                         url = api.apiURL(`/view?filename=${encodeURIComponent(filename)}&type=input`);
                     }
@@ -288,7 +288,7 @@ app.registerExtension({
                     loadVideoBtn.name = "Loading...";
                     node.setDirtyCanvas(true, false);
                     try {
-                        const resp = await api.fetchApi("/load_video_ui_fl_list_files");
+                        const resp = await api.fetchApi("/seamstitch/loader/list_files");
                         if (resp.status === 200) {
                             const data = await resp.json();
                             if (videoWidget.options && data.files) {
@@ -303,7 +303,7 @@ app.registerExtension({
                             }
                         }
                     } catch (e) {
-                        console.warn("[LoadVideoUIFirstLast] Failed to refresh file list", e);
+                        console.warn("[SeamStitch] Failed to refresh file list", e);
                     }
                     node._should_reset_trim = true;
                     if (node.updatePreview) node.updatePreview(videoWidget.value);
@@ -334,11 +334,11 @@ app.registerExtension({
                         // First check if the file already exists on the server to de-duplicate
                         const safeFileName = file.name.replace(/[^a-zA-Z0-9.\-_]/g, '_');
                         try {
-                            const checkResp = await api.fetchApi(`/load_video_ui_fl_check_file?filename=${encodeURIComponent(safeFileName)}&size=${file.size}`);
+                            const checkResp = await api.fetchApi(`/seamstitch/loader/check_file?filename=${encodeURIComponent(safeFileName)}&size=${file.size}`);
                             if (checkResp.status === 200) {
                                 const checkResult = await checkResp.json();
                                 if (checkResult.exists) {
-                                    console.log(`[LoadVideoUIFirstLast] File already exists: ${checkResult.name}. Reusing existing file.`);
+                                    console.log(`[SeamStitch] File already exists: ${checkResult.name}. Reusing existing file.`);
                                     if (videoWidget.options && videoWidget.options.values && !videoWidget.options.values.includes(checkResult.name)) {
                                         videoWidget.options.values.push(checkResult.name);
                                     }
@@ -350,7 +350,7 @@ app.registerExtension({
                                 }
                             }
                         } catch (e) {
-                            console.warn("[LoadVideoUIFirstLast] Failed to check for existing file, proceeding with upload", e);
+                            console.warn("[SeamStitch] Failed to check for existing file, proceeding with upload", e);
                         }
 
                         btnWidget.name = "Uploading...";
@@ -375,7 +375,7 @@ app.registerExtension({
                                 formData.append("chunk_index", i);
                                 formData.append("total_chunks", totalChunks);
 
-                                const resp = await api.fetchApi("/load_video_ui_fl_upload_chunk", {
+                                const resp = await api.fetchApi("/seamstitch/loader/upload_chunk", {
                                     method: "POST",
                                     body: formData,
                                 });

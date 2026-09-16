@@ -27,7 +27,7 @@ function attachFilePicker(node, dropdownWidget, label, fileInput, preview) {
             const safeName = file.name.replace(/[^a-zA-Z0-9.\-_]/g, "_");
             try {
                 const checkResp = await api.fetchApi(
-                    `/seamweave_combine_check_file?filename=${encodeURIComponent(safeName)}&size=${file.size}`
+                    `/seamstitch/combine/check_file?filename=${encodeURIComponent(safeName)}&size=${file.size}`
                 );
                 if (checkResp.status === 200) {
                     const result = await checkResp.json();
@@ -37,7 +37,7 @@ function attachFilePicker(node, dropdownWidget, label, fileInput, preview) {
                     }
                 }
             } catch (e) {
-                console.warn("[SeamweaveSimpleCombine] check_file failed, uploading anyway", e);
+                console.warn("[SeamStitch] check_file failed, uploading anyway", e);
             }
 
             btnWidget.name = "uploading...";
@@ -55,7 +55,7 @@ function attachFilePicker(node, dropdownWidget, label, fileInput, preview) {
                     formData.append("filename", uploadName);
                     formData.append("chunk_index", i);
                     formData.append("total_chunks", totalChunks);
-                    const resp = await api.fetchApi("/seamweave_combine_upload_chunk", {
+                    const resp = await api.fetchApi("/seamstitch/combine/upload_chunk", {
                         method: "POST",
                         body: formData,
                     });
@@ -74,7 +74,7 @@ function attachFilePicker(node, dropdownWidget, label, fileInput, preview) {
                 setSelected(data.name);
             }
         } catch (error) {
-            console.error("[SeamweaveSimpleCombine] Upload failed", error);
+            console.error("[SeamStitch] Upload failed", error);
         } finally {
             btnWidget.name = `choose ${label} file`;
             node.setDirtyCanvas(true, false);
@@ -138,7 +138,7 @@ function buildPreviewPanel(node, previewA, previewB) {
     container.appendChild(previewA);
     container.appendChild(previewB);
 
-    const domWidget = node.addDOMWidget("seamweave_previews", "div", container, { serialize: false });
+    const domWidget = node.addDOMWidget("seamstitch_previews", "div", container, { serialize: false });
     domWidget.computeSize = () => [0, 260];
 
     const origOnDrawForeground = node.onDrawForeground;
@@ -180,14 +180,14 @@ function makePreviewVideo() {
 // scrub, un-bypass, run again" never requires manually hunting through the
 // video dropdown in between.
 //
-// This is real cross-package coupling (reaching into a LoadVideoUIFirstLast
+// This is real cross-package coupling (reaching into a SeamStitchLoader
 // node by class name and calling helpers it exposes on itself) rather than a
 // generic mechanism, because the two are explicitly meant to be used
 // together for exactly this workflow - it does nothing if no such node is
 // downstream. Driven by the "executed" websocket event ComfyUI sends after a
 // node runs (the same channel VHS_VideoCombine uses to refresh its own
 // preview widget with no button click needed), reading the "ui" data
-// SeamweaveSimpleCombine.combine() returns alongside its normal outputs.
+// SeamStitchCombine.combine() returns alongside its normal outputs.
 function wireAutoSelect(api, app) {
     api.addEventListener("executed", (event) => {
         const detail = event.detail;
@@ -195,7 +195,7 @@ function wireAutoSelect(api, app) {
         if (!videoPath) return;
 
         const sourceNode = app.graph.getNodeById(detail.node);
-        if (!sourceNode || sourceNode.type !== "SeamweaveSimpleCombine") return;
+        if (!sourceNode || sourceNode.type !== "SeamStitchCombine") return;
 
         const imagesOutput = sourceNode.outputs?.find((o) => o.name === "images");
         const targetIds = new Set();
@@ -206,7 +206,7 @@ function wireAutoSelect(api, app) {
 
         for (const targetId of targetIds) {
             const targetNode = app.graph.getNodeById(targetId);
-            if (!targetNode || targetNode.type !== "LoadVideoUIFirstLast") continue;
+            if (!targetNode || targetNode.type !== "SeamStitchLoader") continue;
 
             const videoWidget = targetNode.widgets?.find((w) => w.name === "video");
             if (!videoWidget) continue;
@@ -224,12 +224,12 @@ function wireAutoSelect(api, app) {
 }
 
 app.registerExtension({
-    name: "Comfy.SeamweaveSimpleCombine",
+    name: "SeamStitch.Combine",
     async setup() {
         wireAutoSelect(api, app);
     },
     async beforeRegisterNodeDef(nodeType, nodeData, app) {
-        if (nodeData.name !== "SeamweaveSimpleCombine") return;
+        if (nodeData.name !== "SeamStitchCombine") return;
 
         const onNodeCreated = nodeType.prototype.onNodeCreated;
         nodeType.prototype.onNodeCreated = function () {
@@ -271,7 +271,7 @@ app.registerExtension({
                 fontFamily: "monospace",
             });
             status.textContent = "Not loaded yet.";
-            const statusWidget = node.addDOMWidget("seamweave_status", "div", status, { serialize: false });
+            const statusWidget = node.addDOMWidget("seamstitch_status", "div", status, { serialize: false });
             statusWidget.computeSize = () => [0, 40];
 
             // Pulls in both chosen files right now (a header probe, not a full
@@ -284,7 +284,7 @@ app.registerExtension({
                     if (!filename || filename === "none") return `${label}: no file chosen`;
                     try {
                         const resp = await api.fetchApi(
-                            `/seamweave_combine_probe?filename=${encodeURIComponent(filename)}`
+                            `/seamstitch/combine/probe?filename=${encodeURIComponent(filename)}`
                         );
                         const data = await resp.json();
                         if (!data.ok) return `${label}: ERROR - ${data.error}`;
