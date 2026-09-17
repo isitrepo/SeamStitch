@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.1.0 — 2026-09-17
+
+First tagged release. Pushed `main` to the public repo
+(`https://github.com/isitrepo/SeamStitch`), verified the clean-room install from the README's
+manual steps (fresh ComfyUI checkout, fresh venv, `pip install -r` for ComfyUI/SeamStitch/VHS,
+`--cpu` start): `/object_info` showed all three `SeamStitchLoader`/`SeamStitchCombine`/
+`SeamStitchRecombine` IDs under category `SeamStitch`, no import failures. Tagged `v0.1.0` and
+published the GitHub release: https://github.com/isitrepo/SeamStitch/releases/tag/v0.1.0.
+
 ## 2026-09-16 — Recombine keeps audio in sync after the dedup drops frames
 
 `SeamStitchRecombine` built the picture as `before + deduped + after` but laid the source audio
