@@ -429,16 +429,22 @@ class SeamStitchRecombine:
             },
             "optional": {
                 "original_audio_override": ("AUDIO", {"tooltip": "Replaces the source file's audio track. Must be on the source file's own timeline (SeamStitchLoader's full_clip_audio is); it is cut to match the picture exactly as the file's own track would be."}),
-                "bridge_audio": ("AUDIO", {"tooltip": "Audio generated alongside the regenerated frames (e.g. LTXVAudioVAEDecode on the bridge's audio latent), starting at its first frame. Used when audio_mode is 'bridge'."}),
+                "bridge_audio": ("AUDIO", {"tooltip": "Audio generated alongside the regenerated frames (e.g. LTXVAudioVAEDecode on the bridge's audio latent), starting at its first frame. Used when audio_mode is 'bridge' or 'combined'."}),
                 "crop_x": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.001,
                                       "tooltip": "Only needed if the same crop was applied in LoadVideoUI when the regenerated segment was produced."}),
                 "crop_y": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.001}),
                 "crop_w": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.001}),
                 "crop_h": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.001}),
-                "audio_mode": (["original", "bridge"], {"default": "original",
-                               "tooltip": "What plays under the regenerated frames. 'original': the source's own audio for exactly the frames that survived dedup, so dropped frames take their sound with them. 'bridge': the bridge_audio input. Either way the audio is cut at the same frames as the picture, so both stay in sync after the splice."}),
+                "audio_mode": (["original", "bridge", "combined"], {"default": "original",
+                               "tooltip": "What plays under the regenerated frames. 'original': the source's own audio for exactly the frames that survived dedup, so dropped frames take their sound with them. 'bridge': the bridge_audio input replaces the gap outright. 'combined': the original gap audio (same as 'original') stays underneath, with bridge_audio mixed additively on top at audio_bridge_weight, so ambience never drops out and there is no sudden audio-character change at the splice. Either way the audio is cut at the same frames as the picture, so both stay in sync after the splice."}),
                 "audio_crossfade_ms": ("FLOAT", {"default": 20.0, "min": 0.0, "max": 500.0, "step": 1.0,
                                        "tooltip": "Equal-power crossfade at each audio join that is not already continuous, so a cut mid-waveform cannot click. Length-preserving: it never moves either side of the join. 0 = hard cut."}),
+                # Kept last: a widget inserted between existing ones shifts every later
+                # widget's value by one slot when a workflow saved before it existed is
+                # reloaded (ComfyUI matches saved widget_values positionally). Appending
+                # here only affects graphs that don't have this widget's value at all yet.
+                "audio_bridge_weight": ("FLOAT", {"default": 0.35, "min": 0.0, "max": 10.0, "step": 0.05,
+                                       "tooltip": "Only used when audio_mode is 'combined'. How loud bridge_audio is mixed on top of the original gap audio (0 = original only, 1 = bridge at its native level added on top). Values above 1 amplify bridge_audio before mixing, in case its native level is too quiet to hear under the original gap audio. The mix is clamped to avoid clipping."}),
             },
             "hidden": {
                 "prompt": "PROMPT",
@@ -456,15 +462,15 @@ class SeamStitchRecombine:
                   frame_rate, dedup_threshold, max_dedup_frames, filename_prefix, format,
                   save_output=True, original_audio_override=None, bridge_audio=None,
                   crop_x=0.0, crop_y=0.0, crop_w=1.0, crop_h=1.0,
-                  audio_mode="original", audio_crossfade_ms=20.0,
+                  audio_mode="original", audio_bridge_weight=0.35, audio_crossfade_ms=20.0,
                   prompt=None, extra_pnginfo=None, **kwargs):
 
         if not original_video_path or not os.path.exists(original_video_path):
             raise FileNotFoundError(f"original_video_path not found: {original_video_path}")
         if end_frame < start_frame:
             raise ValueError(f"end_frame ({end_frame}) must be >= start_frame ({start_frame})")
-        if audio_mode == "bridge" and bridge_audio is None:
-            raise ValueError("audio_mode is 'bridge' but nothing is connected to bridge_audio.")
+        if audio_mode in ("bridge", "combined") and bridge_audio is None:
+            raise ValueError(f"audio_mode is '{audio_mode}' but nothing is connected to bridge_audio.")
 
         # Regenerated segment is the resolution ground truth for the splice.
         regenerated = regenerated_images
@@ -516,7 +522,7 @@ class SeamStitchRecombine:
         #    down untouched from t=0 shifted everything after the splice by
         #    (expected_gap - kept) / frame_rate - 20.8 ms per dropped frame at 48 fps.
         audio = self._splice_audio(original_video_path, original_audio_override, bridge_audio,
-                                   audio_mode, audio_crossfade_ms, frame_rate,
+                                   audio_mode, audio_bridge_weight, audio_crossfade_ms, frame_rate,
                                    start_frame, end_frame, first_kept, deduped.shape[0])
 
         result = _encode_video(combined, frame_rate, filename_prefix, format, save_output,
@@ -525,8 +531,8 @@ class SeamStitchRecombine:
         return result
 
     @staticmethod
-    def _splice_audio(video_path, override, bridge_audio, audio_mode, crossfade_ms, frame_rate,
-                      start_frame, end_frame, first_kept, kept):
+    def _splice_audio(video_path, override, bridge_audio, audio_mode, audio_bridge_weight,
+                      crossfade_ms, frame_rate, start_frame, end_frame, first_kept, kept):
         with av.open(video_path) as container:
             v = container.streams.video[0] if container.streams.video else None
             a = container.streams.audio[0] if container.streams.audio else None
@@ -541,7 +547,7 @@ class SeamStitchRecombine:
             source = get_audio(video_path, start_time=0, duration=0)
         else:
             source = None
-        use_bridge = audio_mode == "bridge"
+        use_bridge = audio_mode in ("bridge", "combined")
         if source is None and not use_bridge:
             return None
 
@@ -567,7 +573,8 @@ class SeamStitchRecombine:
 
         out, notes = splice_audio(wave, sample_rate, frame_rate, start_frame, end_frame,
                                   first_kept, kept, av_offset_s=av_offset, bridge=bridge,
-                                  crossfade_ms=crossfade_ms)
+                                  crossfade_ms=crossfade_ms,
+                                  combined_weight=audio_bridge_weight if audio_mode == "combined" else None)
         for note in notes:
             print(f"[SeamStitch] audio: {note}")
         return {"waveform": out.unsqueeze(0), "sample_rate": sample_rate}

@@ -218,6 +218,15 @@ async def list_files(request):
     return web.json_response({"files": _list_input_videos()})
 
 
+def _snap_dim(value, multiple):
+    """Round value to the nearest multiple (e.g. 1080 -> 1088 at 32); falls back to
+    just keeping it even when multiple is 0. Never returns less than one unit."""
+    if multiple <= 0:
+        return max(2, value - (value % 2))
+    snapped = int(round(value / multiple)) * multiple
+    return max(multiple, snapped)
+
+
 class SeamStitchLoader:
     @classmethod
     def INPUT_TYPES(cls):
@@ -242,6 +251,7 @@ class SeamStitchLoader:
                 "crop_h": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.001}),
                 "save_first_frame": ("BOOLEAN", {"default": False, "tooltip": "Save the extracted first frame as a PNG to the main ComfyUI output directory."}),
                 "save_last_frame": ("BOOLEAN", {"default": False, "tooltip": "Save the extracted last frame as a PNG to the main ComfyUI output directory."}),
+                "snap_to_multiple": ("INT", {"default": 32, "min": 0, "max": 256, "step": 8, "tooltip": "Round the output width/height to the nearest multiple of this value (e.g. 1080 -> 1088 at 32). 0 falls back to just keeping dimensions even."}),
             },
             "optional": {
                 "input_video": ("IMAGE", {"tooltip": "Feed frames in directly from an upstream node instead of picking a file below - the video dropdown is ignored while this is connected."}),
@@ -258,13 +268,13 @@ class SeamStitchLoader:
     def VALIDATE_INPUTS(cls, video, **kwargs):
         return True
 
-    def load_video(self, video, frame_rate, display_mode, start_time, end_time, duration, start_frame, end_frame, duration_frames, custom_width=0, custom_height=0, resize_method="maintain aspect ratio", crop_x=0.0, crop_y=0.0, crop_w=1.0, crop_h=1.0, save_first_frame=False, save_last_frame=False, input_video=None, input_audio=None, **kwargs):
+    def load_video(self, video, frame_rate, display_mode, start_time, end_time, duration, start_frame, end_frame, duration_frames, custom_width=0, custom_height=0, resize_method="maintain aspect ratio", crop_x=0.0, crop_y=0.0, crop_w=1.0, crop_h=1.0, save_first_frame=False, save_last_frame=False, snap_to_multiple=32, input_video=None, input_audio=None, **kwargs):
         if input_video is not None:
             return self._load_from_tensor(
                 input_video, input_audio, video, frame_rate, display_mode,
                 start_time, end_time, duration, start_frame, end_frame, duration_frames,
                 custom_width, custom_height, resize_method, crop_x, crop_y, crop_w, crop_h,
-                save_first_frame, save_last_frame,
+                save_first_frame, save_last_frame, snap_to_multiple,
             )
         if not video:
             # Return blank defaults if no video is loaded
@@ -330,8 +340,8 @@ class SeamStitchLoader:
         target_w = custom_width if custom_width > 0 else orig_w
         target_h = custom_height if custom_height > 0 else orig_h
 
-        target_w = target_w - (target_w % 2)
-        target_h = target_h - (target_h % 2)
+        target_w = _snap_dim(target_w, snap_to_multiple)
+        target_h = _snap_dim(target_h, snap_to_multiple)
 
         # Calculate manual crop from interactive UI first
         manual_crop_left = int(orig_w * crop_x)
@@ -351,11 +361,9 @@ class SeamStitchLoader:
 
         # If no custom width/height is provided, use the cropped original dimensions
         if custom_width == 0:
-            target_w = cropped_orig_w
-            target_w = target_w - (target_w % 2)
+            target_w = _snap_dim(cropped_orig_w, snap_to_multiple)
         if custom_height == 0:
-            target_h = cropped_orig_h
-            target_h = target_h - (target_h % 2)
+            target_h = _snap_dim(cropped_orig_h, snap_to_multiple)
 
         scale_w, scale_h = target_w, target_h
         pad_left = pad_right = pad_top = pad_bottom = 0
@@ -366,10 +374,10 @@ class SeamStitchLoader:
                 ratio = min(target_w / cropped_orig_w, target_h / cropped_orig_h)
                 scale_w = int(cropped_orig_w * ratio)
                 scale_h = int(cropped_orig_h * ratio)
-                scale_w = scale_w - (scale_w % 2)
-                scale_h = scale_h - (scale_h % 2)
 
                 if resize_method == "pad":
+                    scale_w = scale_w - (scale_w % 2)
+                    scale_h = scale_h - (scale_h % 2)
                     pad_x = target_w - scale_w
                     pad_y = target_h - scale_h
                     pad_left = pad_x // 2
@@ -377,6 +385,10 @@ class SeamStitchLoader:
                     pad_top = pad_y // 2
                     pad_bottom = pad_y - pad_top
                 else:
+                    # This branch's output IS the final size (no pad step after), so it
+                    # must land on the snap grid too, not just stay even.
+                    scale_w = _snap_dim(scale_w, snap_to_multiple)
+                    scale_h = _snap_dim(scale_h, snap_to_multiple)
                     target_w, target_h = scale_w, scale_h
 
             elif resize_method == "crop":
@@ -684,7 +696,7 @@ class SeamStitchLoader:
     def _load_from_tensor(self, input_video, input_audio, video, frame_rate, display_mode,
                            start_time, end_time, duration, start_frame, end_frame, duration_frames,
                            custom_width, custom_height, resize_method, crop_x, crop_y, crop_w, crop_h,
-                           save_first_frame, save_last_frame):
+                           save_first_frame, save_last_frame, snap_to_multiple=32):
         """Same trim/crop/resize contract as load_video's file path, but driven off
         frames already in the graph instead of decoding a file - no ffmpeg/PyAV
         decode, no colour-space handling (the tensor is already RGB), and this
@@ -723,14 +735,21 @@ class SeamStitchLoader:
         cropped_h, cropped_w = sliced.shape[1], sliced.shape[2]
         target_w = custom_width if custom_width > 0 else cropped_w
         target_h = custom_height if custom_height > 0 else cropped_h
-        target_w = target_w - (target_w % 2)
-        target_h = target_h - (target_h % 2)
+        target_w = _snap_dim(target_w, snap_to_multiple)
+        target_h = _snap_dim(target_h, snap_to_multiple)
 
-        if custom_width > 0 or custom_height > 0:
+        if custom_width > 0 or custom_height > 0 or target_w != cropped_w or target_h != cropped_h:
             if resize_method in ("maintain aspect ratio", "pad"):
                 ratio = min(target_w / cropped_w, target_h / cropped_h)
-                scale_w = int(cropped_w * ratio); scale_w -= scale_w % 2
-                scale_h = int(cropped_h * ratio); scale_h -= scale_h % 2
+                scale_w = int(cropped_w * ratio)
+                scale_h = int(cropped_h * ratio)
+                if resize_method == "pad":
+                    scale_w -= scale_w % 2
+                    scale_h -= scale_h % 2
+                else:
+                    # Final output size for this branch - must land on the snap grid.
+                    scale_w = _snap_dim(scale_w, snap_to_multiple)
+                    scale_h = _snap_dim(scale_h, snap_to_multiple)
                 if scale_w != cropped_w or scale_h != cropped_h:
                     sliced = self._resize_batch(sliced, scale_w, scale_h)
                 if resize_method == "pad":
