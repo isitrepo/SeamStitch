@@ -99,7 +99,8 @@ def match_format(waveform, sample_rate, channels, target_rate):
 
 
 def splice_audio(source, sample_rate, frame_rate, start_frame, end_frame,
-                 lead_dropped, kept, av_offset_s=0.0, bridge=None, crossfade_ms=20.0):
+                 lead_dropped, kept, av_offset_s=0.0, bridge=None, crossfade_ms=20.0,
+                 combined_weight=None):
     """Cut `source` ([C, N]) to match the spliced picture.
 
     Picture: source frames `[0, start_frame)`, then `kept` regenerated frames (the
@@ -110,11 +111,18 @@ def splice_audio(source, sample_rate, frame_rate, start_frame, end_frame,
     `av_offset_s` is the source's video start minus its audio start: source frame
     `f` plays against source sample `offset + Q(f)`.
 
-    `bridge` ([C, N] at `sample_rate`, same channels) replaces the gap audio with
-    audio generated alongside the regenerated frames; regenerated frame `i` plays
-    against bridge sample `Q(i)`. Without it the gap keeps the source's own audio
-    for exactly the frames that survived, so dropped frames take their sound with
-    them.
+    `bridge` ([C, N] at `sample_rate`, same channels) is audio generated alongside
+    the regenerated frames; regenerated frame `i` plays against bridge sample
+    `Q(i)`. What it does depends on `combined_weight`:
+
+    - `combined_weight is None` ("bridge" mode): `bridge` *replaces* the gap audio
+      outright. Without `bridge`, the gap keeps the source's own audio for exactly
+      the frames that survived, so dropped frames take their sound with them.
+    - `combined_weight` given ("combined" mode): the gap keeps the source's own
+      audio (same as no `bridge`), and `bridge` is additively mixed on top of it
+      at that weight (0-1), scaled and summed rather than swapped in, so ambience
+      never drops out and the transition into/out of the gap has no sudden
+      character change. The mix is clamped to [-1, 1] afterward.
 
     Returns `(waveform [C, M], notes)`.
     """
@@ -129,8 +137,12 @@ def splice_audio(source, sample_rate, frame_rate, start_frame, end_frame,
     after_start = offset + q(end_frame + 1)
     after = _Piece(source, after_start, source.shape[-1] - after_start)
 
+    is_combined = bridge is not None and combined_weight is not None
+    replace_with_bridge = bridge is not None and not is_combined
+    use_original_gap = not replace_with_bridge
+
     fill = None
-    if bridge is not None:
+    if replace_with_bridge:
         real = max(0, min(gap_len, bridge.shape[-1] - q(lead_dropped)))
         gap = _Piece(bridge, q(lead_dropped), real)
         if real < gap_len:
@@ -162,10 +174,23 @@ def splice_audio(source, sample_rate, frame_rate, start_frame, end_frame,
     # Source gap audio that runs out before its frames do (more regenerated frames
     # than the gap had) stops dead into silence; fade it so that cannot click.
     real = min(gap.length, gap.limit - gap.start)
-    if bridge is None and 0 < real < gap.length and fade > 0:
+    if use_original_gap and 0 < real < gap.length and fade > 0:
         m = min(fade, real)
         j = before.length + real
         out[:, j - m:j] *= torch.cos((torch.arange(m, dtype=out.dtype) + 0.5) / m * math.pi / 2)
+
+    if is_combined:
+        real_bridge = max(0, min(gap.length, bridge.shape[-1] - q(lead_dropped)))
+        if real_bridge > 0:
+            bridge_seg = _Piece(bridge, q(lead_dropped), real_bridge).render() * combined_weight
+            j0 = before.length
+            out[:, j0:j0 + real_bridge] += bridge_seg
+            out.clamp_(-1.0, 1.0)
+        notes.append(f"combined mode: bridge audio mixed over the original gap audio at weight {combined_weight:g}")
+        if real_bridge < gap.length:
+            notes.append(f"bridge audio covers {real_bridge} of {gap.length} gap sample(s) "
+                         f"({1000.0 * (gap.length - real_bridge) / sample_rate:.1f} ms short); "
+                         f"original audio alone for the remainder")
 
     j = 0
     live = []
@@ -178,7 +203,7 @@ def splice_audio(source, sample_rate, frame_rate, start_frame, end_frame,
             continue
         frame = round(at * frame_rate / sample_rate)
         notes.append(f"join at output frame {frame}: " + _crossfade(out, at, prev, nxt, fade))
-    if gap_frames != kept and bridge is None:
+    if gap_frames != kept and use_original_gap:
         notes.append(f"gap audio {'shortened' if kept < gap_frames else 'lengthened'} from "
                      f"{gap_frames} to {kept} frame(s) to match the picture")
     return out, notes
