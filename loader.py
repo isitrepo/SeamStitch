@@ -209,15 +209,6 @@ def _list_input_videos():
     return files or ["none"]
 
 
-# Lets the "Load Video" button re-scan the input directory on demand - the dropdown's
-# own option list is only ever set once, at node-creation time, so a file written to
-# disk afterwards (e.g. by a combine node upstream) would otherwise need the node
-# deleted and re-added before it could be picked.
-@PromptServer.instance.routes.get("/seamstitch/loader/list_files")
-async def list_files(request):
-    return web.json_response({"files": _list_input_videos()})
-
-
 def _snap_dim(value, multiple):
     """Round value to the nearest multiple (e.g. 1080 -> 1088 at 32); falls back to
     just keeping it even when multiple is 0. Never returns less than one unit."""

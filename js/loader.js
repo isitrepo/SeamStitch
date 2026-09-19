@@ -280,44 +280,6 @@ app.registerExtension({
                     fileInput.click();
                 });
 
-                // ====================================================================
-                // LOAD VIDEO BUTTON - re-scans the input directory and refreshes the
-                // preview/timeline for whatever is selected. The dropdown's own option
-                // list is only ever populated once, at node-creation time, so a file
-                // written after that (e.g. by a combine node feeding this one) would
-                // otherwise need the node deleted and re-added before it could show up
-                // here to scrub through.
-                // ====================================================================
-                const loadVideoBtn = this.addWidget("button", "Load Video", null, async () => {
-                    loadVideoBtn.name = "Loading...";
-                    node.setDirtyCanvas(true, false);
-                    try {
-                        const resp = await api.fetchApi("/seamstitch/loader/list_files");
-                        if (resp.status === 200) {
-                            const data = await resp.json();
-                            if (videoWidget.options && data.files) {
-                                // Server returns newest-first, so [0] is the most
-                                // recently written file (e.g. a combine node's output) -
-                                // only takes over the selection if the current pick
-                                // no longer exists, never overrides a deliberate one.
-                                videoWidget.options.values = data.files;
-                                if (!data.files.includes(videoWidget.value) && data.files.length) {
-                                    videoWidget.value = data.files[0];
-                                }
-                            }
-                        }
-                    } catch (e) {
-                        console.warn("[SeamStitch] Failed to refresh file list", e);
-                    }
-                    node._should_reset_trim = true;
-                    if (node.updatePreview) node.updatePreview(videoWidget.value);
-                    if (node.syncFramesFromTime) node.syncFramesFromTime();
-                    updateRuler();
-                    updateUI(true);
-                    loadVideoBtn.name = "Load Video";
-                    app.graph.setDirtyCanvas(true, true);
-                });
-
                 // Define robust upload logic
                 const uploadFile = async (file) => {
                     try {
