@@ -24,6 +24,17 @@ the change is entirely inside `_load_insert`, and the `input_video` path needs n
 `_load_from_tensor` slices by index. Only a stream that does not start at t = 0 was affected, which
 in practice means a Combine output.
 
+**Fix — the four pre-insert API templates validate against `/prompt` again.** `seamstitch_combine`
+was missing `resize_to` / `resize_fit` and the three `seamstitch_ltx_first_last*` templates were
+missing `snap_to_multiple`, `extend_bridge`, `extend_amount`, `extend_unit`, `bridge_frame_grid`,
+`mode`, `join_frame` and `trim_each_side` — widgets added since they were exported, which `/prompt`
+rejects as `required_input_missing`. Each is now present at the default the node itself declares,
+read from the live `object_info`; nothing else in the four files changed. All seven templates report
+OK, and the addition is a proven no-op for the render, not just for validation: the fixed
+`..._morph.api.json` on the same input, seed 424242 and range 232–264 measures max **14.93**, mean
+6.78, std 3.19, and its decoded video stream is bit-identical to the earlier replace-mode render
+(md5 `b2549d4f83c50ec2dcbb9fa2ff78c660`).
+
 Measured 2026-09-19 on Kay's live instance (ComfyUI 0.36.0, RTX 5090) and with `python_embeded`:
 
 - `tests/` 33 passed. New `test_insert_anchors_are_decode_order_on_an_offset_stream` remuxes
@@ -71,9 +82,6 @@ Measured 2026-09-19 on Kay's live instance (ComfyUI 0.36.0, RTX 5090) and with `
 
 **Known, not fixed.**
 
-- The four API templates that predate insert mode no longer validate against `/prompt`: required
-  widgets have been added since they were exported. The three new `_insert` templates carry the
-  full set. Supplying each missing widget at its declared default is a no-op for the render.
 - Loading any saved graph on the canvas resets the loader's `start_frame` / `end_frame` to the
   whole clip. Pre-existing — v0.1.0's `onConfigure` already called `syncFramesFromTime()` — and it
   does not affect API payloads.
