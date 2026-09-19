@@ -523,8 +523,8 @@ class SeamStitchCombine:
             },
         }
 
-    RETURN_TYPES = ("IMAGE", "AUDIO", "STRING", "INT")
-    RETURN_NAMES = ("images", "audio", "video_path", "seam_frame")
+    RETURN_TYPES = ("IMAGE", "AUDIO", "INT")
+    RETURN_NAMES = ("images", "audio", "seam_frame")
     FUNCTION = "combine"
     CATEGORY = "SeamStitch"
     # Writes a real file as a side effect (like a save node), so it's a valid
@@ -605,17 +605,20 @@ class SeamStitchCombine:
         print(f"[SeamStitchCombine] seam_frame = {seam_frame} "
               f"(clip B starts at output frame {seam_frame} of {images.shape[0]})")
 
-        # A full, resolved path (not just the basename) - wire it straight into
-        # anything expecting a real file on disk, e.g. SeamStitchRecombine's
-        # original_video_path, without depending on it also being the file
-        # picked in some other node's own dropdown.
+        # The written file's full resolved path goes to the frontend via "ui" only
+        # (the same channel VHS_VideoCombine uses to refresh its own preview after a
+        # render, with no button click needed) - js/combine.js listens for this and
+        # auto-selects the file in any downstream Load Video UI node, so picking
+        # bridge points can be a bypass-and-run rather than a
+        # run-then-hunt-through-the-dropdown step.
         #
-        # Also handed to the frontend via "ui" (the same channel VHS_VideoCombine
-        # uses to refresh its own preview after a render, with no button click
-        # needed) - simple_combine.js listens for this and auto-selects the file
-        # in any downstream Load Video UI node, so picking bridge points can be a
-        # bypass-and-run rather than a run-then-hunt-through-the-dropdown step.
-        return {"ui": {"video_path": [out_path]}, "result": (images, audio, out_path, seam_frame)}
+        # It is deliberately NOT an output socket. It used to be one, for wiring into
+        # SeamStitchRecombine.original_video_path, but that auto-select means the
+        # downstream Loader is always pointing at this very file - so its own
+        # source_video_path already carries the identical path, and every shipped
+        # template wires that one. Two sockets for one string was the only thing the
+        # extra output bought.
+        return {"ui": {"video_path": [out_path]}, "result": (images, audio, seam_frame)}
 
     def _resolve(self, video, label):
         path = _resolve_video_path(video)
