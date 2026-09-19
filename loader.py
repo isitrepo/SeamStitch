@@ -791,6 +791,7 @@ class SeamStitchLoader:
         if note:
             print(f"[SeamStitch] {note}")
 
+        base_time = 0.0
         if input_video is not None:
             clip_frames = int(input_video.shape[0])
         else:
@@ -801,21 +802,55 @@ class SeamStitchLoader:
                 vs = c.streams.video[0]
                 dur = float(vs.duration * vs.time_base) if vs.duration and vs.time_base else (
                     float(c.duration) / av.time_base if c.duration else 0.0)
+                if vs.start_time is not None and vs.time_base:
+                    base_time = float(vs.start_time * vs.time_base)
             clip_frames = int(round(dur * fr))
 
         plan = insert_math.plan_insert(join, trim_each_side, clip_frames)
 
         common = dict(
-            video=video, frame_rate=frame_rate, display_mode="frames", start_time=0.0,
-            end_time=0.0, duration=0.0, duration_frames=0, custom_width=custom_width,
-            custom_height=custom_height, resize_method=resize_method, crop_x=crop_x,
-            crop_y=crop_y, crop_w=crop_w, crop_h=crop_h, save_first_frame=False,
-            save_last_frame=False, snap_to_multiple=snap_to_multiple,
-            mode=insert_math.MODE_REPLACE, input_video=input_video, input_audio=input_audio)
-        a = self.load_video(start_frame=plan["first_anchor"], end_frame=plan["first_anchor"] + 1,
-                            _skip_full_audio=True, **common)
-        b = self.load_video(start_frame=plan["last_anchor"], end_frame=plan["last_anchor"] + 1,
-                            **common)
+            video=video, frame_rate=frame_rate, duration=0.0, duration_frames=0,
+            custom_width=custom_width, custom_height=custom_height,
+            resize_method=resize_method, crop_x=crop_x, crop_y=crop_y, crop_w=crop_w,
+            crop_h=crop_h, save_first_frame=False, save_last_frame=False,
+            snap_to_multiple=snap_to_multiple, mode=insert_math.MODE_REPLACE,
+            input_video=input_video, input_audio=input_audio)
+
+        def _anchor(idx, **kw):
+            """One decoded frame at DECODE-ORDER index `idx`, fetched through the
+            ordinary replace-mode path so it gets exactly the crop/resize/snap the
+            bridge is generated at.
+
+            Decode order - the stream's own first frame is 0 - is the convention
+            SeamStitchCombine measures seam_frame in and SeamStitchRecombine cuts
+            on. The replace-mode path below maps start_frame to an absolute
+            presentation time as a bare start_frame / fr, which silently ignores a
+            stream that does not begin at t = 0. SeamStitchCombine's own output
+            does not: its concat demuxer leaves a +31 ms start offset (AAC priming,
+            measured 2026-09-19 on the 48 fps 4.mp4 -> 2.mp4 join), which is 1.49
+            frames. Asking for frame 248 by index therefore returned decode frame
+            246, so BOTH anchors came back as clip A's last frame - the generator
+            was asked to morph a frame into itself, rendered a 33-frame freeze, and
+            the hard cut simply reappeared where that frozen bridge met clip B
+            (measured: max per-frame change 65.5, i.e. the whole cut, against 14.9
+            for the replace-mode bridge). Ask by time off the stream's real start
+            instead, exactly as recombine._decode_range does, with the same
+            thousandth-of-a-frame tolerance so a pts -> float landing a hair above
+            the target does not skip the frame.
+
+            The input_video path needs none of this: _load_from_tensor slices the
+            batch by index, so its indices are already decode order.
+            """
+            if input_video is not None:
+                return self.load_video(display_mode="frames", start_time=0.0, end_time=0.0,
+                                       start_frame=idx, end_frame=idx + 1, **common, **kw)
+            t0 = max(0.0, base_time + idx / fr - 1e-3 / fr)
+            return self.load_video(display_mode="seconds", start_time=t0,
+                                   end_time=t0 + 1.0 / fr, start_frame=0, end_frame=0,
+                                   **common, **kw)
+
+        a = _anchor(plan["first_anchor"], _skip_full_audio=True)
+        b = _anchor(plan["last_anchor"])
         first_frame = a[0][0:1].clone()
         last_frame = b[0][0:1].clone()
 
