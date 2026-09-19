@@ -1,5 +1,56 @@
 # Changelog
 
+## Unreleased — Recombine can insert a bridge instead of replacing a range (`insert`)
+
+`SeamStitchRecombine` gains an `insert` BOOLEAN input (default false, appended last so workflows
+saved before it exists load unchanged). Off, nothing about the node changes. On:
+
+- `end_frame == start_frame - 1` is accepted — an empty range, nothing removed at all. Anything
+  below that still raises, naming the bound.
+- The regenerated segment's **first and last frame are dropped unconditionally**, before the
+  held-duplicate strip, because they are the two kept frames either side of the join that the
+  generator was anchored on and that the output still carries as the source's own frames. Fewer
+  than three regenerated frames raises rather than silently inserting nothing.
+- The replace-mode duration warning ("the original gap was N frames") no longer fires — in insert
+  mode `expected_gap` is 0 by design. It is replaced with a line reporting how many frames went
+  in, how many came out, and how much longer the video got.
+- Audio (`audio_splice.splice_audio(..., insert=True)`): the gap under the inserted frames is
+  `bridge_audio` when wired and **silence** otherwise — never source audio read from around the
+  join, which belongs to frames that are still in the output and about to play again. A bridge
+  whose audio decodes short of its frames is padded with silence for the same reason (replace
+  mode still borrows the source's audio there, unchanged). `audio_mode = original` in insert mode
+  therefore means silence under the bridge, and says so on the console. Both joins still get the
+  length-preserving equal-power crossfade.
+
+Measured 2026-09-19, `tests/test_recombine_insert.py`, synthetic 48-frame / 24 fps / 48 kHz
+fixture (lossless x264 yuv444p in mp4, per-frame fingerprints, a 200→8000 Hz chirp so a lag has
+one unambiguous correlation peak):
+
+- **Frames**, insert at join 20 with a 35-frame bridge: 48 source + 33 inserted = **81 frames**,
+  **0** source frames removed; output frame 19 bit-identical to source frame 19 and output frame
+  53 bit-identical to source frame 20, with neither anchor doubled. With `trim_each_side = 2`
+  (range 18-21 removed): **77 frames**, and none of source frames 18-21 appears anywhere in the
+  output. A 14-frame bridge with two held duplicates: 14 → 12 after the anchor drop → **11** after
+  the held strip.
+- **Audio**: **162000 samples = 81 frames** exactly, for both the bridge-audio and the silence
+  case; drift at both joins **0 samples** (normalised cross-correlation, 250 ms windows,
+  corr **1.0000** each side) — the Defect 4 method from `REAL_FOOTAGE_FINDINGS.md`. Outside the
+  20 ms crossfades the output is sample-identical to the source either side of the insertion, and
+  the stretch under the inserted frames is exactly zero in the silence case and exactly the
+  bridge's samples in the bridge case. A bridge audio 1000 samples short is padded with silence.
+- **Replace-mode regression**: the same call with `insert=false` on a fixed fixture (range 10-20,
+  13-frame bridge with two held duplicates at each end, `audio_mode` `original` and `bridge`)
+  produces output identical to the **v0.1.0** tag — picture sha256 `ce3fcf1080ba7b37…` for both
+  modes, 48 frames, 96000 audio samples, `torch.equal` on the waveform. v0.1.0 is built from a
+  detached `git worktree` at the tag inside the test, not from memory.
+
+Every behaviour above was confirmed to be under test by mutation: reverting the anchor drop, the
+insert-mode gap selection, the bridge-shortfall padding, the empty-range check, the anchor offset
+carried into the bridge-audio index, the gap warning, or one frame of the replace-mode picture
+each makes the suite fail. Note for the record: at `trim_each_side = 0` the pre-insert-mode gap
+piece already rendered as silence by accident (its start landed past its own limit); the source
+audio leak this fixes bites from `trim_each_side = 1` up, and from the bridge-shortfall fill.
+
 ## Unreleased — Combine reports where the join is (`seam_frame`)
 
 `SeamStitchCombine` gains a fourth output, `seam_frame` (INT, appended last so existing wiring is

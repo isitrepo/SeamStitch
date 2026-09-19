@@ -55,6 +55,13 @@ class _Piece:
                 and self.start + self.length <= self.limit)
 
 
+def _silence(like, length):
+    """`length` silent samples, shaped and typed like `like`. Used where the output
+    needs audio for frames no source track ever covered - the invented frames of
+    insert mode - instead of material borrowed from around the join."""
+    return _Piece(like, 0, length, limit=0)
+
+
 def _crossfade(out, j, prev, nxt, n):
     """Blend across the join at output sample `j`, in place. Length-preserving:
     the overlapping material is borrowed from past the end of `prev` (post-join)
@@ -100,7 +107,7 @@ def match_format(waveform, sample_rate, channels, target_rate):
 
 def splice_audio(source, sample_rate, frame_rate, start_frame, end_frame,
                  lead_dropped, kept, av_offset_s=0.0, bridge=None, crossfade_ms=20.0,
-                 combined_weight=None):
+                 combined_weight=None, insert=False):
     """Cut `source` ([C, N]) to match the spliced picture.
 
     Picture: source frames `[0, start_frame)`, then `kept` regenerated frames (the
@@ -124,6 +131,16 @@ def splice_audio(source, sample_rate, frame_rate, start_frame, end_frame,
       never drops out and the transition into/out of the gap has no sudden
       character change. The mix is clamped to [-1, 1] afterward.
 
+    `insert` is SeamStitchRecombine's insert mode: the regenerated frames are
+    *added* between two kept frames instead of standing in for a removed range, so
+    `end_frame` may be `start_frame - 1` (nothing removed at all). No source audio
+    exists behind invented frames, so the gap is the bridge audio when one is wired
+    and **silence** otherwise - never source audio pulled from around the join,
+    which would replay the sound just before it. A bridge that decodes short is
+    padded with silence for the same reason. Both joins still get the equal-power
+    crossfade, and neither side of the join moves, so the picture stays locked to
+    the sound either side of the insertion.
+
     Returns `(waveform [C, M], notes)`.
     """
     q = lambda f: frame_sample(f, frame_rate, sample_rate)
@@ -139,7 +156,10 @@ def splice_audio(source, sample_rate, frame_rate, start_frame, end_frame,
 
     is_combined = bridge is not None and combined_weight is not None
     replace_with_bridge = bridge is not None and not is_combined
-    use_original_gap = not replace_with_bridge
+    # In insert mode the gap is new footage between two kept frames: the source has
+    # no audio behind it at all, so "keep the source's own gap audio" is not a
+    # fallback that exists here - it would replay the sound just before the join.
+    use_original_gap = not replace_with_bridge and not insert
 
     fill = None
     if replace_with_bridge:
@@ -152,9 +172,23 @@ def splice_audio(source, sample_rate, frame_rate, start_frame, end_frame,
             # the shortfall is filled with the source's own audio behind those
             # frames - which also makes the join into `after` sample-continuous.
             missing = gap_len - real
-            fill = _Piece(source, after_start - missing, missing)
-            notes.append(f"bridge audio ends {missing} samples ({1000.0 * missing / sample_rate:.1f} ms) "
-                         f"before its frames do; that tail uses the source's own audio")
+            if insert:
+                # Nothing was removed, so "the source's own audio behind those
+                # frames" is the audio of the frame the join lands on - already
+                # played, and about to play again in `after`. Silence instead.
+                fill = _silence(source, missing)
+                notes.append(f"bridge audio ends {missing} samples ({1000.0 * missing / sample_rate:.1f} ms) "
+                             f"before its frames do; insert mode has no source audio behind them, "
+                             f"so that tail is silence")
+            else:
+                fill = _Piece(source, after_start - missing, missing)
+                notes.append(f"bridge audio ends {missing} samples ({1000.0 * missing / sample_rate:.1f} ms) "
+                             f"before its frames do; that tail uses the source's own audio")
+    elif insert:
+        gap = _silence(source, gap_len)
+        notes.append(f"insert mode: {kept} inserted frame(s) have no source audio behind them; "
+                     f"the gap is silence"
+                     + (" with bridge audio mixed over it" if is_combined else ""))
     else:
         first = start_frame + lead_dropped
         if first + kept == end_frame + 1 and lead_dropped > 0:

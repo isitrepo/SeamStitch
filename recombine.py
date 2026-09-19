@@ -405,9 +405,15 @@ def _encode_video(images, frame_rate, filename_prefix, format, save_output,
 
 
 class SeamStitchRecombine:
-    """Fork of VHS_VideoCombine that splices a regenerated replacement clip back into
-    the original video at the exact location it was cut from, then encodes the result —
-    instead of encoding `images` as a standalone clip."""
+    """Fork of VHS_VideoCombine that splices a regenerated clip back into the original
+    video, then encodes the result — instead of encoding `images` as a standalone clip.
+
+    Two modes. `insert=False` (default): the regenerated clip *replaces* the range
+    `[start_frame, end_frame]` it was cut from. `insert=True`: it is *inserted* at the
+    join, nothing is removed (`end_frame` may be `start_frame - 1`), and its first and
+    last frame — the anchors it was generated from, which are still in the output as
+    the source's own frames — are always dropped. Either way the audio is cut at the
+    same frames as the picture."""
 
     @classmethod
     def INPUT_TYPES(s):
@@ -445,6 +451,8 @@ class SeamStitchRecombine:
                 # here only affects graphs that don't have this widget's value at all yet.
                 "audio_bridge_weight": ("FLOAT", {"default": 0.35, "min": 0.0, "max": 10.0, "step": 0.05,
                                        "tooltip": "Only used when audio_mode is 'combined'. How loud bridge_audio is mixed on top of the original gap audio (0 = original only, 1 = bridge at its native level added on top). Values above 1 amplify bridge_audio before mixing, in case its native level is too quiet to hear under the original gap audio. The mix is clamped to avoid clipping."}),
+                "insert": ("BOOLEAN", {"default": False,
+                           "tooltip": "Off (default): the regenerated frames REPLACE source frames [start_frame, end_frame]. On: they are INSERTED between two kept frames and nothing is removed - wire this from SeamStitchLoader's 'insert' output. In insert mode end_frame may be start_frame - 1 (an empty range, nothing removed at all), the bridge's first and last frame are always dropped because they duplicate the kept frames either side of the join, and the audio under the inserted frames is bridge_audio when wired and silence otherwise - never the source's own audio, which belongs to frames that are still in the output."}),
             },
             "hidden": {
                 "prompt": "PROMPT",
@@ -463,11 +471,18 @@ class SeamStitchRecombine:
                   save_output=True, original_audio_override=None, bridge_audio=None,
                   crop_x=0.0, crop_y=0.0, crop_w=1.0, crop_h=1.0,
                   audio_mode="original", audio_bridge_weight=0.35, audio_crossfade_ms=20.0,
-                  prompt=None, extra_pnginfo=None, **kwargs):
+                  insert=False, prompt=None, extra_pnginfo=None, **kwargs):
 
         if not original_video_path or not os.path.exists(original_video_path):
             raise FileNotFoundError(f"original_video_path not found: {original_video_path}")
-        if end_frame < start_frame:
+        if insert:
+            # An empty range is the whole point of insert mode at trim_each_side=0:
+            # nothing is removed, the bridge simply goes in at the join.
+            if end_frame < start_frame - 1:
+                raise ValueError(f"insert mode: end_frame ({end_frame}) must be >= start_frame - 1 "
+                                 f"({start_frame - 1}); {start_frame - 1} means an empty range "
+                                 f"(nothing removed)")
+        elif end_frame < start_frame:
             raise ValueError(f"end_frame ({end_frame}) must be >= start_frame ({start_frame})")
         if audio_mode in ("bridge", "combined") and bridge_audio is None:
             raise ValueError(f"audio_mode is '{audio_mode}' but nothing is connected to bridge_audio.")
@@ -479,7 +494,25 @@ class SeamStitchRecombine:
         target_h = regenerated.shape[1]
         target_w = regenerated.shape[2]
 
-        # 1. Drop held/duplicate frames at the regenerated segment's own boundaries.
+        # 1a. Insert mode only: the bridge's first and last frame ARE the two kept
+        #     frames either side of the join - the generator was anchored on them.
+        #     Nothing was removed to make room, so emitting them would show each of
+        #     those frames twice. Drop them unconditionally, before the dedup, and
+        #     carry the offset into the audio so the sound is cut at the same frames.
+        anchor_dropped = 0
+        if insert:
+            if regenerated.shape[0] < 3:
+                raise ValueError(f"insert mode needs at least 3 regenerated frames (got "
+                                 f"{regenerated.shape[0]}): the first and last are the kept frames "
+                                 f"either side of the join and are always dropped, which would "
+                                 f"leave nothing to insert")
+            regenerated = regenerated[1:-1]
+            anchor_dropped = 1
+            print(f"[SeamStitch] Insert mode: dropped the bridge's first and last frame (the two "
+                  f"anchors, still in the output as the source's own frames); "
+                  f"{regenerated.shape[0]} frame(s) left to insert.")
+
+        # 1b. Drop held/duplicate frames at the regenerated segment's own boundaries.
         first_kept, last_kept = _held_duplicate_bounds(regenerated, dedup_threshold, max_dedup_frames)
         deduped = regenerated[first_kept:last_kept + 1]
         dropped = regenerated.shape[0] - deduped.shape[0]
@@ -512,7 +545,15 @@ class SeamStitchRecombine:
         del combined_u8
 
         expected_gap = end_frame - start_frame + 1
-        if abs(deduped.shape[0] - expected_gap) > max_dedup_frames:
+        if insert:
+            # There is no gap to match in insert mode - the inserted frames are new
+            # material by design, so a difference from `expected_gap` (0 when nothing
+            # was trimmed) is the feature, not a fault. Report the effect instead.
+            print(f"[SeamStitch] Insert mode: {deduped.shape[0]} frame(s) inserted at the join, "
+                  f"{expected_gap} removed; the video gets "
+                  f"{(deduped.shape[0] - expected_gap) / float(frame_rate):+.3f} s longer at "
+                  f"frame_rate={frame_rate}.")
+        elif abs(deduped.shape[0] - expected_gap) > max_dedup_frames:
             print(f"[SeamStitch] Warning: regenerated segment has {deduped.shape[0]} "
                   f"frames after dedup, but the original gap was {expected_gap} frames at "
                   f"frame_rate={frame_rate}. The combined video's total duration will differ "
@@ -521,9 +562,13 @@ class SeamStitchRecombine:
         # 3. Audio, cut at the same frames as the picture. Laying the original track
         #    down untouched from t=0 shifted everything after the splice by
         #    (expected_gap - kept) / frame_rate - 20.8 ms per dropped frame at 48 fps.
+        # `first_kept` indexes the post-anchor-drop segment, but bridge audio runs on
+        # the bridge's own timeline, so the lead offset it needs is the total number
+        # of bridge frames dropped from the front.
         audio = self._splice_audio(original_video_path, original_audio_override, bridge_audio,
                                    audio_mode, audio_bridge_weight, audio_crossfade_ms, frame_rate,
-                                   start_frame, end_frame, first_kept, deduped.shape[0])
+                                   start_frame, end_frame, anchor_dropped + first_kept,
+                                   deduped.shape[0], insert=insert)
 
         result = _encode_video(combined, frame_rate, filename_prefix, format, save_output,
                                 audio, prompt, extra_pnginfo)
@@ -532,7 +577,8 @@ class SeamStitchRecombine:
 
     @staticmethod
     def _splice_audio(video_path, override, bridge_audio, audio_mode, audio_bridge_weight,
-                      crossfade_ms, frame_rate, start_frame, end_frame, first_kept, kept):
+                      crossfade_ms, frame_rate, start_frame, end_frame, first_kept, kept,
+                      insert=False):
         with av.open(video_path) as container:
             v = container.streams.video[0] if container.streams.video else None
             a = container.streams.audio[0] if container.streams.audio else None
@@ -571,10 +617,17 @@ class SeamStitchRecombine:
             bridge = match_format(bridge_audio["waveform"][0], bridge_audio["sample_rate"],
                                   wave.shape[0], sample_rate)
 
+        if insert and not use_bridge:
+            print("[SeamStitch] Warning: insert mode with audio_mode='original' - the source has "
+                  "no audio behind frames that were inserted rather than replaced, so the "
+                  "inserted stretch is silent. Wire bridge_audio and set audio_mode to 'bridge' "
+                  "to put sound under it.")
+
         out, notes = splice_audio(wave, sample_rate, frame_rate, start_frame, end_frame,
                                   first_kept, kept, av_offset_s=av_offset, bridge=bridge,
                                   crossfade_ms=crossfade_ms,
-                                  combined_weight=audio_bridge_weight if audio_mode == "combined" else None)
+                                  combined_weight=audio_bridge_weight if audio_mode == "combined" else None,
+                                  insert=insert)
         for note in notes:
             print(f"[SeamStitch] audio: {note}")
         return {"waveform": out.unsqueeze(0), "sample_rate": sample_rate}
