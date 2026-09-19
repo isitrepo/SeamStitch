@@ -1,5 +1,73 @@
 # Changelog
 
+## Unreleased — the Loader keeps a restored trim range instead of re-probing it
+
+`js/loader.js` only; no Python, no node surface, no output change.
+
+**Fix — `onConfigure` threw away a range the workflow supplied.** A graph carrying
+`start_frame = 232`, `end_frame = 265`, `display_mode = "frames"` came back on the canvas as
+`0` / `497` — the whole clip. The reset was real but the trigger was narrower than S5 recorded:
+**it is not every saved graph, it is a graph whose range lives in the frame widgets while
+`start_time`/`end_time` sit at 0.** That is exactly what the `docs/comfy_templates` API templates
+carry, and exactly what `loader.py` reads back — with `display_mode == "frames"` the backend uses
+`start_frame`/`end_frame` and ignores the seconds pair entirely (`loader.py:499`). `onConfigure`
+called `syncFramesFromTime()` unconditionally, i.e. it treated seconds as the source of truth in
+both modes, so the restored `232`/`265` were overwritten with `round(0 * 48) = 0`; the file probe
+in `videoPreview.onloadedmetadata` then saw `end_time === 0`, read that as "no range set" and
+filled in the whole clip. The same JSON therefore meant 232–265 to the queue and 0–497 on the
+canvas.
+
+`onConfigure` now calls a new `node.syncRestoredRange()`, which syncs **from** whichever pair
+`display_mode` says the graph authored: frames mode syncs seconds from frames, seconds mode is
+unchanged. An unset range is still left at 0 for the probe to fill, and the probe still supplies
+the timeline's own bounds — a range that overruns the clip is still clamped to the probed length.
+Insert mode's `mode` / `join_frame` / `trim_each_side` restore path is untouched.
+
+**Fix — `syncTimeFromFrames` wrote the converted duration into the wrong widget.** Pre-existing
+since `v0.1.0` (line 213 there, inherited from the upstream loader): the duration line read
+`duration_frames`, divided it by the frame rate and assigned the result **back into**
+`duration_frames` instead of into `duration`, so the frame count was destroyed and `duration` never
+updated. Measured on a fresh node: `duration_frames = 99` at 48 fps became `2.063`. It was mostly
+invisible because replace mode's `updateUI` recomputes both from `end − start` whenever a video is
+loaded, and because until this session `syncTimeFromFrames` never ran on reload — but insert mode's
+`updateUI` returns early, so it ate the bridge length. Assigning to `durationWidget` (which the
+line's own `if (durationWidget && durationFramesWidget)` guard already named) fixes it, and is
+required for the `onConfigure` fix above to be correct.
+
+### Gate (sandbox ComfyUI, port 8293, `--cpu`, isolated `--base-directory` / `--user-directory` /
+`--database-url`, only SeamStitch whitelisted, serving the dev copy; live 8188 untouched)
+
+Driven in a real browser against the real page on `s5_ins_combined_00001.mp4` (497 frames at 48 fps,
+the S5 clip), by `app.loadGraphData()` on a graph serialized from the canvas and then mutated to
+each shape, reading the widget values back 3.5 s after the load:
+
+| saved graph | before | after |
+|---|---|---|
+| replace, range in frames only (232/265), times 0 — the API-template shape | `0` / `497`, `duration_frames` 497 | **`232` / `265`**, `duration_frames` 33 |
+| insert, `join_frame` 248, `trim_each_side` 0, bridge `duration_frames` 33 | bridge **0**, join 248 | **bridge 33**, join 248 |
+| insert, `trim_each_side` 5 | bridge **0** | **bridge 33**, join 248, N 5 |
+| no range set at all, frames mode | `0` / `497` | `0` / `497` (probe still fills it) |
+| no range set at all, seconds mode | `0` / `497` | `0` / `497` (probe still fills it) |
+| range in seconds only (4.833–5.521) | `232` / `265` | `232` / `265` (unchanged) |
+| full current-version canvas save, all 26 values, frames mode | `232` / `265` | `232` / `265` (unchanged) |
+| frames range overrunning the clip (400/900) | `400` / `497` | `400` / `497` (still clamped to the probe) |
+
+Interaction, after a reload that restored 232/265: the canvas shows `start_frame` 232,
+`end_frame` 265, `duration_frames` 33, the ruler runs 0–497 and the selection sits just left of the
+249 tick. A real mouse drag of the start handle moved it to frame 126 with `end_frame` held at 265
+and `duration_frames` recomputed to 139. The Time/Frames toggle round-trips both ways leaving
+`100` / `150` / `50` intact — before the second fix, Frames→Time wrote `50 / 48 = 1.042` into
+`duration_frames`.
+
+Console: no SeamStitch error. The only 404s are core ComfyUI's for user files a fresh sandbox does
+not have (`user.css`, `api/userdata/user.css`, `comfy.templates.json`, the workflow and subgraph
+listings) plus one "graph accessed before initialization" from the test harness polling `window.app`
+early — the same set S5 recorded. `node --check js/loader.js` passes.
+
+**Supersedes** the "pre-existing caveat" under "S5 — insert mode on real footage", section 1, in
+the Stitch 2.0 working repo's `REAL_FOOTAGE_FINDINGS.md`: the reset is fixed, and it never applied
+to a plain canvas save whose two pairs agreed.
+
 ## Unreleased — insert mode proven on real footage; one off-by-one fixed
 
 **Verdict: works with a caveat.** Insert mode does what it says — nothing removed, the frames

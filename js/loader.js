@@ -69,7 +69,7 @@ app.registerExtension({
                 }
 
                 // Force UI synchronization
-                if (this.syncFramesFromTime) this.syncFramesFromTime();
+                if (this.syncRestoredRange) this.syncRestoredRange();
                 if (this.toggleWidgetVisibility) this.toggleWidgetVisibility();
                 if (this.syncToggleVisual) this.syncToggleVisual();
                 if (this.updateInputVideoWarning) this.updateInputVideoWarning();
@@ -240,13 +240,26 @@ app.registerExtension({
                     isSyncing = false;
                 };
 
+                // Workflow reload only. display_mode says which of the two range pairs the
+                // saved graph actually carries: a graph saved - or hand-written, as the API
+                // templates in docs/comfy_templates are - in "frames" puts the range in
+                // start_frame/end_frame and leaves start_time/end_time at 0, which is exactly
+                // what loader.py reads back in that mode. Syncing frames FROM those zeroes
+                // threw the restored range away and left the file probe to refill it with the
+                // whole clip. Sync the other way in frames mode; seconds mode is unchanged,
+                // and an unset range still stays at 0 for the probe to fill.
+                node.syncRestoredRange = function () {
+                    if (displayModeWidget && displayModeWidget.value === "frames") node.syncTimeFromFrames();
+                    else node.syncFramesFromTime();
+                };
+
                 node.syncTimeFromFrames = function () {
                     if (isSyncing || !frameRateWidget) return;
                     isSyncing = true;
                     const fr = frameRateWidget.value || 24;
                     if (startTimeWidget && startFrameWidget) startTimeWidget.value = parseFloat((startFrameWidget.value / fr).toFixed(3));
                     if (endTimeWidget && endFrameWidget) endTimeWidget.value = parseFloat((endFrameWidget.value / fr).toFixed(3));
-                    if (durationWidget && durationFramesWidget) durationFramesWidget.value = parseFloat((durationFramesWidget.value / fr).toFixed(3));
+                    if (durationWidget && durationFramesWidget) durationWidget.value = parseFloat((durationFramesWidget.value / fr).toFixed(3));
                     isSyncing = false;
                 };
 
