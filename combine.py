@@ -297,6 +297,119 @@ def _decode_for_outputs(path):
     return images, audio_dict
 
 
+# Mean absolute per-pixel difference (0-255 scale) allowed between a source
+# clip's boundary frame and the matching frame of the joined output, compared
+# as 64x64 thumbnails. Measured 2026-09-19 on the true pair: stream-copy
+# 4.mp4+2.mp4 = 0.00/0.00 (A-last/B-first); transcode (2.mp4 retimed to 24 fps)
+# = 0.63/0.21; transcode with resize_to=match_a, 4.mp4+1.mp4 = 0.65/1.19. A
+# pairing one frame off across the cut measured 62.5-64.0 on that footage, so
+# 6.0 sits well clear of both. (A smooth, cut-free join cannot be told apart
+# from its neighbours by any picture test - inherent, not a tolerance issue.)
+SEAM_TOLERANCE = 6.0
+SEAM_SEARCH = 2  # frames either side of the computed candidate to also try
+
+
+def _thumb(frame_rgb, size=64):
+    import cv2
+    return cv2.resize(frame_rgb, (size, size), interpolation=cv2.INTER_AREA).astype(np.float32)
+
+
+def _fit_frame(frame_rgb, target_size, fit):
+    """Mirror _concat_transcode's scale/crop|pad so a resized clip's boundary
+    frame can be compared with what actually landed in the output."""
+    import cv2
+    h, w = frame_rgb.shape[:2]
+    tw, th = target_size
+    if (w, h) == (tw, th):
+        return frame_rgb
+    if fit == "crop":
+        k = max(tw / w, th / h)
+        nw, nh = max(tw, round(w * k)), max(th, round(h * k))
+        r = cv2.resize(frame_rgb, (nw, nh), interpolation=cv2.INTER_AREA)
+        x0, y0 = (nw - tw) // 2, (nh - th) // 2
+        return r[y0:y0 + th, x0:x0 + tw]
+    k = min(tw / w, th / h)
+    nw, nh = max(1, round(w * k)), max(1, round(h * k))
+    r = cv2.resize(frame_rgb, (nw, nh), interpolation=cv2.INTER_AREA)
+    canvas = np.zeros((th, tw, 3), dtype=frame_rgb.dtype)
+    x0, y0 = (tw - nw) // 2, (th - nh) // 2
+    canvas[y0:y0 + nh, x0:x0 + nw] = r
+    return canvas
+
+
+def _boundary_frames(path):
+    """(first_frame, last_frame, frame_count) of a clip, decoded as RGB."""
+    container = av.open(path)
+    try:
+        first = last = None
+        count = 0
+        for frame in container.decode(container.streams.video[0]):
+            last = frame.to_ndarray(format="rgb24")
+            if first is None:
+                first = last
+            count += 1
+    finally:
+        container.close()
+    if first is None:
+        raise RuntimeError(f"SeamStitchCombine: no frames decoded from {path}")
+    return first, last, count
+
+
+def _output_fps(path):
+    container = av.open(path)
+    try:
+        v = container.streams.video[0]
+        return float(v.average_rate)
+    finally:
+        container.close()
+
+
+def _measure_seam_frame(path_a, path_b, out_images, out_fps, target_size=None, fit="crop",
+                        tolerance=SEAM_TOLERANCE):
+    """Index of clip B's first frame in the combined output, measured, not
+    trusted: candidate = A's duration x the output's real frame rate, then
+    output frames seam-1 / seam must reproduce A's true last frame and B's
+    true first frame. A few neighbouring candidates are tried too, since the
+    transcode path can shift A's frame count by one. Raises if none fits."""
+    a_first, a_last, a_count = _boundary_frames(path_a)
+    b_first, _, _ = _boundary_frames(path_b)
+    ca = av.open(path_a)
+    try:
+        v = ca.streams.video[0]
+        a_fps = float(v.average_rate)
+    finally:
+        ca.close()
+    if target_size:
+        a_last = _fit_frame(a_last, target_size, fit)
+        b_first = _fit_frame(b_first, target_size, fit)
+    ta, tb = _thumb(a_last), _thumb(b_first)
+    n = out_images.shape[0]
+    candidate = int(round(a_count / a_fps * out_fps))
+
+    def err(idx, ref):
+        if not 0 <= idx < n:
+            return float("inf")
+        out = (out_images[idx].numpy() * 255.0 + 0.5).clip(0, 255).astype(np.uint8)
+        return float(np.abs(_thumb(out) - ref).mean())
+
+    tried = []
+    order = [candidate] + [candidate + d for k in range(1, SEAM_SEARCH + 1) for d in (-k, k)]
+    for seam in order:
+        if seam < 1:
+            continue
+        ea, eb = err(seam - 1, ta), err(seam, tb)
+        tried.append((seam, ea, eb))
+        if ea <= tolerance and eb <= tolerance:
+            return seam
+    detail = "; ".join(f"seam {s}: A-last diff {ea:.2f}, B-first diff {eb:.2f}" for s, ea, eb in tried)
+    raise ValueError(
+        f"SeamStitchCombine: could not verify where clip B starts in the combined "
+        f"file (A='{os.path.basename(path_a)}', B='{os.path.basename(path_b)}', "
+        f"{n} output frames, candidate {candidate}, tolerance {tolerance}). "
+        f"Measured differences - {detail}. Refusing to emit an unverified seam_frame."
+    )
+
+
 # --- API routes: file upload/check (mirrors Load Video UI's own pattern, kept
 # separate so this package has no hard dependency on that one) and a fast
 # header-only probe so the node's "Load Video" button can confirm a pick is
@@ -410,8 +523,8 @@ class SeamStitchCombine:
             },
         }
 
-    RETURN_TYPES = ("IMAGE", "AUDIO", "STRING")
-    RETURN_NAMES = ("images", "audio", "video_path")
+    RETURN_TYPES = ("IMAGE", "AUDIO", "STRING", "INT")
+    RETURN_NAMES = ("images", "audio", "video_path", "seam_frame")
     FUNCTION = "combine"
     CATEGORY = "SeamStitch"
     # Writes a real file as a side effect (like a save node), so it's a valid
@@ -484,6 +597,14 @@ class SeamStitchCombine:
                 _concat_transcode(path_a, path_b, out_path, fps_target)
                 images, audio = _decode_for_outputs(out_path)
 
+        # Where clip B's first frame landed, measured from the written file and
+        # verified against both clips' true boundary frames (raises otherwise).
+        seam_frame = _measure_seam_frame(
+            path_a, path_b, images, _output_fps(out_path),
+            target_size=target_size, fit=resize_fit)
+        print(f"[SeamStitchCombine] seam_frame = {seam_frame} "
+              f"(clip B starts at output frame {seam_frame} of {images.shape[0]})")
+
         # A full, resolved path (not just the basename) - wire it straight into
         # anything expecting a real file on disk, e.g. SeamStitchRecombine's
         # original_video_path, without depending on it also being the file
@@ -494,7 +615,7 @@ class SeamStitchCombine:
         # needed) - simple_combine.js listens for this and auto-selects the file
         # in any downstream Load Video UI node, so picking bridge points can be a
         # bypass-and-run rather than a run-then-hunt-through-the-dropdown step.
-        return {"ui": {"video_path": [out_path]}, "result": (images, audio, out_path)}
+        return {"ui": {"video_path": [out_path]}, "result": (images, audio, out_path, seam_frame)}
 
     def _resolve(self, video, label):
         path = _resolve_video_path(video)

@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased — Combine reports where the join is (`seam_frame`)
+
+`SeamStitchCombine` gains a fourth output, `seam_frame` (INT, appended last so existing wiring is
+unaffected): the index of clip B's first frame in the combined file. It is measured, not
+computed on trust - candidate = A's duration x the output's real frame rate, then output frames
+`seam-1`/`seam` are compared (64x64 thumbnails, mean abs diff) against A's true last and B's true
+first frame, trying +-2 neighbouring candidates; if none fit within 6.0 it raises `ValueError`
+naming both clips and the measured differences. Measured 2026-09-19 on the true pair (A-last /
+B-first): stream copy 4.mp4+2.mp4 0.00 / 0.00, seam 248; transcode (2.mp4 retimed to 24 fps)
+0.63 / 0.21, seam 248; transcode with `resize_to=match_a`, 4.mp4+1.mp4 0.65 / 1.19, seam 248.
+A pairing one frame off across the cut measured 62.5-64.0. Tests: `tests/test_combine_seam_frame.py`
+(stream-copy, mixed-fps transcode, deliberately wrong candidate); `tests/conftest.py` stubs the
+ComfyUI-only modules so pytest can import the pack.
+
 ## 2026-09-19 — Reconciled two dirty working copies onto `main`
 
 Uncommitted edits had accumulated in the dev copy and the live install. Each hunk, and what it was:
