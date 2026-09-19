@@ -159,6 +159,8 @@ inside the frame and letterboxes the rest with black — keeps every source pixe
 visible bar at the seam; use it when the two clips are genuinely differently framed and cropping
 would cut off something that matters.
 
+The `seam_frame` output (INT, last) is the index of clip B's first frame in the combined file. It is measured from the written file - output frames `seam_frame-1` and `seam_frame` must reproduce clip A's true last frame and clip B's true first frame - on both the stream-copy and transcode paths, and the node raises rather than emitting a number it could not verify.
+
 The combined file is written to ComfyUI's input directory so it can be reopened in **SeamStitch
 Loader** to pick bridge start/end points — when both nodes are in the same graph, this node's
 frontend auto-selects its output in any connected `SeamStitchLoader` node once it finishes
