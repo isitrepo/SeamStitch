@@ -61,6 +61,7 @@ app.registerExtension({
                 if (this.toggleWidgetVisibility) this.toggleWidgetVisibility();
                 if (this.syncToggleVisual) this.syncToggleVisual();
                 if (this.updateInputVideoWarning) this.updateInputVideoWarning();
+                if (this.refreshInsertUI) this.refreshInsertUI();
 
                 if (this.widgets) {
                     const videoWidget = this.widgets.find(w => w.name === "video");
@@ -146,6 +147,15 @@ app.registerExtension({
                 const endFrameWidget = this.widgets.find((w) => w.name === "end_frame");
                 const durationFramesWidget = this.widgets.find((w) => w.name === "duration_frames");
 
+                const modeWidget = this.widgets.find((w) => w.name === "mode");
+                const joinWidget = this.widgets.find((w) => w.name === "join_frame");
+                const trimSideWidget = this.widgets.find((w) => w.name === "trim_each_side");
+                const isInsert = () => !!modeWidget && modeWidget.value === "insert at join";
+                const isSeamWired = () => {
+                    const inp = node.inputs && node.inputs.find((i) => i.name === "seam_frame");
+                    return !!(inp && inp.link != null);
+                };
+
                 const cropXWidget = this.widgets.find((w) => w.name === "crop_x");
                 const cropYWidget = this.widgets.find((w) => w.name === "crop_y");
                 const cropWWidget = this.widgets.find((w) => w.name === "crop_w");
@@ -158,7 +168,19 @@ app.registerExtension({
 
                 node.toggleWidgetVisibility = function () {
                     const isFrames = displayModeWidget && displayModeWidget.value === "frames";
-                    if (isFrames) {
+                    if (isInsert()) {
+                        // Insert mode: no trim range, just a join point and a bridge length.
+                        hideWidget(startTimeWidget);
+                        hideWidget(endTimeWidget);
+                        hideWidget(startFrameWidget);
+                        hideWidget(endFrameWidget);
+                        if (isFrames) { hideWidget(durationWidget); showWidget(durationFramesWidget); }
+                        else { showWidget(durationWidget); hideWidget(durationFramesWidget); }
+                        showWidget(joinWidget);
+                        showWidget(trimSideWidget);
+                    } else if (isFrames) {
+                        hideWidget(joinWidget);
+                        hideWidget(trimSideWidget);
                         hideWidget(startTimeWidget);
                         hideWidget(endTimeWidget);
                         hideWidget(durationWidget);
@@ -166,6 +188,8 @@ app.registerExtension({
                         showWidget(endFrameWidget);
                         showWidget(durationFramesWidget);
                     } else {
+                        hideWidget(joinWidget);
+                        hideWidget(trimSideWidget);
                         showWidget(startTimeWidget);
                         showWidget(endTimeWidget);
                         showWidget(durationWidget);
@@ -514,6 +538,7 @@ app.registerExtension({
                 node.onConnectionsChange = function () {
                     if (origOnConnectionsChange) origOnConnectionsChange.apply(this, arguments);
                     node.updateInputVideoWarning();
+                    if (node.refreshInsertUI) node.refreshInsertUI();
                 };
                 node.updateInputVideoWarning();
 
@@ -1026,7 +1051,58 @@ app.registerExtension({
                 const endHandle = createHandle("#38bdf8");
                 sliderBox.appendChild(startHandle);
                 sliderBox.appendChild(endHandle);
+
+                // Insert mode: one join marker, a shaded removed range, and a label.
+                const removedFill = document.createElement("div");
+                Object.assign(removedFill.style, {
+                    position: "absolute", height: "100%", display: "none",
+                    background: "rgba(239, 68, 68, 0.45)", pointerEvents: "none"
+                });
+                sliderBox.appendChild(removedFill);
+                const joinHandle = createHandle("#f59e0b");
+                joinHandle.style.display = "none";
+                joinHandle.style.width = "6px";
+                sliderBox.appendChild(joinHandle);
+                const joinLabel = document.createElement("div");
+                Object.assign(joinLabel.style, {
+                    position: "absolute", top: "-16px", fontSize: "11px", fontWeight: "bold",
+                    color: "#f59e0b", whiteSpace: "nowrap", pointerEvents: "none",
+                    transform: "translateX(-50%)", display: "none"
+                });
+                sliderBox.appendChild(joinLabel);
                 trimArea.appendChild(sliderBox);
+
+                const promptHint = document.createElement("div");
+                Object.assign(promptHint.style, {
+                    display: "none", fontSize: "11px", color: "#f59e0b",
+                    padding: "0 2px", flexShrink: "0", boxSizing: "border-box"
+                });
+                container.insertBefore(promptHint, videoWrapper);
+
+                // The two kept anchor frames, drawn into the preview's corners.
+                const anchorVideo = document.createElement("video");
+                anchorVideo.muted = true;
+                anchorVideo.preload = "auto";
+                const makeAnchorThumb = (side) => {
+                    const wrap = document.createElement("div");
+                    Object.assign(wrap.style, {
+                        position: "absolute", top: "4px", [side]: "4px", zIndex: "12", display: "none",
+                        border: "1px solid #f59e0b", background: "#000", pointerEvents: "none"
+                    });
+                    const cv = document.createElement("canvas");
+                    cv.width = 128; cv.height = 72;
+                    cv.style.display = "block";
+                    const lb = document.createElement("div");
+                    Object.assign(lb.style, {
+                        position: "absolute", left: "0", bottom: "0", fontSize: "10px", fontWeight: "bold",
+                        color: "#f59e0b", background: "rgba(0,0,0,0.6)", padding: "0 3px"
+                    });
+                    wrap.appendChild(cv); wrap.appendChild(lb);
+                    videoWrapper.appendChild(wrap);
+                    return { wrap, cv, lb };
+                };
+                const anchorA = makeAnchorThumb("left");
+                const anchorB = makeAnchorThumb("right");
 
                 container.appendChild(trimArea);
 
@@ -1339,6 +1415,13 @@ app.registerExtension({
                 if (durationWidget) {
                     const origCallback = durationWidget.callback;
                     durationWidget.callback = function (v) {
+                        if (isInsert()) {
+                            // Insert mode: duration is the bridge length, not a trim.
+                            if (origCallback) origCallback.apply(this, arguments);
+                            node.syncFramesFromTime();
+                            updateUI();
+                            return;
+                        }
                         if (isUpdatingDuration) {
                             if (origCallback) origCallback.apply(this, arguments);
                             return;
@@ -1376,6 +1459,12 @@ app.registerExtension({
                 if (durationFramesWidget) {
                     const origCallback = durationFramesWidget.callback;
                     durationFramesWidget.callback = function (v) {
+                        if (isInsert()) {
+                            if (origCallback) origCallback.apply(this, arguments);
+                            node.syncTimeFromFrames();
+                            updateUI();
+                            return;
+                        }
                         if (isUpdatingDuration || !frameRateWidget) {
                             if (origCallback) origCallback.apply(this, arguments);
                             return;
@@ -1467,8 +1556,104 @@ app.registerExtension({
                     }
                 };
 
+                const insertGeometry = () => {
+                    const fr = (frameRateWidget && frameRateWidget.value) || 24;
+                    const total = Math.max(1, Math.round(getActiveDuration() * fr));
+                    const n = trimSideWidget ? Math.max(0, parseInt(trimSideWidget.value) || 0) : 0;
+                    const join = joinWidget ? Math.max(0, parseInt(joinWidget.value) || 0) : 0;
+                    return { fr, total, n, join };
+                };
+
+                let anchorTimer = null;
+                let anchorSeq = 0;
+                function refreshAnchors() {
+                    const show = isInsert() && duration > 0;
+                    anchorA.wrap.style.display = show ? "block" : "none";
+                    anchorB.wrap.style.display = show ? "block" : "none";
+                    if (!show) return;
+                    const { fr, total, n, join } = insertGeometry();
+                    const fa = join - n - 1, fb = join + n;
+                    anchorA.lb.textContent = fa >= 0 ? `A: frame ${fa}` : "A: none";
+                    anchorB.lb.textContent = fb < total ? `B: frame ${fb}` : "B: none";
+                    clearTimeout(anchorTimer);
+                    const seq = ++anchorSeq;
+                    anchorTimer = setTimeout(async () => {
+                        const grab = (frame, thumb) => new Promise((resolve) => {
+                            if (frame < 0 || frame >= total) { resolve(); return; }
+                            const done = () => {
+                                anchorVideo.removeEventListener("seeked", done);
+                                try {
+                                    thumb.cv.getContext("2d").drawImage(anchorVideo, 0, 0, thumb.cv.width, thumb.cv.height);
+                                } catch (e) { /* unreadable frame: keep the label only */ }
+                                resolve();
+                            };
+                            anchorVideo.addEventListener("seeked", done);
+                            // Aim mid-frame so the seek lands on the intended frame.
+                            anchorVideo.currentTime = (frame + 0.5) / fr;
+                        });
+                        try {
+                            if (anchorVideo.src !== videoPreview.src) anchorVideo.src = videoPreview.src;
+                            if (anchorVideo.readyState < 1) {
+                                await new Promise((r) => { anchorVideo.onloadedmetadata = r; setTimeout(r, 2000); });
+                            }
+                            if (seq !== anchorSeq) return;
+                            await grab(fa, anchorA);
+                            if (seq !== anchorSeq) return;
+                            await grab(fb, anchorB);
+                        } catch (e) { /* preview only */ }
+                    }, 200);
+                }
+
+                function updateInsertUI(syncPlayer) {
+                    const activeDur = getActiveDuration();
+                    const { fr, total, n, join } = insertGeometry();
+                    const locked = isSeamWired();
+                    const color = locked ? "#a78bfa" : "#f59e0b";
+                    const pJoin = Math.max(0, Math.min((join / total) * 100, 100));
+                    joinHandle.style.left = `${pJoin}%`;
+                    joinHandle.style.background = color;
+                    joinHandle.style.opacity = locked ? "0.7" : "1";
+                    sliderBox.style.cursor = locked ? "not-allowed" : "pointer";
+                    joinLabel.style.left = `${Math.max(8, Math.min(pJoin, 92))}%`;
+                    joinLabel.style.color = color;
+                    joinLabel.textContent = locked ? `join ${join} - from Combine` : `join ${join}`;
+                    if (n > 0) {
+                        const a = Math.max(0, join - n), b = Math.min(total, join + n);
+                        removedFill.style.display = "block";
+                        removedFill.style.left = `${(a / total) * 100}%`;
+                        removedFill.style.width = `${((b - a) / total) * 100}%`;
+                    } else {
+                        removedFill.style.display = "none";
+                    }
+                    trimLength.textContent = `Join: frame ${join}` + (n > 0 ? ` (removes ${2 * n})` : "");
+                    promptHint.textContent = locked
+                        ? "Prompt hint: Combine seam - use the morph prompt."
+                        : "Prompt hint: single-video insert - use the continuity prompt.";
+                    if (syncPlayer && duration > 0) videoPreview.currentTime = Math.min(activeDur, join / fr);
+                    refreshAnchors();
+                }
+
+                node.refreshInsertUI = function () {
+                    if (node.updateUIExposed) node.updateUIExposed(true);
+                };
+
                 function updateUI(syncPlayer = false) {
                     const activeDur = getActiveDuration();
+
+                    const insertOn = isInsert();
+                    startHandle.style.display = insertOn ? "none" : "";
+                    endHandle.style.display = insertOn ? "none" : "";
+                    fill.style.display = insertOn ? "none" : "";
+                    joinHandle.style.display = insertOn ? "" : "none";
+                    joinLabel.style.display = insertOn ? "block" : "none";
+                    promptHint.style.display = insertOn ? "block" : "none";
+                    if (insertOn) {
+                        updateInsertUI(syncPlayer);
+                        return;
+                    }
+                    removedFill.style.display = "none";
+                    anchorA.wrap.style.display = "none";
+                    anchorB.wrap.style.display = "none";
 
                     let s = startTimeWidget ? parseFloat(startTimeWidget.value) || 0 : 0;
                     let e = endTimeWidget ? parseFloat(endTimeWidget.value) || 0 : 0;
@@ -1518,6 +1703,30 @@ app.registerExtension({
                     }
                 }
 
+                node.updateUIExposed = updateUI;
+
+                // Mode / join / trim widgets drive the whole insert-mode UI.
+                const bindInsertWidget = (w, onChange) => {
+                    if (!w) return;
+                    const orig = w.callback;
+                    w.callback = function () {
+                        if (orig) orig.apply(this, arguments);
+                        if (onChange) onChange();
+                        updateUI(true);
+                        app.graph.setDirtyCanvas(true, true);
+                    };
+                };
+                bindInsertWidget(modeWidget, () => {
+                    // First switch to insert with no join chosen: start at the middle.
+                    if (isInsert() && duration > 0 && joinWidget && !joinWidget.value) {
+                        joinWidget.value = Math.round(insertGeometry().total / 2);
+                    }
+                    node.toggleWidgetVisibility();
+                    updateRuler();
+                });
+                bindInsertWidget(joinWidget);
+                bindInsertWidget(trimSideWidget);
+
                 // Force draw default empty state on creation
                 setTimeout(() => {
                     updateRuler();
@@ -1544,7 +1753,7 @@ app.registerExtension({
 
                 // Loop Trim during Native Playback
                 videoPreview.ontimeupdate = () => {
-                    if (!duration || dragging) return;
+                    if (!duration || dragging || isInsert()) return;
 
                     let s = startTimeWidget ? parseFloat(startTimeWidget.value) || 0 : 0;
                     let e = endTimeWidget ? parseFloat(endTimeWidget.value) || duration : duration;
@@ -1558,7 +1767,26 @@ app.registerExtension({
                 };
 
                 // --- Timeline Drag Logic (Primary state runs in Seconds format to lock playback natively) ---
+                const setJoinFromX = (clientX) => {
+                    const rect = sliderBox.getBoundingClientRect();
+                    const x = Math.max(0, Math.min(clientX - rect.left, rect.width));
+                    const { total, n } = insertGeometry();
+                    let f = Math.round((x / rect.width) * total);
+                    // Keep both anchors inside the clip when it is long enough to.
+                    if (total > 2 * n + 2) f = Math.max(n + 1, Math.min(total - n - 1, f));
+                    if (joinWidget) joinWidget.value = f;
+                    updateUI(true);
+                    app.graph.setDirtyCanvas(true, false);
+                };
+
                 sliderBox.onpointerdown = (e) => {
+                    if (isInsert()) {
+                        if (isSeamWired()) return; // locked: value comes from Combine
+                        dragging = 'join';
+                        setJoinFromX(e.clientX);
+                        sliderBox.setPointerCapture(e.pointerId);
+                        return;
+                    }
                     const activeDur = getActiveDuration();
                     const rect = sliderBox.getBoundingClientRect();
                     const x = Math.max(0, Math.min(e.clientX - rect.left, rect.width));
@@ -1592,6 +1820,7 @@ app.registerExtension({
 
                 sliderBox.onpointermove = (e) => {
                     if (!dragging) return;
+                    if (dragging === 'join') { setJoinFromX(e.clientX); return; }
                     const activeDur = getActiveDuration();
                     const rect = sliderBox.getBoundingClientRect();
                     const x = Math.max(0, Math.min(e.clientX - rect.left, rect.width));
@@ -1630,7 +1859,7 @@ app.registerExtension({
 
                 sliderBox.onpointerup = (e) => {
                     dragging = null;
-                    sliderBox.releasePointerCapture(e.pointerId);
+                    try { sliderBox.releasePointerCapture(e.pointerId); } catch (err) { /* not captured */ }
                 };
 
                 // --- Improved Global Drag & Drop for Node Inner Content ---
