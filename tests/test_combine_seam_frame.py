@@ -38,7 +38,8 @@ def _ffmpeg(combine, *args):
 def test_stream_copy_join(combine_mod):
     a, b = _vid("4.mp4"), _vid("2.mp4")  # both 832x1280, 48 fps, 248 frames
     out = combine_mod.SeamStitchCombine().combine(a, b, "off", "crop", "t_copy", free_vram_first=False)
-    images, _audio, path, seam = out["result"]
+    images, _audio, seam = out["result"]
+    path = out["ui"]["video_path"][0]
     assert seam == 248 and images.shape[0] == 496
     print("stream-copy seam", seam)
 
@@ -49,7 +50,8 @@ def test_mixed_fps_transcode_join(combine_mod, tmp_path):
     _ffmpeg(combine_mod, "-i", _vid("2.mp4"), "-r", "24", "-c:v", "libx264", "-crf", "12",
             "-c:a", "aac", b24)
     out = combine_mod.SeamStitchCombine().combine(a, b24, "off", "crop", "t_mix", free_vram_first=False)
-    _images, _audio, path, seam = out["result"]
+    _images, _audio, seam = out["result"]
+    path = out["ui"]["video_path"][0]
     assert abs(seam - 248) <= 2, seam  # A's 248 frames at 48 fps re-timed to A's own rate
     print("transcode seam", seam)
 
