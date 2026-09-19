@@ -5,7 +5,9 @@ in seamlessly" workflow:
 
 - **SeamStitch Loader** (`SeamStitchLoader`) — scrub/trim a video with an interactive timeline,
   and get first/last frame outputs for first-last-frame (FLF) generation pipelines, plus
-  everything a downstream splice node needs to put the result back.
+  everything a downstream splice node needs to put the result back — including `bridge_length`,
+  a frame count for the generator, optionally longer than the picked gap so the model gets more
+  room to work with than the original footage left it.
 - **SeamStitch Combine** (`SeamStitchCombine`) — losslessly concatenate two clips
   (container-level stream copy, no re-encode) so the joined file can be reopened and scrubbed for
   bridge/regeneration points.
@@ -89,7 +91,8 @@ seconds or frames, and optionally crop/resize. Outputs include:
 | `frame_rate` | Pass-through of the forced extraction rate, so a downstream node decodes on the identical timeline. |
 | `width` / `height` | Actual resolution of `images`, read off the output tensor. |
 | `full_clip_audio` | The entire source file's audio track, untouched — feed into `SeamStitchRecombine.original_audio_override` for the final combine. |
-| `duration` / `frame_count` / `filename` | Informational. |
+| `duration` / `frame_count` | Normally just the picked gap, exactly as decoded — see `extend_bridge` below for when they report something else. |
+| `filename` | Informational. |
 
 An optional `input_video`/`input_audio` pair lets you feed frames in directly from an upstream
 node (e.g. `SeamStitchCombine`) instead of picking a file — the same trim/crop/resize controls
@@ -97,6 +100,34 @@ apply to the given frames, no disk round-trip needed.
 
 Two boolean widgets, `save_first_frame` / `save_last_frame`, save the corresponding frame as a
 PNG to ComfyUI's output directory.
+
+**`extend_bridge`** (off by default) changes what `duration`/`frame_count` report, for feeding a
+downstream first/last-frame generator's own length widget (LTX-2.5: both
+`EmptyLTXVLatentVideo.length` and `LTXVEmptyLatentAudio.frames_number`) — wire `frame_count`
+there. Off, they're exactly what they've always been: the picked gap, matching `images.shape[0]`.
+On, they instead report the picked gap **plus** `extend_amount` (in `extend_unit` — seconds or
+frames), snapped to `bridge_frame_grid`. `images`/`audio`/`first_frame`/`last_frame` are
+unaffected either way — only what `duration`/`frame_count` report changes.
+
+This matters because a first/last-frame model has to invent all of the motion between its two
+pinned endpoints inside however many frames it's asked to fill — if the picked gap was short,
+the model is forced to cram a plausible transition into very little time. Asking for more frames
+than the gap actually had gives it more room to work with. `start_frame`/`end_frame` still mark
+exactly where `SeamStitchRecombine` cuts the original footage — only the *generated* segment
+gets longer, which is what makes the recombined video's total duration grow by the extra amount
+(see **SeamStitch Recombine** below — it already splices in whatever length comes back, no
+further changes needed there).
+
+`bridge_frame_grid` (`ltx (8k+1)` / `minimax (17k+5)` / `none`, only used when `extend_bridge` is
+on) rounds `frame_count` up to whatever grid the generator requires — LTX-2.5 needs `length % 8
+== 1` (its temporal downsample factor), MiniMax H3 Motion Context needs `length % 17 == 5`; pick
+`none` for a backend with no such constraint. MiniMax H3 separately requires its `context_length`
+(how many real frames of motion history it's pinned on) to be one of exactly 5/22/39/56 — that's
+a widget on the Motion Context node itself, not something `frame_count` can satisfy for you.
+
+If you extend the bridge, remember to set **SeamStitch Recombine**'s `audio_mode` to `bridge` or
+`combined` rather than leaving it at `original` — the source video has no audio for time beyond
+the original gap, so `original` mode plays silence under the extra frames.
 
 Based on [WhatDreamsCost-ComfyUI](https://github.com/WhatDreamsCost/WhatDreamsCost-ComfyUI)'s
 Load Video UI node, with the outputs above added on top for FLF/splice workflows.
@@ -107,12 +138,28 @@ Load Video UI node, with the outputs above added on top for FLF/splice workflows
 
 Concatenates clip A followed by clip B via ffmpeg's concat demuxer (`-c copy`) — a
 container-level splice, not a decode/re-encode, so it's near-instant and introduces no
-recompression or colour shift. Requires clip A and clip B to already match in resolution and in
-whether each has an audio track (mismatches there raise an error rather than being papered over
-silently); when the two frame rates differ, or when the fast stream copy succeeds but its
-resulting audio track fails to decode, this falls back automatically to a real transcode
-(ffmpeg's concat filter, re-encoded and forced to a single constant frame rate) instead. The
-combined file is written to ComfyUI's input directory so it can be reopened in **SeamStitch
+recompression or colour shift. Requires clip A and clip B to already match in resolution (unless
+`resize_to` says otherwise — see below) and in whether each has an audio track (a mismatch there
+always raises rather than being papered over silently); when the two frame rates differ, or when
+the fast stream copy succeeds but its resulting audio track fails to decode, this falls back
+automatically to a real transcode (ffmpeg's concat filter, re-encoded and forced to a single
+constant frame rate) instead.
+
+`resize_to` (`off` / `match_a` / `match_b`) controls what happens when the two resolutions don't
+match: `off` (default) keeps the strict behaviour above and raises; `match_a`/`match_b` instead
+resizes the other clip onto whichever one you picked (aspect ratio always kept, never stretched)
+before concatenating. Either resize choice forces the transcode fallback, since a resized clip
+can no longer be stream-copied.
+
+`resize_fit` (`crop` / `pad`) picks how that resize reconciles the two aspect ratios. `crop`
+(default) scales to fill the target frame and crops the overhang off two edges — no bars, the
+right choice for the common case where the two clips are already close to the same aspect ratio
+(e.g. two generators' outputs that are both "16:9-ish" but not identical). `pad` scales to fit
+inside the frame and letterboxes the rest with black — keeps every source pixel, at the cost of a
+visible bar at the seam; use it when the two clips are genuinely differently framed and cropping
+would cut off something that matters.
+
+The combined file is written to ComfyUI's input directory so it can be reopened in **SeamStitch
 Loader** to pick bridge start/end points — when both nodes are in the same graph, this node's
 frontend auto-selects its output in any connected `SeamStitchLoader` node once it finishes
 running.

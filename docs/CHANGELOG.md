@@ -1,5 +1,64 @@
 # Changelog
 
+## 2026-09-19 — Reconciled two dirty working copies onto `main`
+
+Uncommitted edits had accumulated in the dev copy and the live install. Each hunk, and what it was:
+
+- **Loader "Load Video" refresh button and `/seamstitch/loader/list_files` route removed** - an
+  intentional removal (confirmed by Kay), present identically in both copies; the button had been
+  in the pack since the initial flatten commit.
+- **Loader `extend_bridge` / `extend_amount` / `extend_unit` / `bridge_frame_grid`** - live install
+  only; described by the first "Unreleased" entry below.
+- **Combine `resize_to` / `resize_fit`** - live install only; described by the second
+  "Unreleased" entry below.
+- The README changes for both features were also live-install only.
+
+## Unreleased — Loader can ask a bridge generator for more frames than the picked gap
+
+New `SeamStitchLoader` widget, `extend_bridge` (off by default), changes what the existing
+`duration`/`frame_count` outputs report - no new output added. Off, they're exactly what they've
+always been: the picked gap, matching `images.shape[0]`. On, they instead report the picked gap
+**plus** `extend_amount` (`extend_unit`: seconds or frames), snapped to `bridge_frame_grid`.
+`images`/`audio`/`first_frame`/`last_frame` are unaffected either way. Wire `frame_count` into a
+downstream first/last-frame generator's own length widget (LTX-2.5:
+`EmptyLTXVLatentVideo.length` / `LTXVEmptyLatentAudio.frames_number`) to give it more frames than
+the original gap had to invent a transition in - the generated segment, and the recombined
+video's final duration, then run longer than the picked gap by that amount.
+
+`SeamStitchRecombine` needed no changes for this to work: it already splices in whatever frame
+count the regenerated segment comes back with, regardless of how it compares to `end_frame -
+start_frame` (only prints an informational warning if they differ a lot) - the actual gap was
+just that nothing computed a sane, grid-snapped frame count to ask a generator for in the first
+place. `bridge_frame_grid` offers `ltx (8k+1)` (LTX-2.5's temporal downsample factor), `minimax
+(17k+5)` (MiniMax H3 Motion Context's own generated-length grid - see
+`seamweave/comfy_bridge.py`'s `_grid_length`), or `none` for a backend with no such constraint.
+MiniMax H3 separately requires its `context_length` to be one of exactly 5/22/39/56 frames - a
+widget on the Motion Context node itself, which `frame_count` has no way to satisfy for you.
+
+(Went through two earlier shapes before this: first a separate `SeamStitchBridgeLength` node
+wired between Loader and the generator, then a fifth `bridge_length` output added to Loader
+directly - both dropped in favor of reusing `duration`/`frame_count`, which a workflow already
+had wired wherever it needed a frame count, so extending needs no new wiring at all.)
+
+## Unreleased — Combine can resize a mismatched clip instead of refusing
+
+`SeamStitchCombine` previously hard-errored whenever clip A and clip B weren't the same
+resolution ("no fancy logic here"). New `resize_to` widget: `off` (default) keeps that
+behavior; `match_a`/`match_b` resizes the other clip onto the picked one's size (aspect
+ratio always kept, never stretched) before concatenating. Any resize forces the existing
+transcode fallback path rather than the lossless stream-copy path, since a resized clip is
+a fresh encode by definition.
+
+New `resize_fit` widget picks how that resize reconciles the two aspect ratios: `crop`
+(default) scales to fill the target frame and crops the overhang - no bars, a sliver off
+two edges; `pad` scales to fit inside it and letterboxes the rest with black - every pixel
+kept, a visible bar at the seam. `crop` defaults on because the common case (two different
+generators' outputs that are both "16:9-ish" but not bit-identical) is a near-miss
+mismatch, where a bar is far more visible than the sliver `crop` trims - confirmed on a
+real pair (1472x832 vs 1376x768, about a 1.3% aspect-ratio difference): `pad` put a
+visible black bar top and bottom on every frame of the resized clip, `crop` filled the
+frame completely with a barely-perceptible reframe.
+
 ## v0.1.0 — 2026-09-17
 
 First tagged release. Pushed `main` to the public repo
