@@ -168,11 +168,12 @@ class _AudioDecodeError(RuntimeError):
     stream-copied, rather than surfacing a raw PyAV traceback."""
 
 
-def _concat_transcode(path_a, path_b, out_path, fps):
+def _concat_transcode(path_a, path_b, out_path, fps, sizes=None, target_size=None, fit="pad"):
     """Fallback for _concat_stream_copy: used whenever clip A and clip B
     aren't stream-copy compatible - either a differing audio sample rate
-    (an AAC splice with mismatched rates decodes as invalid past the seam)
-    or a differing video frame rate.
+    (an AAC splice with mismatched rates decodes as invalid past the seam),
+    a differing video frame rate, or (with ``target_size`` set) a differing
+    resolution that the caller has chosen to resize past rather than refuse.
 
     The frame-rate case is the nastier one: ffmpeg's concat *demuxer*, in
     ``-c copy`` mode, doesn't raise an error for it at all - it just reuses
@@ -192,10 +193,54 @@ def _concat_transcode(path_a, path_b, out_path, fps):
     VFR and resamples to a blended average frame rate that matches neither
     source clip, which is what made clip A's segment look choppy once it
     got that far. Emitting true CFR here instead of leaving it to be
-    guessed downstream avoids that."""
+    guessed downstream avoids that.
+
+    ``target_size``, when given along with ``sizes`` (the ``(width, height)``
+    of clip A and clip B, in that order, from the caller's own
+    ``_probe_geometry`` calls), is the ``(width, height)`` both inputs must
+    end up at before the concat filter (which otherwise refuses to join
+    streams of different size). Each input already at ``target_size`` is
+    passed straight into the filtergraph unscaled; the other gets scaled
+    (aspect ratio kept, never stretched) to reach it, by one of two
+    strategies picked by ``fit``:
+
+    - ``"pad"``: scale down to fit *within* the target box, then letterbox
+      the leftover with black. Keeps every source pixel, at the cost of
+      visible bars whenever the two aspect ratios don't already match -
+      including a near-miss, where a barely-there mismatch (e.g. 16:9 vs.
+      a generator's slightly-off native ratio) still produces a thin but
+      visible bar popping in right at the seam.
+    - ``"crop"``: scale up to *cover* the target box, then crop the
+      overhang. No bars ever, at the cost of losing a sliver off two edges
+      - for a small mismatch that sliver is imperceptible, which is the
+      common case when the two clips are close to the same aspect ratio
+      already (e.g. two different generators' "16:9-ish" outputs) rather
+      than genuinely different framings."""
+    filter_parts = []
+    video_labels = []
+    for i in (0, 1):
+        size = sizes[i] if sizes else None
+        if target_size and size != target_size:
+            w, h = target_size
+            if fit == "crop":
+                filter_parts.append(
+                    f"[{i}:v:0]scale={w}:{h}:force_original_aspect_ratio=increase,"
+                    f"crop={w}:{h},setsar=1[v{i}]"
+                )
+            else:
+                filter_parts.append(
+                    f"[{i}:v:0]scale={w}:{h}:force_original_aspect_ratio=decrease,"
+                    f"pad={w}:{h}:(ow-iw)/2:(oh-ih)/2:color=black,setsar=1[v{i}]"
+                )
+            video_labels.append(f"[v{i}]")
+        else:
+            video_labels.append(f"[{i}:v:0]")
+    concat_inputs = "".join(f"{video_labels[i]}[{i}:a:0]" for i in range(2))
+    filter_complex = ";".join(filter_parts + [f"{concat_inputs}concat=n=2:v=1:a=1[outv][outa]"])
+
     result = subprocess.run(
         [_ffmpeg_exe(), "-y", "-i", path_a, "-i", path_b,
-         "-filter_complex", "[0:v:0][0:a:0][1:v:0][1:a:0]concat=n=2:v=1:a=1[outv][outa]",
+         "-filter_complex", filter_complex,
          "-map", "[outv]", "-map", "[outa]",
          "-fps_mode", "cfr", "-r", f"{fps:.5f}",
          "-c:v", "libx264", "-crf", "18", "-preset", "veryfast",
@@ -335,6 +380,25 @@ class SeamStitchCombine:
             "required": {
                 "video_a": (files,),
                 "video_b": (files,),
+                "resize_to": (["off", "match_a", "match_b"], {"default": "off", "tooltip":
+                    "If clip A and clip B aren't the same resolution: 'off' "
+                    "refuses (the honest default - re-export upstream instead). "
+                    "'match_a'/'match_b' resizes the other clip onto whichever "
+                    "one you picked (never stretched - see resize_fit). Forces "
+                    "a real transcode either way, since a resized clip can no "
+                    "longer be stream-copied."}),
+                "resize_fit": (["crop", "pad"], {"default": "crop", "tooltip":
+                    "Only matters when resize_to isn't 'off'. 'crop' scales the "
+                    "other clip to fill the target frame and crops the overhang "
+                    "- no bars, at the cost of a sliver off two edges; the right "
+                    "choice when the two aspect ratios are already close (e.g. "
+                    "two generators' slightly different 16:9-ish outputs), which "
+                    "is the common case. 'pad' scales it to fit inside the frame "
+                    "and letterboxes the rest with black - keeps every pixel, at "
+                    "the cost of a visible bar popping in at the seam, even for "
+                    "a near-miss aspect ratio; use it when the two clips are "
+                    "genuinely differently framed and cropping would cut off "
+                    "something that matters."}),
                 "filename_prefix": ("STRING", {"default": "seamstitch_combined"}),
                 "free_vram_first": ("BOOLEAN", {"default": True, "tooltip":
                     "Unload all models and clear the VRAM/CUDA cache before "
@@ -358,7 +422,7 @@ class SeamStitchCombine:
     # actually running.
     OUTPUT_NODE = True
 
-    def combine(self, video_a, video_b, filename_prefix, free_vram_first=True):
+    def combine(self, video_a, video_b, resize_to, resize_fit, filename_prefix, free_vram_first=True):
         if free_vram_first:
             # Same sequence ComfyUI's own queue-level "free memory" flag uses
             # between prompt runs (main.py) - unload everything the model
@@ -371,12 +435,18 @@ class SeamStitchCombine:
         path_b = self._resolve(video_b, "B")
 
         geom_a, geom_b = _probe_geometry(path_a), _probe_geometry(path_b)
-        if (geom_a["width"], geom_a["height"]) != (geom_b["width"], geom_b["height"]):
+        size_a = (geom_a["width"], geom_a["height"])
+        size_b = (geom_b["width"], geom_b["height"])
+        size_mismatch = size_a != size_b
+        if size_mismatch and resize_to == "off":
             raise RuntimeError(
                 "SeamStitchCombine: clip A and clip B don't match "
                 f"({geom_a['width']}x{geom_a['height']} vs {geom_b['width']}x{geom_b['height']}). "
-                "No fancy logic here - resize/crop upstream so both sides agree."
+                "Either re-export upstream so both sides agree, or set "
+                "resize_to to 'match_a'/'match_b' to resize the other "
+                "clip onto that size."
             )
+        target_size = {"match_a": size_a, "match_b": size_b}.get(resize_to) if size_mismatch else None
         if geom_a["has_audio"] != geom_b["has_audio"]:
             raise RuntimeError(
                 "SeamStitchCombine: clip A and clip B don't both have audio "
@@ -397,8 +467,14 @@ class SeamStitchCombine:
         # the leading clip, and matches this node's own "A followed by B"
         # framing.
         fps_target = geom_a["fps"] or geom_b["fps"] or 24.0
-        if geom_a["fps"] and geom_b["fps"] and geom_a["fps"] != geom_b["fps"]:
-            _concat_transcode(path_a, path_b, out_path, fps_target)
+        fps_mismatch = geom_a["fps"] and geom_b["fps"] and geom_a["fps"] != geom_b["fps"]
+        # A resize always goes straight to the transcode path rather than
+        # trying _concat_stream_copy first - a scaled/cropped-or-padded clip
+        # is a fresh encode by definition, so there was never a chance of a
+        # lossless stream copy succeeding for it.
+        if fps_mismatch or target_size:
+            _concat_transcode(path_a, path_b, out_path, fps_target,
+                               sizes=(size_a, size_b), target_size=target_size, fit=resize_fit)
             images, audio = _decode_for_outputs(out_path)
         else:
             _concat_stream_copy(path_a, path_b, out_path)
