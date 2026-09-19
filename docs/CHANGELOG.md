@@ -1,5 +1,40 @@
 # Changelog
 
+## Unreleased — Loader timeline: the join marker (insert mode UI)
+
+`js/loader.js` only. Driven from the `mode` widget callback, `onConfigure` and `onConnectionsChange`,
+extending the existing `updateUI` / pointer path (no second timeline). Replace mode is untouched.
+In `insert at join`: the two trim handles and the start/end widgets are hidden and replaced by one
+draggable join marker (snaps to whole frames, clamped so both anchors stay inside the clip) synced
+two-way with `join_frame`; `trim_each_side` and the editable bridge-length `duration` /
+`duration_frames` are shown (duration is no longer overwritten by a trim and its trim-clamping hook
+is bypassed); with N > 0 the removed range `[join-N, join+N-1]` is shaded; the two kept anchor
+frames (`join-N-1`, `join+N`) are drawn as thumbnails in the preview corners; a prompt hint says
+morph prompt for a Combine seam, continuity prompt for a single-video insert. When `seam_frame` is
+wired the marker is locked (drag ignored, `not-allowed` cursor), recoloured purple and labelled
+"join N - from Combine"; unwiring restores it. First switch into insert mode with `join_frame` 0
+starts the marker at the clip middle.
+
+Measured 2026-09-19 in a sandbox ComfyUI (port 8291, `--cpu`, only SeamStitch whitelisted) on
+`Test vids/4.mp4` (124 frames, 24 fps), driving the real page:
+
+- Replace mode: start/end handles and fill shown, join marker/shade/label/hint hidden; widget list
+  as before plus `join_frame`/`trim_each_side` hidden.
+- A real mouse drag of the marker from frame 62 to 25% of the bar set `join_frame` to 30; typing
+  `join_frame` 90 put the marker at 72.5806% (90/124 = 72.58%); N = 5 shaded left 68.5484% / width
+  8.06452% (expected 68.55 / 8.06) with anchors labelled frame 84 and 95.
+- Wiring a `SeamStitchCombine.seam_frame` output: label "join 90 - from Combine", colour
+  `rgb(167,139,250)`, cursor `not-allowed`, a synthetic pointerdown left `join_frame` unchanged;
+  disconnecting restored `join 90`, `rgb(245,158,11)`, `pointer`.
+- `serialize()` -> `loadGraphData()` restored mode, join 90, N 5, hidden widgets, the locked label
+  and colour, the shade and both anchor labels.
+- Console: no error from SeamStitch. The only errors were core ComfyUI 404s for user files that do
+  not exist in a fresh sandbox (`user.css`, `comfy.templates.json`, workflow/subgraph listings) and
+  one core "graph accessed before initialization" from the test harness's early import.
+- Screenshots: the browser tool returns images to the session but cannot write them to disk, so
+  none are saved; the numbers above are the record.
+- `node --check js/loader.js js/combine.js` passes.
+
 ## Unreleased — Loader insert mode (`mode`, `join_frame`, `trim_each_side`, `seam_frame`, `insert`)
 
 `SeamStitchLoader` gains, all appended last so workflows saved before they exist load unchanged
