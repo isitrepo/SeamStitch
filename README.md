@@ -170,32 +170,62 @@ running.
 
 ![SeamStitch Recombine node layout](docs/images/video_segment_recombine.svg)
 
-Takes a regenerated replacement clip plus the original video path and the frame range that was
-cut out of it (wire these straight from **SeamStitch Loader**'s matching outputs), and:
+Takes a regenerated clip plus the original video path and the frame range it belongs to (wire
+these straight from **SeamStitch Loader**'s matching outputs), and:
 
 1. Decodes the original video's frames before `start_frame` and after `end_frame`, resized to
    match the regenerated segment's resolution.
-2. Drops any held/duplicate frames at the regenerated segment's own leading/trailing edge (a
+2. In insert mode only (`insert` on), drops the regenerated segment's **first and last frame**
+   unconditionally — they are the two kept frames either side of the join, which the generator
+   was anchored on and which the output still has as the source's own frames.
+3. Drops any held/duplicate frames at the regenerated segment's own leading/trailing edge (a
    keyframe-anchored generation sometimes holds its first/last frame for an extra tick or two,
    which shows up as a stutter at the seam left in).
-3. Concatenates `before + deduped_regenerated + after`.
-4. Cuts the audio at the same frames as the picture, so sound and picture stay in sync on both
-   sides of the splice even when step 2 dropped frames. `audio_mode` picks what plays under the
-   regenerated frames:
+4. Concatenates `before + deduped_regenerated + after`.
+5. Cuts the audio at the same frames as the picture, so sound and picture stay in sync on both
+   sides of the splice even when steps 2 and 3 dropped frames. `audio_mode` picks what plays
+   under the regenerated frames:
    - `original` (default) — the source's own audio for exactly the frames that survived, so
      dropped frames take their sound with them. If nothing was dropped, the track is
      sample-identical to the source.
    - `bridge` — the `bridge_audio` input, e.g. audio generated alongside the frames by an
      audio-video model such as LTX-2.5 (`LTXVAudioVAEDecode` on the bridge's audio latent).
      Resampled and channel-matched to the source; if it runs short, the tail falls back to the
-     source's audio. Never time-stretched.
+     source's audio (silence, in insert mode). Never time-stretched.
+   - `combined` — the original gap audio as in `original`, with `bridge_audio` mixed additively
+     on top at `audio_bridge_weight`, so ambience never drops out at the splice.
+
+   In **insert mode** the inserted frames are new footage between two frames that are both still
+   in the output, so the source has no audio behind them at all: the gap is `bridge_audio` when
+   one is wired, and **silence** otherwise (with a warning on the console) — never the source's
+   own audio from around the join, which would replay sound that is about to play again.
 
    Each join that is not already continuous gets a length-preserving equal-power crossfade
    (`audio_crossfade_ms`, default 20) so a cut mid-waveform cannot click. The source track comes
    from the file itself, or from `original_audio_override` (which must be on the source file's own
    timeline, as `SeamStitchLoader`'s `full_clip_audio` is). The file's own video/audio start
    offset is honoured — `SeamStitchCombine`'s output delays its video 31 ms to cover AAC priming.
-5. Encodes the result via ffmpeg. The `format` widget defaults to `video/h264-mp4`.
+6. Encodes the result via ffmpeg. The `format` widget defaults to `video/h264-mp4`.
+
+#### `insert` — put a bridge between two frames instead of over a range
+
+`insert` (BOOLEAN, off by default, appended last so old workflows load unchanged) switches what
+the regenerated frames are for:
+
+| | `insert` off (default) | `insert` on |
+|---|---|---|
+| the regenerated frames | **replace** source frames `[start_frame, end_frame]` | are **inserted** at the join |
+| removed from the source | that whole range | `[start_frame, end_frame]`, which is **empty** when `end_frame == start_frame - 1` |
+| the segment's own first/last frame | kept (they stand in for the removed boundary frames) | always dropped (they duplicate the kept frames either side of the join) |
+| output length | source length, ± whatever the dedup dropped | source length **plus** the inserted frames |
+
+Set it by hand, or wire it from **SeamStitch Loader**'s own `insert` output once the Loader's
+insert mode lands — that is what will emit the matching `start_frame` / `end_frame` for a join
+(`end_frame = start_frame - 1` when nothing is trimmed). Insert mode needs at least three
+regenerated frames, since the first and last are always dropped.
+
+Off, the node behaves exactly as it did in v0.1.0 — verified frame-for-frame and
+sample-for-sample against the tag (`tests/test_recombine_insert.py`).
 
 **Scope vs. the real VHS_VideoCombine:** video formats only (no gif/webp — pipe
 `combined_images` into a stock `VHS_VideoCombine` afterward for that), no per-format extra
@@ -211,6 +241,7 @@ SeamStitchLoader    ──images────────────────
                      ──end_frame───────────────────► SeamStitchRecombine.end_frame
                      ──frame_rate──────────────────► SeamStitchRecombine.frame_rate
                      ──full_clip_audio─────────────► SeamStitchRecombine.original_audio_override (optional)
+                     ──insert──────────────────────► SeamStitchRecombine.insert (insert mode)
 
 (bridge audio, optional, audio_mode = bridge) ─────► SeamStitchRecombine.bridge_audio
 
