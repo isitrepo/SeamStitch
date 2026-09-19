@@ -117,3 +117,88 @@ def test_insert_out_of_range_names_clip_length(loader_mod):
     with pytest.raises(ValueError, match="frames"):
         node.load_video(path, 24, "seconds", 0.0, 0.0, 2.0, 0, 0, 0, mode="insert at join",
                         join_frame=0, trim_each_side=0)
+
+
+# --- Regression: a stream that does not start at t=0 (found 2026-09-19, S5) ---
+
+OFFSET_TICKS = 381   # what SeamStitchCombine's concat leaves on 48 fps output:
+                     # 381/12288 s = 31.006 ms = 1.49 frames at 48 fps
+
+
+@pytest.fixture(scope="module")
+def offset_clip(tmp_path_factory):
+    """A short remux of 4.mp4 with every video PTS shifted forward, so the stream's
+    first frame sits at t = OFFSET_TICKS/time_base instead of t = 0 - the shape
+    SeamStitchCombine's own output has (AAC priming delay on the concat demuxer).
+    Frame CONTENT is untouched, so decode-order index i here is decode-order
+    index i of 4.mp4 and the two can be compared frame for frame."""
+    import av
+    src = os.path.join(VIDS, "4.mp4")
+    if not os.path.exists(src):
+        pytest.skip(f"missing {src}")
+    out = str(tmp_path_factory.mktemp("offset") / "offset_4.mp4")
+    with av.open(src) as ic, av.open(out, "w") as oc:
+        istream = ic.streams.video[0]
+        ostream = oc.add_stream_from_template(istream)
+        ostream.time_base = istream.time_base
+        shift = OFFSET_TICKS
+        n = 0
+        for packet in ic.demux(istream):
+            if packet.dts is None:
+                continue
+            packet.stream = ostream
+            packet.pts += shift
+            packet.dts += shift
+            oc.mux(packet)
+            n += 1
+            if n >= 120:
+                break
+    with av.open(out) as c:
+        vs = c.streams.video[0]
+        base = float(vs.start_time * vs.time_base)
+    assert base > 0.02, f"fixture did not get a start offset (got {base})"
+    return out, base
+
+
+def test_offset_fixture_really_is_offset(offset_clip):
+    """Guard the guard: if this file ever gets written at t=0 the test below stops
+    testing anything."""
+    _, base = offset_clip
+    assert base == pytest.approx(OFFSET_TICKS / 12288.0, abs=1e-6)
+
+
+def test_insert_anchors_are_decode_order_on_an_offset_stream(offset_clip, loader_mod):
+    """The anchors must be decode-order frames join-1 and join - the convention
+    SeamStitchCombine measures seam_frame in and SeamStitchRecombine cuts on.
+
+    Before the fix the loader asked for them as a bare index/fps absolute time, so
+    a +31 ms start offset (1.49 frames at 48 fps) returned decode frames join-2 and
+    join-1: BOTH anchors were clip A's last frame, the generator was handed a frame
+    to morph into itself, and it rendered a freeze with the cut still in it.
+    """
+    import av
+    import numpy as np
+    path, _ = offset_clip
+    node = loader_mod.SeamStitchLoader()
+    join = 40
+    res = node.load_video(path, 48, "frames", 0.0, 0.0, 0.0, 0, 0, 33, snap_to_multiple=0,
+                          mode="insert at join", join_frame=join, trim_each_side=0)
+    images, _, _, count, _, first, last, _, sf, ef, _, _, _, _, insert = res
+    assert insert is True and (sf, ef) == (join, join - 1) and count == 33
+
+    # Decode order, straight off the container - no timestamps involved at all.
+    want = {}
+    with av.open(path) as c:
+        for i, f in enumerate(c.decode(c.streams.video[0])):
+            if i in (join - 1, join):
+                want[i] = f.to_ndarray(format="rgb24").astype(np.float32) / 255.0
+            if i > join:
+                break
+
+    for got, idx in ((first, join - 1), (last, join)):
+        diff = np.abs(got[0].numpy() - want[idx]).max()
+        assert diff < 3 / 255.0, f"anchor for decode frame {idx} is off (max diff {diff})"
+
+    # And the two anchors must actually be different frames, which is the symptom
+    # that reached the render: a freeze is what you get when they are the same.
+    assert np.abs(first[0].numpy() - last[0].numpy()).mean() > 0.0

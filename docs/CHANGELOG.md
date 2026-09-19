@@ -1,5 +1,83 @@
 # Changelog
 
+## Unreleased — insert mode proven on real footage; one off-by-one fixed
+
+**Verdict: works with a caveat.** Insert mode does what it says — nothing removed, the frames
+either side of the bridge bit-identical to their sources, sound locked to the picture within one
+sample — and it is the right tool for **extending a shot**. It is the wrong tool for **joining two
+clips**: on the same hard cut, same seed and same morph prompt, `insert at join` measured max
+per-frame change **60.09** (std 10.36) against `replace range`'s **14.93** (std 3.19). Given two
+adjacent frames across a hard cut, the model idles on clip A for ~29 frames then cuts to clip B in
+two — the cut back again. Use `replace range` for a Combine seam. Full numbers, strips and method:
+`REAL_FOOTAGE_FINDINGS.md`, "S5 — insert mode on real footage" (in the Stitch 2.0 working repo).
+
+**Fix — `loader.py`, `_load_insert`: the insert anchors were off by one on a Combine output.**
+`SeamStitchCombine` measures `seam_frame` in decode order and `SeamStitchRecombine` cuts on the
+same convention, but the replace-mode path `_load_insert` borrows to decode the anchors maps
+`start_frame` to an absolute presentation time as a bare `start_frame / fr`. Combine's own output
+starts at **+31.006 ms** (AAC-priming empty edit, 1.49 frames at 48 fps), so asking for frame 248
+returned decode frame 246 and *both* anchors came back as clip A's last frame: the model was asked
+to morph a frame into itself, rendered a 33-frame freeze, and the cut reappeared where the frozen
+bridge met clip B. Anchors are now fetched by time off the stream's real start, with the same
+thousandth-of-a-frame tolerance `recombine._decode_range` uses. **Replace mode is not touched** —
+the change is entirely inside `_load_insert`, and the `input_video` path needs none of it because
+`_load_from_tensor` slices by index. Only a stream that does not start at t = 0 was affected, which
+in practice means a Combine output.
+
+Measured 2026-09-19 on Kay's live instance (ComfyUI 0.36.0, RTX 5090) and with `python_embeded`:
+
+- `tests/` 33 passed. New `test_insert_anchors_are_decode_order_on_an_offset_stream` remuxes
+  `Test vids/4.mp4` with the same +381-tick start offset Combine produces and compares the anchors
+  against a plain decode-order walk; it **fails on the pre-fix loader** (max per-pixel difference
+  0.863) and passes on the fixed one. The existing anchor test could not catch this: it decoded its
+  reference with the same absolute-time rule the loader used, on a clip starting at t = 0.
+- **Frame math** (acceptance check 2), insert at seam 248, `trim_each_side = 0`, 33-frame bridge:
+  output **527** frames = 496 input + 33 − 2 anchors − 0 dedup. Nothing removed from either clip.
+- **Anchors** (check 3): on the pre-encode spliced tensor, output[247] is **bit-identical** to
+  `4.mp4[247]` and output[279] to `2.mp4[0]` (max abs difference 0). In the delivered h264 mp4 the
+  same frames measure 1.64 and 2.03 — encode loss, not a splice error.
+- **Audio** (check 4), sync error = audio lag − picture shift, cross-correlation at corr 1.000:
+  silence fallback **+0.01 / +0.02 ms**, bridge audio **+0.01 / +0.01 ms**, single-video insert
+  **+0.00 / +0.01 ms**. One sample at 32 kHz is 31 µs. With `audio_mode = original` the inserted
+  stretch measures **−92.37 dBFS** — genuinely silent, not source audio pulled forward.
+- **`seam_frame`** (check 5): **248** on the stream-copy join (output[247]/[248] bit-identical to
+  A's last and B's first frame) and **248** on a mixed-frame-rate transcode join (2.mp4 retimed to
+  30 fps; differences 1.56 and 0.74 against a tolerance of 6.0). A deliberately wrong candidate
+  raises "Refusing to emit an unverified seam_frame". A wrong but in-range `seam_frame` wired into
+  the loader is trusted by design; out of range it fails loudly and names the clip length.
+- **Backward compatibility** (check 1): `SeamStitchCombine` writes a **byte-identical** join to the
+  2026-09-16 run (md5 `70d2943f735669ca611443cf59d86a68`), and the replace-mode morph render
+  reproduces the recorded prompt-table numbers — max **14.93**, mean 6.78, std 3.19 against
+  14.9 / 6.79 / 3.10, same seed 424242, same range. A save carrying only v0.1.0's 18 widget values
+  loads as `mode = "replace range"`.
+- **The single-video insert works**: 31 frames at a typed `join_frame` of `4.mp4`, continuity
+  prompt, max per-frame change **4.65** / std **0.68** across the inserted span against 6–8 for the
+  footage either side, both anchors bit-identical, output 279 = 248 + 31.
+
+**Not verified.**
+
+- The end-to-end run **through the fixed loader** on a Combine output. The live ComfyUI holds the
+  pack's modules from before the fix and re-imports only on restart, which this session did not do.
+  Every insert render above was made on the pre-fix build with the off-by-one cancelled at the
+  graph level (`join_frame = 249`, and Recombine's `start_frame` / `end_frame` typed 248 / 247),
+  after confirming both anchors were bit-identical to `4.mp4[247]` and `2.mp4[0]` — so the model
+  saw the frames the fixed loader now returns. Re-run
+  `seamstitch_ltx_first_last_morph_insert.api.json` unmodified after a restart to close this.
+- **Whether the bridge audio sounds right.** Not listened to. Objectively it is level-matched
+  (−48.79 dBFS between source at −45.44 and −49.33), mostly low rumble (71.4% of its energy below
+  200 Hz, centroid 1231 Hz, peak 0.0080 against 0.0444 just before), and there is no click at
+  either join. Whether it suits the shot is still a listening judgement.
+- `trim_each_side > 0` in a render.
+
+**Known, not fixed.**
+
+- The four API templates that predate insert mode no longer validate against `/prompt`: required
+  widgets have been added since they were exported. The three new `_insert` templates carry the
+  full set. Supplying each missing widget at its declared default is a no-op for the render.
+- Loading any saved graph on the canvas resets the loader's `start_frame` / `end_frame` to the
+  whole clip. Pre-existing — v0.1.0's `onConfigure` already called `syncFramesFromTime()` — and it
+  does not affect API payloads.
+
 ## Unreleased — Loader timeline: the join marker (insert mode UI)
 
 `js/loader.js` only. Driven from the `mode` widget callback, `onConfigure` and `onConnectionsChange`,
