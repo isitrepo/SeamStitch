@@ -243,6 +243,40 @@ class SeamStitchLoader:
                 "save_first_frame": ("BOOLEAN", {"default": False, "tooltip": "Save the extracted first frame as a PNG to the main ComfyUI output directory."}),
                 "save_last_frame": ("BOOLEAN", {"default": False, "tooltip": "Save the extracted last frame as a PNG to the main ComfyUI output directory."}),
                 "snap_to_multiple": ("INT", {"default": 32, "min": 0, "max": 256, "step": 8, "tooltip": "Round the output width/height to the nearest multiple of this value (e.g. 1080 -> 1088 at 32). 0 falls back to just keeping dimensions even."}),
+                # Kept last, like SeamStitchRecombine's audio_bridge_weight: a widget
+                # inserted between existing ones shifts every later widget's value by
+                # one slot when a workflow saved before it existed is reloaded
+                # (ComfyUI matches saved widget_values positionally).
+                "extend_bridge": ("BOOLEAN", {"default": False, "tooltip":
+                    "Off: duration/frame_count report the picked gap exactly as "
+                    "decoded, same as always. On: duration/frame_count instead "
+                    "report the picked gap PLUS extend_amount, snapped to "
+                    "bridge_frame_grid - wire frame_count into a first/last-frame "
+                    "generator's own length widget (e.g. LTX-2.5's "
+                    "EmptyLTXVLatentVideo.length / LTXVEmptyLatentAudio.frames_number) "
+                    "to give it more frames than the original gap had to invent the "
+                    "transition in. images/audio/first_frame/last_frame are "
+                    "unaffected either way - this only changes what duration/"
+                    "frame_count report. SeamStitchRecombine's own start_frame/"
+                    "end_frame still cut the original footage at the unextended "
+                    "gap - only the *generated* segment gets longer, which is what "
+                    "makes the recombined video's total duration grow by the extra "
+                    "amount."}),
+                "extend_amount": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 100000.0, "step": 0.1,
+                    "tooltip": "Only used when extend_bridge is on. How much longer "
+                    "than the picked gap to report, in extend_unit."}),
+                "extend_unit": (["seconds", "frames"], {"default": "seconds", "tooltip":
+                    "Only used when extend_bridge is on. 'seconds' converts "
+                    "extend_amount using frame_rate; 'frames' takes it as a literal "
+                    "frame count."}),
+                "bridge_frame_grid": (["ltx (8k+1)", "minimax (17k+5)", "none"], {"default": "ltx (8k+1)", "tooltip":
+                    "Only used when extend_bridge is on. Rounds frame_count up to a "
+                    "generator's required frame grid. 'ltx (8k+1)' matches LTX-2.5 "
+                    "(temporal downsample factor 8, a leading frame). 'minimax "
+                    "(17k+5)' matches MiniMax H3's Motion Context (its own "
+                    "generated-length grid; note it separately requires "
+                    "context_length to be one of 5/22/39/56, which this node has "
+                    "no say over). 'none' outputs the exact unrounded count."}),
             },
             "optional": {
                 "input_video": ("IMAGE", {"tooltip": "Feed frames in directly from an upstream node instead of picking a file below - the video dropdown is ignored while this is connected."}),
@@ -259,13 +293,47 @@ class SeamStitchLoader:
     def VALIDATE_INPUTS(cls, video, **kwargs):
         return True
 
-    def load_video(self, video, frame_rate, display_mode, start_time, end_time, duration, start_frame, end_frame, duration_frames, custom_width=0, custom_height=0, resize_method="maintain aspect ratio", crop_x=0.0, crop_y=0.0, crop_w=1.0, crop_h=1.0, save_first_frame=False, save_last_frame=False, snap_to_multiple=32, input_video=None, input_audio=None, **kwargs):
+    @staticmethod
+    def _extended_frame_count(frame_count, frame_rate, extend_bridge, extend_amount, extend_unit, frame_grid):
+        """duration/frame_count normally just report the picked gap exactly as
+        decoded (frame_count == images.shape[0]). With extend_bridge on, they
+        instead report the gap PLUS extend_amount, snapped to frame_grid - see
+        extend_bridge's tooltip for why a caller would want that (more frames
+        for a downstream first/last-frame generator to invent a transition in,
+        without SeamStitchRecombine's own splice window changing at all)."""
+        if not extend_bridge:
+            return frame_count
+
+        fr = frame_rate if frame_rate > 0 else 24
+        target = frame_count + (extend_amount * fr if extend_unit == "seconds" else extend_amount)
+
+        n = max(1, round(target))
+        if frame_grid == "none":
+            return n
+        if frame_grid == "minimax (17k+5)":
+            # MiniMax H3's own grid: n % 17 == 5, floored at 5 - same rule as the
+            # standalone pipeline's _grid_length in seamweave/comfy_bridge.py.
+            # (Its separate context_length constraint - one of 5/22/39/56 - is
+            # not something a frame count alone can satisfy; that widget lives
+            # on the generator's own Motion Context node, not here.)
+            n = max(5, n)
+            remainder = (n - 5) % 17
+            return n if remainder == 0 else n + (17 - remainder)
+        # LTX-2.5's own grid: n % 8 == 1, floored at 9 (the smallest the reference
+        # workflow this project traced ever used) - same rule as the standalone
+        # pipeline's _ltx_length in seamweave/ltx_bridge.py.
+        n = max(9, n)
+        remainder = (n - 1) % 8
+        return n if remainder == 0 else n + (8 - remainder)
+
+    def load_video(self, video, frame_rate, display_mode, start_time, end_time, duration, start_frame, end_frame, duration_frames, custom_width=0, custom_height=0, resize_method="maintain aspect ratio", crop_x=0.0, crop_y=0.0, crop_w=1.0, crop_h=1.0, save_first_frame=False, save_last_frame=False, snap_to_multiple=32, extend_bridge=False, extend_amount=0.0, extend_unit="seconds", bridge_frame_grid="ltx (8k+1)", input_video=None, input_audio=None, **kwargs):
         if input_video is not None:
             return self._load_from_tensor(
                 input_video, input_audio, video, frame_rate, display_mode,
                 start_time, end_time, duration, start_frame, end_frame, duration_frames,
                 custom_width, custom_height, resize_method, crop_x, crop_y, crop_w, crop_h,
                 save_first_frame, save_last_frame, snap_to_multiple,
+                extend_bridge, extend_amount, extend_unit, bridge_frame_grid,
             )
         if not video:
             # Return blank defaults if no video is loaded
@@ -675,7 +743,10 @@ class SeamStitchLoader:
         out_height = image_tensor.shape[1]
         out_width = image_tensor.shape[2]
 
-        return (image_tensor, audio_dict, final_duration_sec, frame_count, os.path.basename(video), first_frame, last_frame, video_path, start_frame_idx, end_frame_idx, int(frame_rate), out_width, out_height, full_clip_audio_dict)
+        out_frame_count = self._extended_frame_count(frame_count, int(frame_rate),
+                                                       extend_bridge, extend_amount, extend_unit, bridge_frame_grid)
+        out_duration = final_duration_sec if not extend_bridge else out_frame_count / (frame_rate if frame_rate > 0 else 24)
+        return (image_tensor, audio_dict, out_duration, out_frame_count, os.path.basename(video), first_frame, last_frame, video_path, start_frame_idx, end_frame_idx, int(frame_rate), out_width, out_height, full_clip_audio_dict)
 
     @staticmethod
     def _resize_batch(images, w, h):
@@ -687,7 +758,9 @@ class SeamStitchLoader:
     def _load_from_tensor(self, input_video, input_audio, video, frame_rate, display_mode,
                            start_time, end_time, duration, start_frame, end_frame, duration_frames,
                            custom_width, custom_height, resize_method, crop_x, crop_y, crop_w, crop_h,
-                           save_first_frame, save_last_frame, snap_to_multiple=32):
+                           save_first_frame, save_last_frame, snap_to_multiple=32,
+                           extend_bridge=False, extend_amount=0.0, extend_unit="seconds",
+                           bridge_frame_grid="ltx (8k+1)"):
         """Same trim/crop/resize contract as load_video's file path, but driven off
         frames already in the graph instead of decoding a file - no ffmpeg/PyAV
         decode, no colour-space handling (the tensor is already RGB), and this
@@ -797,6 +870,9 @@ class SeamStitchLoader:
         # at, and this comes back empty.
         source_video_path = _resolve_video_path(video) or ""
 
-        return (image_tensor, audio_dict, final_duration_sec, frame_count, os.path.basename(label),
+        out_frame_count = self._extended_frame_count(frame_count, int(frame_rate),
+                                                       extend_bridge, extend_amount, extend_unit, bridge_frame_grid)
+        out_duration = final_duration_sec if not extend_bridge else out_frame_count / fr
+        return (image_tensor, audio_dict, out_duration, out_frame_count, os.path.basename(label),
                 first_frame, last_frame, source_video_path, s_idx, s_idx + frame_count - 1, int(frame_rate),
                 out_width, out_height, full_clip_audio_dict)
