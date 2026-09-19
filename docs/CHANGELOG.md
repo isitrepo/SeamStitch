@@ -1,5 +1,35 @@
 # Changelog
 
+## Unreleased — Loader insert mode (`mode`, `join_frame`, `trim_each_side`, `seam_frame`, `insert`)
+
+`SeamStitchLoader` gains, all appended last so workflows saved before they exist load unchanged
+(`mode` defaults to `replace range`): widgets `mode`, `join_frame`, `trim_each_side`; optional
+input `seam_frame` (INT, socket only); output `insert` (BOOLEAN, 15th). The frame arithmetic is
+`insert_math.py` (pure Python, no ComfyUI/torch). In `insert at join`: anchors are the kept frames
+`join-N-1` and `join+N` (one anchor rule, see the spec), `start_frame = join-N`,
+`end_frame = join+N-1`, `images` = the two anchors, `audio` = a 1024-sample stub, `full_clip_audio`
+stays real, and the existing `duration` / `duration_frames` widget is read as the wanted bridge
+length, snapped to the nearest 8n+1 frames (floor 9, ties up) and emitted as `frame_count` /
+`duration`. Anchors are decoded through the ordinary replace-mode path one frame each, so they get
+identical crop/resize/snap. A wired `seam_frame` wins over `join_frame` (logged when they differ).
+A join with no room for both anchors raises, naming the clip length. Works for `input_video` too.
+The JS timeline is not touched here (S4).
+
+Measured 2026-09-19 (`python_embeded`, torch 2.13 / av 17.0.1):
+
+- `tests/test_loader_insert.py`: 15 passed (N=0, N>0, both boundaries, out-of-range errors, 8n+1
+  snapping at 24/25/30 fps, wired-vs-typed precedence, and `Test vids/4.mp4` anchors at join 40
+  against an independent `av` decode: max per-pixel difference < 3/255).
+- **Replace mode regression:** the first 14 outputs, sha256 of every tensor/audio buffer plus all
+  scalars, on `Test vids/4.mp4` (seconds range; frames range with `extend_bridge`; pad-resized) and
+  on a seeded `input_video`/`input_audio` tensor, are byte-identical between `HEAD` before S3
+  (`b3587d1`) and after. Combined comparison files hash to the same sha256 `baba03a1...53c1ea`.
+- Sandbox `/object_info` (port 8297): `SeamStitchLoader` outputs are the previous 14 in order plus
+  `insert` last; required widgets end `..., bridge_frame_grid, mode, join_frame, trim_each_side`;
+  optional inputs `seam_frame, input_video, input_audio`.
+- README diagrams regenerated with `docs/gen_diagrams.py` from that `/object_info` (the Combine and
+  Recombine SVGs also picked up S1/S2's new socket/widget).
+
 ## Unreleased — Recombine can insert a bridge instead of replacing a range (`insert`)
 
 `SeamStitchRecombine` gains an `insert` BOOLEAN input (default false, appended last so workflows

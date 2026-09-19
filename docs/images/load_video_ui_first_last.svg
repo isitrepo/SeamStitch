@@ -1,6 +1,6 @@
-<svg width="620" height="687" viewBox="0 0 620 687" xmlns="http://www.w3.org/2000/svg" font-family="Segoe UI, Helvetica, Arial, sans-serif">
-<rect x="0" y="0" width="620" height="687" fill="#1a1a1a"/>
-<rect x="24" y="10" width="572" height="667" rx="10" fill="#2a2a2a" stroke="#454545" stroke-width="1.5"/>
+<svg width="620" height="927" viewBox="0 0 620 927" xmlns="http://www.w3.org/2000/svg" font-family="Segoe UI, Helvetica, Arial, sans-serif">
+<rect x="0" y="0" width="620" height="927" fill="#1a1a1a"/>
+<rect x="24" y="10" width="572" height="907" rx="10" fill="#2a2a2a" stroke="#454545" stroke-width="1.5"/>
 <path d="M 24 40 Q 24 10 34 10 L 586 10 Q 596 10 596 40 Z" fill="#2f6fa5"/>
 <text x="38" y="30" fill="#ffffff" font-size="14" font-weight="600">SeamStitch Loader</text>
 <rect x="25" y="39" width="570" height="24" fill="#242424" opacity="0.4"/>
@@ -42,41 +42,75 @@
 <text x="584" y="343.0" fill="#e8e8e8" font-size="12" text-anchor="end">height</text>
 <circle cx="596" cy="363.0" r="5.5" fill="#ff8a80" stroke="#1a1a1a" stroke-width="1.5"/>
 <text x="584" y="367.0" fill="#e8e8e8" font-size="12" text-anchor="end">full_clip_audio</text>
-<line x1="34" y1="384" x2="586" y2="384" stroke="#454545" stroke-width="1"/>
-<rect x="34" y="387" width="552" height="19" rx="4" fill="#3a3a3a" stroke="#555" stroke-width="1"/>
-<text x="42" y="400" fill="#9a9a9a" font-size="11">video</text>
-<text x="578" y="400" fill="#e8e8e8" font-size="11" text-anchor="end">none</text>
-<rect x="25" y="408" width="570" height="24" fill="#242424" opacity="0.4"/>
+<rect x="25" y="375" width="570" height="24" fill="#242424" opacity="0.4"/>
+<circle cx="596" cy="387.0" r="5.5" fill="#b0bec5" stroke="#1a1a1a" stroke-width="1.5"/>
+<text x="584" y="391.0" fill="#e8e8e8" font-size="12" text-anchor="end">insert</text>
+<line x1="34" y1="408" x2="586" y2="408" stroke="#454545" stroke-width="1"/>
 <rect x="34" y="411" width="552" height="19" rx="4" fill="#3a3a3a" stroke="#555" stroke-width="1"/>
-<text x="42" y="424" fill="#9a9a9a" font-size="11">start_time</text>
-<text x="578" y="424" fill="#e8e8e8" font-size="11" text-anchor="end">0.0</text>
+<text x="42" y="424" fill="#9a9a9a" font-size="11">video</text>
+<text x="578" y="424" fill="#e8e8e8" font-size="11" text-anchor="end">none</text>
+<rect x="25" y="432" width="570" height="24" fill="#242424" opacity="0.4"/>
 <rect x="34" y="435" width="552" height="19" rx="4" fill="#3a3a3a" stroke="#555" stroke-width="1"/>
-<text x="42" y="448" fill="#9a9a9a" font-size="11">end_time</text>
+<text x="42" y="448" fill="#9a9a9a" font-size="11">start_time</text>
 <text x="578" y="448" fill="#e8e8e8" font-size="11" text-anchor="end">0.0</text>
-<rect x="25" y="456" width="570" height="24" fill="#242424" opacity="0.4"/>
 <rect x="34" y="459" width="552" height="19" rx="4" fill="#3a3a3a" stroke="#555" stroke-width="1"/>
-<text x="42" y="472" fill="#9a9a9a" font-size="11">duration</text>
+<text x="42" y="472" fill="#9a9a9a" font-size="11">end_time</text>
 <text x="578" y="472" fill="#e8e8e8" font-size="11" text-anchor="end">0.0</text>
+<rect x="25" y="480" width="570" height="24" fill="#242424" opacity="0.4"/>
 <rect x="34" y="483" width="552" height="19" rx="4" fill="#3a3a3a" stroke="#555" stroke-width="1"/>
-<text x="42" y="496" fill="#9a9a9a" font-size="11">resize_method</text>
-<text x="578" y="496" fill="#e8e8e8" font-size="11" text-anchor="end">maintain aspect ratio</text>
-<rect x="25" y="504" width="570" height="24" fill="#242424" opacity="0.4"/>
+<text x="42" y="496" fill="#9a9a9a" font-size="11">duration</text>
+<text x="578" y="496" fill="#e8e8e8" font-size="11" text-anchor="end">0.0</text>
 <rect x="34" y="507" width="552" height="19" rx="4" fill="#3a3a3a" stroke="#555" stroke-width="1"/>
-<text x="42" y="520" fill="#9a9a9a" font-size="11">custom_width</text>
-<text x="578" y="520" fill="#e8e8e8" font-size="11" text-anchor="end">0</text>
+<text x="42" y="520" fill="#9a9a9a" font-size="11">resize_method</text>
+<text x="578" y="520" fill="#e8e8e8" font-size="11" text-anchor="end">maintain aspect ratio</text>
+<rect x="25" y="528" width="570" height="24" fill="#242424" opacity="0.4"/>
 <rect x="34" y="531" width="552" height="19" rx="4" fill="#3a3a3a" stroke="#555" stroke-width="1"/>
-<text x="42" y="544" fill="#9a9a9a" font-size="11">custom_height</text>
+<text x="42" y="544" fill="#9a9a9a" font-size="11">custom_width</text>
 <text x="578" y="544" fill="#e8e8e8" font-size="11" text-anchor="end">0</text>
-<rect x="25" y="552" width="570" height="24" fill="#242424" opacity="0.4"/>
 <rect x="34" y="555" width="552" height="19" rx="4" fill="#3a3a3a" stroke="#555" stroke-width="1"/>
-<text x="42" y="568" fill="#9a9a9a" font-size="11">frame_rate</text>
-<text x="578" y="568" fill="#e8e8e8" font-size="11" text-anchor="end">24</text>
+<text x="42" y="568" fill="#9a9a9a" font-size="11">custom_height</text>
+<text x="578" y="568" fill="#e8e8e8" font-size="11" text-anchor="end">0</text>
+<rect x="25" y="576" width="570" height="24" fill="#242424" opacity="0.4"/>
 <rect x="34" y="579" width="552" height="19" rx="4" fill="#3a3a3a" stroke="#555" stroke-width="1"/>
-<text x="42" y="592" fill="#9a9a9a" font-size="11">save_first_frame</text>
-<text x="578" y="592" fill="#e8e8e8" font-size="11" text-anchor="end">False</text>
-<rect x="25" y="600" width="570" height="24" fill="#242424" opacity="0.4"/>
+<text x="42" y="592" fill="#9a9a9a" font-size="11">frame_rate</text>
+<text x="578" y="592" fill="#e8e8e8" font-size="11" text-anchor="end">24</text>
 <rect x="34" y="603" width="552" height="19" rx="4" fill="#3a3a3a" stroke="#555" stroke-width="1"/>
-<text x="42" y="616" fill="#9a9a9a" font-size="11">save_last_frame</text>
+<text x="42" y="616" fill="#9a9a9a" font-size="11">save_first_frame</text>
 <text x="578" y="616" fill="#e8e8e8" font-size="11" text-anchor="end">False</text>
-<text x="310.0" y="645" fill="#9a9a9a" font-size="10.5" text-anchor="middle" font-style="italic">Interactive timeline/crop UI and the buttons above render below the widgets shown here.</text>
+<rect x="25" y="624" width="570" height="24" fill="#242424" opacity="0.4"/>
+<rect x="34" y="627" width="552" height="19" rx="4" fill="#3a3a3a" stroke="#555" stroke-width="1"/>
+<text x="42" y="640" fill="#9a9a9a" font-size="11">save_last_frame</text>
+<text x="578" y="640" fill="#e8e8e8" font-size="11" text-anchor="end">False</text>
+<rect x="34" y="651" width="552" height="19" rx="4" fill="#3a3a3a" stroke="#555" stroke-width="1"/>
+<text x="42" y="664" fill="#9a9a9a" font-size="11">snap_to_multiple</text>
+<text x="578" y="664" fill="#e8e8e8" font-size="11" text-anchor="end">32</text>
+<rect x="25" y="672" width="570" height="24" fill="#242424" opacity="0.4"/>
+<rect x="34" y="675" width="552" height="19" rx="4" fill="#3a3a3a" stroke="#555" stroke-width="1"/>
+<text x="42" y="688" fill="#9a9a9a" font-size="11">extend_bridge</text>
+<text x="578" y="688" fill="#e8e8e8" font-size="11" text-anchor="end">False</text>
+<rect x="34" y="699" width="552" height="19" rx="4" fill="#3a3a3a" stroke="#555" stroke-width="1"/>
+<text x="42" y="712" fill="#9a9a9a" font-size="11">extend_amount</text>
+<text x="578" y="712" fill="#e8e8e8" font-size="11" text-anchor="end">0.0</text>
+<rect x="25" y="720" width="570" height="24" fill="#242424" opacity="0.4"/>
+<rect x="34" y="723" width="552" height="19" rx="4" fill="#3a3a3a" stroke="#555" stroke-width="1"/>
+<text x="42" y="736" fill="#9a9a9a" font-size="11">extend_unit</text>
+<text x="578" y="736" fill="#e8e8e8" font-size="11" text-anchor="end">seconds</text>
+<rect x="34" y="747" width="552" height="19" rx="4" fill="#3a3a3a" stroke="#555" stroke-width="1"/>
+<text x="42" y="760" fill="#9a9a9a" font-size="11">bridge_frame_grid</text>
+<text x="578" y="760" fill="#e8e8e8" font-size="11" text-anchor="end">ltx (8k+1)</text>
+<rect x="25" y="768" width="570" height="24" fill="#242424" opacity="0.4"/>
+<rect x="34" y="771" width="552" height="19" rx="4" fill="#3a3a3a" stroke="#555" stroke-width="1"/>
+<text x="42" y="784" fill="#9a9a9a" font-size="11">mode</text>
+<text x="578" y="784" fill="#e8e8e8" font-size="11" text-anchor="end">replace range</text>
+<rect x="34" y="795" width="552" height="19" rx="4" fill="#3a3a3a" stroke="#555" stroke-width="1"/>
+<text x="42" y="808" fill="#9a9a9a" font-size="11">join_frame</text>
+<text x="578" y="808" fill="#e8e8e8" font-size="11" text-anchor="end">0</text>
+<rect x="25" y="816" width="570" height="24" fill="#242424" opacity="0.4"/>
+<rect x="34" y="819" width="552" height="19" rx="4" fill="#3a3a3a" stroke="#555" stroke-width="1"/>
+<text x="42" y="832" fill="#9a9a9a" font-size="11">trim_each_side</text>
+<text x="578" y="832" fill="#e8e8e8" font-size="11" text-anchor="end">0</text>
+<rect x="34" y="843" width="552" height="19" rx="4" fill="#3a3a3a" stroke="#555" stroke-width="1"/>
+<text x="42" y="856" fill="#9a9a9a" font-size="11">seam_frame</text>
+<text x="578" y="856" fill="#e8e8e8" font-size="11" text-anchor="end"></text>
+<text x="310.0" y="885" fill="#9a9a9a" font-size="10.5" text-anchor="middle" font-style="italic">Interactive timeline/crop UI and the buttons above render below the widgets shown here.</text>
 </svg>

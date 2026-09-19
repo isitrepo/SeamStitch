@@ -13,6 +13,11 @@ from aiohttp import web
 import comfy.utils
 from PIL import Image
 
+try:
+    from . import insert_math
+except ImportError:  # imported as a top-level module (tests)
+    import insert_math
+
 _VIDEO_EXTENSIONS = ('.mp4', '.webm', '.mkv', '.avi', '.mov', '.m4v', '.flv', '.wmv')
 
 
@@ -277,15 +282,31 @@ class SeamStitchLoader:
                     "generated-length grid; note it separately requires "
                     "context_length to be one of 5/22/39/56, which this node has "
                     "no say over). 'none' outputs the exact unrounded count."}),
+                # Appended last for the same positional-widget-values reason as above.
+                "mode": ([insert_math.MODE_REPLACE, insert_math.MODE_INSERT], {"default": insert_math.MODE_REPLACE, "tooltip":
+                    "replace range: the picked range is cut out and something regenerated "
+                    "replaces it (the original behaviour). insert at join: nothing is "
+                    "removed (or trim_each_side frames either side of join_frame); "
+                    "images/audio become just the two kept anchor frames, and duration "
+                    "becomes the length of the bridge to generate. Wire the 'insert' "
+                    "output into SeamStitchRecombine's insert input."}),
+                "join_frame": ("INT", {"default": 0, "min": 0, "max": 10000000, "step": 1, "tooltip":
+                    "Insert mode only. The join point: the bridge goes between frame "
+                    "join_frame-1 and frame join_frame (at frame_rate). Overridden by a "
+                    "wired seam_frame."}),
+                "trim_each_side": ("INT", {"default": 0, "min": 0, "max": 100000, "step": 1, "tooltip":
+                    "Insert mode only. Frames removed either side of the join. 0 removes "
+                    "nothing; N removes [join-N, join+N-1]."}),
             },
             "optional": {
+                "seam_frame": ("INT", {"forceInput": True, "tooltip": "Insert mode only. Wire SeamStitchCombine's seam_frame here; it overrides join_frame."}),
                 "input_video": ("IMAGE", {"tooltip": "Feed frames in directly from an upstream node instead of picking a file below - the video dropdown is ignored while this is connected."}),
                 "input_audio": ("AUDIO", {"tooltip": "Audio to go with input_video. Optional even when input_video is connected - a silent track is used if omitted."}),
             },
         }
 
-    RETURN_TYPES = ("IMAGE", "AUDIO", "FLOAT", "INT", "STRING", "IMAGE", "IMAGE", "STRING", "INT", "INT", "INT", "INT", "INT", "AUDIO")
-    RETURN_NAMES = ("images", "audio", "duration", "frame_count", "filename", "first_frame", "last_frame", "source_video_path", "start_frame", "end_frame", "frame_rate", "width", "height", "full_clip_audio")
+    RETURN_TYPES = ("IMAGE", "AUDIO", "FLOAT", "INT", "STRING", "IMAGE", "IMAGE", "STRING", "INT", "INT", "INT", "INT", "INT", "AUDIO", "BOOLEAN")
+    RETURN_NAMES = ("images", "audio", "duration", "frame_count", "filename", "first_frame", "last_frame", "source_video_path", "start_frame", "end_frame", "frame_rate", "width", "height", "full_clip_audio", "insert")
     FUNCTION = "load_video"
     CATEGORY = "SeamStitch"
 
@@ -326,7 +347,14 @@ class SeamStitchLoader:
         remainder = (n - 1) % 8
         return n if remainder == 0 else n + (8 - remainder)
 
-    def load_video(self, video, frame_rate, display_mode, start_time, end_time, duration, start_frame, end_frame, duration_frames, custom_width=0, custom_height=0, resize_method="maintain aspect ratio", crop_x=0.0, crop_y=0.0, crop_w=1.0, crop_h=1.0, save_first_frame=False, save_last_frame=False, snap_to_multiple=32, extend_bridge=False, extend_amount=0.0, extend_unit="seconds", bridge_frame_grid="ltx (8k+1)", input_video=None, input_audio=None, **kwargs):
+    def load_video(self, video, frame_rate, display_mode, start_time, end_time, duration, start_frame, end_frame, duration_frames, custom_width=0, custom_height=0, resize_method="maintain aspect ratio", crop_x=0.0, crop_y=0.0, crop_w=1.0, crop_h=1.0, save_first_frame=False, save_last_frame=False, snap_to_multiple=32, extend_bridge=False, extend_amount=0.0, extend_unit="seconds", bridge_frame_grid="ltx (8k+1)", mode=insert_math.MODE_REPLACE, join_frame=0, trim_each_side=0, seam_frame=None, input_video=None, input_audio=None, **kwargs):
+        skip_full_audio = kwargs.pop("_skip_full_audio", False)
+        if mode == insert_math.MODE_INSERT:
+            return self._load_insert(
+                video, frame_rate, display_mode, start_time, end_time, duration, start_frame,
+                end_frame, duration_frames, custom_width, custom_height, resize_method,
+                crop_x, crop_y, crop_w, crop_h, save_first_frame, save_last_frame,
+                snap_to_multiple, join_frame, trim_each_side, seam_frame, input_video, input_audio)
         if input_video is not None:
             return self._load_from_tensor(
                 input_video, input_audio, video, frame_rate, display_mode,
@@ -339,7 +367,7 @@ class SeamStitchLoader:
             # Return blank defaults if no video is loaded
             empty_image = torch.zeros((1, 512, 512, 3), dtype=torch.float32)
             empty_audio = {"waveform": torch.zeros((1, 1, 44100)), "sample_rate": 44100}
-            return (empty_image, empty_audio, 0.0, 0, "", empty_image.clone(), empty_image.clone(), "", 0, 0, int(frame_rate), 512, 512, empty_audio.copy())
+            return (empty_image, empty_audio, 0.0, 0, "", empty_image.clone(), empty_image.clone(), "", 0, 0, int(frame_rate), 512, 512, empty_audio.copy(), False)
 
         # 1. Resolve path using ComfyUI standard paths or Absolute Path
         video_path = video  # Try exact/absolute path first
@@ -676,7 +704,7 @@ class SeamStitchLoader:
         # instead of the whole file.
         full_clip_audio_dict = {"waveform": torch.zeros((1, 1, 44100)), "sample_rate": 44100}
 
-        if len(container.streams.audio) > 0:
+        if len(container.streams.audio) > 0 and not skip_full_audio:
             full_container = None
             try:
                 full_container = av.open(video_path)
@@ -746,7 +774,71 @@ class SeamStitchLoader:
         out_frame_count = self._extended_frame_count(frame_count, int(frame_rate),
                                                        extend_bridge, extend_amount, extend_unit, bridge_frame_grid)
         out_duration = final_duration_sec if not extend_bridge else out_frame_count / (frame_rate if frame_rate > 0 else 24)
-        return (image_tensor, audio_dict, out_duration, out_frame_count, os.path.basename(video), first_frame, last_frame, video_path, start_frame_idx, end_frame_idx, int(frame_rate), out_width, out_height, full_clip_audio_dict)
+        return (image_tensor, audio_dict, out_duration, out_frame_count, os.path.basename(video), first_frame, last_frame, video_path, start_frame_idx, end_frame_idx, int(frame_rate), out_width, out_height, full_clip_audio_dict, False)
+
+    def _load_insert(self, video, frame_rate, display_mode, start_time, end_time, duration,
+                     start_frame, end_frame, duration_frames, custom_width, custom_height,
+                     resize_method, crop_x, crop_y, crop_w, crop_h, save_first_frame,
+                     save_last_frame, snap_to_multiple, join_frame, trim_each_side,
+                     seam_frame, input_video, input_audio):
+        """Insert mode: nothing (or trim_each_side frames either side of the join) is
+        cut out, and the two KEPT frames just outside that range are the anchors.
+        Anchors are decoded through the ordinary replace-mode path, one frame each
+        (frames k..k+1), so they get exactly the crop/resize/snap the bridge is
+        generated at. images/audio are cheap stubs; full_clip_audio stays real."""
+        fr = float(frame_rate) if frame_rate > 0 else 24.0
+        join, note = insert_math.resolve_join(join_frame, seam_frame)
+        if note:
+            print(f"[SeamStitch] {note}")
+
+        if input_video is not None:
+            clip_frames = int(input_video.shape[0])
+        else:
+            path = _resolve_video_path(video) if video and video != "none" else None
+            if not path:
+                raise FileNotFoundError(f"Video file not found: {video}")
+            with av.open(path) as c:
+                vs = c.streams.video[0]
+                dur = float(vs.duration * vs.time_base) if vs.duration and vs.time_base else (
+                    float(c.duration) / av.time_base if c.duration else 0.0)
+            clip_frames = int(round(dur * fr))
+
+        plan = insert_math.plan_insert(join, trim_each_side, clip_frames)
+
+        common = dict(
+            video=video, frame_rate=frame_rate, display_mode="frames", start_time=0.0,
+            end_time=0.0, duration=0.0, duration_frames=0, custom_width=custom_width,
+            custom_height=custom_height, resize_method=resize_method, crop_x=crop_x,
+            crop_y=crop_y, crop_w=crop_w, crop_h=crop_h, save_first_frame=False,
+            save_last_frame=False, snap_to_multiple=snap_to_multiple,
+            mode=insert_math.MODE_REPLACE, input_video=input_video, input_audio=input_audio)
+        a = self.load_video(start_frame=plan["first_anchor"], end_frame=plan["first_anchor"] + 1,
+                            _skip_full_audio=True, **common)
+        b = self.load_video(start_frame=plan["last_anchor"], end_frame=plan["last_anchor"] + 1,
+                            **common)
+        first_frame = a[0][0:1].clone()
+        last_frame = b[0][0:1].clone()
+
+        label = os.path.basename(b[4])
+        stem = os.path.splitext(label)[0]
+        if save_first_frame:
+            _save_frame_png(first_frame, f"{stem}_first_frame")
+        if save_last_frame:
+            _save_frame_png(last_frame, f"{stem}_last_frame")
+
+        images = torch.cat((first_frame, last_frame), dim=0)
+        sr = b[1]["sample_rate"]
+        audio_stub = {"waveform": torch.zeros((1, b[1]["waveform"].shape[1], 1024)), "sample_rate": sr}
+
+        frame_count, out_duration = insert_math.bridge_length(duration, duration_frames, display_mode, frame_rate)
+        print(f"[SeamStitch] Insert mode: join {join}, trim_each_side {int(trim_each_side)} -> "
+              f"anchors {plan['first_anchor']} / {plan['last_anchor']}, removed "
+              f"[{plan['start_frame']}, {plan['end_frame']}], bridge {frame_count} frames "
+              f"({out_duration:.3f}s at {int(frame_rate)} fps)")
+
+        return (images, audio_stub, out_duration, frame_count, label, first_frame, last_frame,
+                b[7], plan["start_frame"], plan["end_frame"], int(frame_rate), b[11], b[12],
+                b[13], True)
 
     @staticmethod
     def _resize_batch(images, w, h):
@@ -875,4 +967,4 @@ class SeamStitchLoader:
         out_duration = final_duration_sec if not extend_bridge else out_frame_count / fr
         return (image_tensor, audio_dict, out_duration, out_frame_count, os.path.basename(label),
                 first_frame, last_frame, source_video_path, s_idx, s_idx + frame_count - 1, int(frame_rate),
-                out_width, out_height, full_clip_audio_dict)
+                out_width, out_height, full_clip_audio_dict, False)

@@ -129,6 +129,24 @@ If you extend the bridge, remember to set **SeamStitch Recombine**'s `audio_mode
 `combined` rather than leaving it at `original` — the source video has no audio for time beyond
 the original gap, so `original` mode plays silence under the extra frames.
 
+**`mode`** (`replace range` default / `insert at join`). Replace mode is everything above,
+unchanged. Insert mode adds a bridge at one point instead of replacing a range:
+
+| Widget / socket | Notes |
+| --- | --- |
+| `join_frame` | The bridge goes between frame `join_frame - 1` and `join_frame` (at `frame_rate`). |
+| `seam_frame` (optional input) | Wire `SeamStitchCombine.seam_frame` here; the wired value wins over `join_frame` and the console says so if they differ. |
+| `trim_each_side` | Frames removed either side of the join: `0` removes nothing, `N` removes `[join-N, join+N-1]`. |
+| `duration` (or `duration_frames` in frames display) | Becomes the bridge length you want. Snapped to the nearest 8n+1 frame count (min 9; ties go up) and emitted as the real `frame_count` / `duration`. |
+| `insert` (output, last) | `true` in insert mode. Wire it into `SeamStitchRecombine.insert`. |
+
+In insert mode `first_frame` / `last_frame` are the two **kept** frames just outside the removed range
+(`join-N-1` and `join+N`), `start_frame` / `end_frame` are `join-N` / `join+N-1` (so
+`end_frame = start_frame - 1` when `trim_each_side` is 0), `images` is just those two anchors, `audio`
+is a tiny stub, and `full_clip_audio` stays the real whole-file audio. Anchors get the same
+crop/resize/snap as replace-mode frames. The join must leave room for both anchors, otherwise the
+node raises naming the clip length.
+
 Based on [WhatDreamsCost-ComfyUI](https://github.com/WhatDreamsCost/WhatDreamsCost-ComfyUI)'s
 Load Video UI node, with the outputs above added on top for FLF/splice workflows.
 
