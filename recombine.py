@@ -108,9 +108,8 @@ def _strip_held_duplicates(images: torch.Tensor, threshold: float, max_strip: in
 
 # ---------------------------------------------------------------------------
 # Decode a [start_frame_idx, end_frame_idx) range from the original video at a
-# forced frame_rate, applying the same crop_x/y/w/h convention as LoadVideoUI,
-# then resizing (stretch) to (target_w, target_h) so it lines up with the
-# regenerated segment's resolution. end_frame_idx=None decodes to EOF.
+# forced frame_rate, at the source's own resolution - the untouched footage is
+# never cropped or rescaled. end_frame_idx=None decodes to EOF.
 #
 # Returns a uint8 tensor (not float32) — for a long "before"/"after" span this
 # is 4x smaller, which is the difference between fitting in RAM and an
@@ -119,16 +118,15 @@ def _strip_held_duplicates(images: torch.Tensor, threshold: float, max_strip: in
 # once on the fully-concatenated result rather than per-chunk, so the 4x-larger
 # array only ever exists once, right before the encoder needs it.
 # ---------------------------------------------------------------------------
-def _decode_range(video_path, frame_rate, start_frame_idx, end_frame_idx,
-                   target_w, target_h, crop_x=0.0, crop_y=0.0, crop_w=1.0, crop_h=1.0):
+def _decode_range(video_path, frame_rate, start_frame_idx, end_frame_idx):
     if end_frame_idx is not None and end_frame_idx <= start_frame_idx:
-        return torch.zeros((0, target_h, target_w, 3), dtype=torch.uint8)
+        return torch.zeros((0, 0, 0, 3), dtype=torch.uint8)
 
     container = av.open(video_path)
     video_stream = container.streams.video[0] if len(container.streams.video) > 0 else None
     if video_stream is None:
         container.close()
-        return torch.zeros((0, target_h, target_w, 3), dtype=torch.uint8)
+        return torch.zeros((0, 0, 0, 3), dtype=torch.uint8)
 
     orig_w = video_stream.codec_context.width
     orig_h = video_stream.codec_context.height
@@ -157,12 +155,6 @@ def _decode_range(video_path, frame_rate, start_frame_idx, end_frame_idx,
             src_color_range = c_range
         elif c_range and isinstance(c_range, str) and "unspecified" not in c_range.lower():
             src_color_range = c_range
-
-    manual_crop_left = max(0, min(int(orig_w * crop_x), orig_w - 1))
-    manual_crop_top = max(0, min(int(orig_h * crop_y), orig_h - 1))
-    manual_crop_right = max(0, min(orig_w - int(orig_w * (crop_x + crop_w)), orig_w - manual_crop_left - 1))
-    manual_crop_bottom = max(0, min(orig_h - int(orig_h * (crop_y + crop_h)), orig_h - manual_crop_top - 1))
-    has_crop = manual_crop_left > 0 or manual_crop_top > 0 or manual_crop_right > 0 or manual_crop_bottom > 0
 
     fr = float(frame_rate) if frame_rate > 0 else 24.0
     frame_interval = 1.0 / fr
@@ -212,10 +204,6 @@ def _decode_range(video_path, frame_rate, start_frame_idx, end_frame_idx,
         except Exception:
             frame_rgb = frame.to_ndarray(format='rgb24')
 
-        if has_crop:
-            frame_rgb = frame_rgb[manual_crop_top:orig_h - manual_crop_bottom,
-                                   manual_crop_left:orig_w - manual_crop_right, :]
-
         # Tolerance of a thousandth of a frame (~21 us at 48 fps): the target is
         # derived from frame_idx rather than accumulated, but pts -> float still
         # lands a hair either side of an exactly-equal target, and losing that
@@ -223,11 +211,7 @@ def _decode_range(video_path, frame_rate, start_frame_idx, end_frame_idx,
         while expected_target_time <= frame_time + frame_interval * 1e-3:
             if end_frame_idx is not None and frame_idx >= end_frame_idx:
                 break
-            if (frame_rgb.shape[1], frame_rgb.shape[0]) != (target_w, target_h):
-                resized = cv2.resize(frame_rgb, (target_w, target_h), interpolation=cv2.INTER_AREA)
-            else:
-                resized = frame_rgb
-            frames_out.append(resized)
+            frames_out.append(frame_rgb)
             frame_idx += 1
             # Derived from the index, never accumulated: adding frame_interval
             # 239 times drifted far enough to lose the final frame of a range.
@@ -238,9 +222,47 @@ def _decode_range(video_path, frame_rate, start_frame_idx, end_frame_idx,
 
     container.close()
     if not frames_out:
-        return torch.zeros((0, target_h, target_w, 3), dtype=torch.uint8)
+        return torch.zeros((0, orig_h, orig_w, 3), dtype=torch.uint8)
     arr = np.stack(frames_out)  # uint8, HxWx3 per frame — no float32 cast here
     return torch.from_numpy(arr)
+
+
+def _source_size(video_path):
+    """(width, height) of the source's video stream, from its headers."""
+    with av.open(video_path) as container:
+        if not container.streams.video:
+            raise RuntimeError(f"SeamStitchRecombine: no video stream in {video_path}")
+        cc = container.streams.video[0].codec_context
+        return cc.width, cc.height
+
+
+# Regenerated/source aspect-ratio mismatch above which the resize is reported as a
+# likely wiring mistake rather than rounding. The Loader's snap_to_multiple can move
+# a dimension by up to half a multiple (1080 -> 1088 at 32 is 0.7%, 360 -> 352 is
+# 2.2%), so this sits above that.
+ASPECT_WARN = 0.03
+
+
+def _fit_to_source(frames_u8, src_w, src_h):
+    """Resize the regenerated frames onto the source's own resolution. The source
+    is the ground truth for the output: the untouched footage is never rescaled,
+    only the (short) regenerated segment is. The normal case is a no-op, or near
+    one - the generator is fed the Loader's width/height, which differ from the
+    source's only by the snap_to_multiple rounding."""
+    n, h, w = frames_u8.shape[0], frames_u8.shape[1], frames_u8.shape[2]
+    if (w, h) == (src_w, src_h) or n == 0:
+        return frames_u8
+    skew = (w / h) / (src_w / src_h) - 1.0
+    msg = (f"[SeamStitch] Regenerated frames are {w}x{h}, the source is {src_w}x{src_h} - "
+           f"resizing the {n} regenerated frame(s) onto the source's resolution.")
+    if abs(skew) > ASPECT_WARN:
+        msg += (f" Warning: aspect ratio differs by {100.0 * skew:+.1f}%, more than the "
+                f"Loader's snap_to_multiple rounding explains, so the regenerated picture is "
+                f"stretched. Generate at the Loader's width/height outputs, with no crop.")
+    print(msg)
+    interp = cv2.INTER_AREA if w * h > src_w * src_h else cv2.INTER_CUBIC
+    out = np.stack([cv2.resize(f, (src_w, src_h), interpolation=interp) for f in frames_u8.numpy()])
+    return torch.from_numpy(out)
 
 
 # ---------------------------------------------------------------------------
@@ -436,11 +458,6 @@ class SeamStitchRecombine:
             "optional": {
                 "original_audio_override": ("AUDIO", {"tooltip": "Replaces the source file's audio track. Must be on the source file's own timeline (SeamStitchLoader's full_clip_audio is); it is cut to match the picture exactly as the file's own track would be."}),
                 "bridge_audio": ("AUDIO", {"tooltip": "Audio generated alongside the regenerated frames (e.g. LTXVAudioVAEDecode on the bridge's audio latent), starting at its first frame. Used when audio_mode is 'bridge' or 'combined'."}),
-                "crop_x": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.001,
-                                      "tooltip": "Only needed if the same crop was applied in LoadVideoUI when the regenerated segment was produced."}),
-                "crop_y": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.001}),
-                "crop_w": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.001}),
-                "crop_h": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.001}),
                 "audio_mode": (["original", "bridge", "combined"], {"default": "original",
                                "tooltip": "What plays under the regenerated frames. 'original': the source's own audio for exactly the frames that survived dedup, so dropped frames take their sound with them. 'bridge': the bridge_audio input replaces the gap outright. 'combined': the original gap audio (same as 'original') stays underneath, with bridge_audio mixed additively on top at audio_bridge_weight, so ambience never drops out and there is no sudden audio-character change at the splice. Either way the audio is cut at the same frames as the picture, so both stay in sync after the splice."}),
                 "audio_crossfade_ms": ("FLOAT", {"default": 20.0, "min": 0.0, "max": 500.0, "step": 1.0,
@@ -469,7 +486,6 @@ class SeamStitchRecombine:
     def recombine(self, regenerated_images, original_video_path, start_frame, end_frame,
                   frame_rate, dedup_threshold, max_dedup_frames, filename_prefix, format,
                   save_output=True, original_audio_override=None, bridge_audio=None,
-                  crop_x=0.0, crop_y=0.0, crop_w=1.0, crop_h=1.0,
                   audio_mode="original", audio_bridge_weight=0.35, audio_crossfade_ms=20.0,
                   insert=False, prompt=None, extra_pnginfo=None, **kwargs):
 
@@ -487,12 +503,12 @@ class SeamStitchRecombine:
         if audio_mode in ("bridge", "combined") and bridge_audio is None:
             raise ValueError(f"audio_mode is '{audio_mode}' but nothing is connected to bridge_audio.")
 
-        # Regenerated segment is the resolution ground truth for the splice.
+        # The source is the resolution ground truth: the output is always the
+        # source's own size, and only the regenerated segment is ever resized.
         regenerated = regenerated_images
         if regenerated.shape[-1] == 4:
             regenerated = regenerated[..., :3]
-        target_h = regenerated.shape[1]
-        target_w = regenerated.shape[2]
+        src_w, src_h = _source_size(original_video_path)
 
         # 1a. Insert mode only: the bridge's first and last frame ARE the two kept
         #     frames either side of the join - the generator was anchored on them.
@@ -522,18 +538,17 @@ class SeamStitchRecombine:
                   f"{regenerated.shape[0] - 1 - last_kept} trailing).")
 
         # 2. Decode the original video's "before" and "after" chunks on the same
-        #    timeline the segment was cut from, resized to match its resolution.
-        before = _decode_range(original_video_path, frame_rate, 0, start_frame,
-                                target_w, target_h, crop_x, crop_y, crop_w, crop_h)
-        after = _decode_range(original_video_path, frame_rate, end_frame + 1, None,
-                               target_w, target_h, crop_x, crop_y, crop_w, crop_h)
+        #    timeline the segment was cut from, at the source's own resolution.
+        before = _decode_range(original_video_path, frame_rate, 0, start_frame)
+        after = _decode_range(original_video_path, frame_rate, end_frame + 1, None)
 
         # Concatenate in uint8 (before/after already are; deduped is the model's
         # float32 [0,1] output, so downcast it to match). This keeps the
         # concatenated buffer 4x smaller than the final float32 IMAGE tensor —
         # for a long splice at high resolution that's the difference between a
         # few GB and tens of GB of transient peak memory.
-        deduped_u8 = deduped.clamp(0, 1).mul(255).round().to(torch.uint8)
+        deduped_u8 = _fit_to_source(deduped.clamp(0, 1).mul(255).round().to(torch.uint8),
+                                    src_w, src_h)
         chunks = [t for t in (before, deduped_u8, after) if t is not None and t.shape[0] > 0]
         if not chunks:
             raise RuntimeError("Nothing to combine — before/regenerated/after all produced zero frames.")
