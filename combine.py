@@ -25,6 +25,7 @@ encode, which is a fraction of what the old decode-both-sides-then-re-encode
 approach cost.
 """
 
+import asyncio
 import gc
 import os
 import subprocess
@@ -274,9 +275,9 @@ def _decode_for_outputs(path):
         container.close()
 
     audio_dict = None
-    if len(av.open(path).streams.audio) > 0:
-        acontainer = av.open(path)
-        try:
+    acontainer = av.open(path)
+    try:
+        if acontainer.streams.audio:
             astream = acontainer.streams.audio[0]
             astream.thread_type = "AUTO"
             sample_rate = getattr(astream, "rate", 44100) or 44100
@@ -291,8 +292,8 @@ def _decode_for_outputs(path):
             if chunks:
                 waveform = torch.from_numpy(np.concatenate(chunks, axis=1)).float().unsqueeze(0)
                 audio_dict = {"waveform": waveform, "sample_rate": sample_rate}
-        finally:
-            acontainer.close()
+    finally:
+        acontainer.close()
 
     return images, audio_dict
 
@@ -415,6 +416,12 @@ def _measure_seam_frame(path_a, path_b, out_images, out_fps, target_size=None, f
 # header-only probe so the node's "Load Video" button can confirm a pick is
 # valid without paying for a full decode. ---
 
+def _write_chunk(file, file_path, mode):
+    data = file.file.read()
+    with open(file_path, mode) as f:
+        f.write(data)
+
+
 @PromptServer.instance.routes.get("/seamstitch/combine/check_file")
 async def seamstitch_check_file(request):
     filename = request.query.get("filename", "")
@@ -449,8 +456,8 @@ async def seamstitch_upload_chunk(request):
     os.makedirs(upload_dir, exist_ok=True)
     file_path = os.path.join(upload_dir, filename)
     mode = "ab" if chunk_index > 0 else "wb"
-    with open(file_path, mode) as f:
-        f.write(file.file.read())
+    # Blocking disk I/O off the event loop, same as the Loader's upload route.
+    await asyncio.get_event_loop().run_in_executor(None, _write_chunk, file, file_path, mode)
 
     if chunk_index == total_chunks - 1:
         return web.json_response({"name": filename})
