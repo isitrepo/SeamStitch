@@ -89,7 +89,7 @@ seconds or frames, and optionally crop/resize. Outputs include:
 | `source_video_path` | The fully resolved path this node opened — wire into `SeamStitchRecombine.original_video_path`. |
 | `start_frame` / `end_frame` | The frame range (at `frame_rate`) the trim covers, in the *original* video's own timeline. |
 | `frame_rate` | Pass-through of the forced extraction rate, so a downstream node decodes on the identical timeline. |
-| `width` / `height` | Actual resolution of `images`, read off the output tensor. |
+| `width` / `height` | Actual resolution of `images`, read off the output tensor. Generate the replacement at exactly this size — it is the source's resolution, give or take `snap_to_multiple` rounding. |
 | `full_clip_audio` | The entire source file's audio track, untouched — feed into `SeamStitchRecombine.original_audio_override` for the final combine. |
 | `duration` / `frame_count` | Normally just the picked gap, exactly as decoded — see `extend_bridge` below for when they report something else. |
 | `filename` | Informational. |
@@ -118,10 +118,12 @@ gets longer, which is what makes the recombined video's total duration grow by t
 (see **SeamStitch Recombine** below — it already splices in whatever length comes back, no
 further changes needed there).
 
-`bridge_frame_grid` (`ltx (8k+1)` / `minimax (17k+5)` / `none`, only used when `extend_bridge` is
-on) rounds `frame_count` up to whatever grid the generator requires — LTX-2.5 needs `length % 8
-== 1` (its temporal downsample factor), MiniMax H3 Motion Context needs `length % 17 == 5`; pick
-`none` for a backend with no such constraint. MiniMax H3 separately requires its `context_length`
+`bridge_frame_grid` (`ltx (8k+1)` / `minimax (17k+5)` / `none`) is the frame grid the generator
+requires — LTX-2.5 needs `length % 8 == 1` (its temporal downsample factor), MiniMax H3 Motion
+Context needs `length % 17 == 5`; pick `none` for a backend with no such constraint. In replace
+mode it is only used when `extend_bridge` is on, and rounds `frame_count` **up** onto the grid. In
+insert mode it always applies, and snaps the bridge length you typed to the **nearest** length on
+the grid (see below). MiniMax H3 separately requires its `context_length`
 (how many real frames of motion history it's pinned on) to be one of exactly 5/22/39/56 — that's
 a widget on the Motion Context node itself, not something `frame_count` can satisfy for you.
 
@@ -137,7 +139,7 @@ unchanged. Insert mode adds a bridge at one point instead of replacing a range:
 | `join_frame` | The bridge goes between frame `join_frame - 1` and `join_frame` (at `frame_rate`). |
 | `seam_frame` (optional input) | Wire `SeamStitchCombine.seam_frame` here; the wired value wins over `join_frame` and the console says so if they differ. |
 | `trim_each_side` | Frames removed either side of the join: `0` removes nothing, `N` removes `[join-N, join+N-1]`. |
-| `duration` (or `duration_frames` in frames display) | Becomes the bridge length you want. Snapped to the nearest 8n+1 frame count (min 9; ties go up) and emitted as the real `frame_count` / `duration`. |
+| `duration` (or `duration_frames` in frames display) | Becomes the bridge length you want. Snapped to the nearest length on `bridge_frame_grid` — 8n+1 (min 9) for LTX, 17n+5 (min 5) for MiniMax, the exact count (min 3) for `none`; ties go up — and emitted as the real `frame_count` / `duration`. |
 | `insert` (output, last) | `true` in insert mode. Wire it into `SeamStitchRecombine.insert`. |
 
 In insert mode `first_frame` / `last_frame` are the two **kept** frames just outside the removed range
@@ -191,8 +193,13 @@ running.
 Takes a regenerated clip plus the original video path and the frame range it belongs to (wire
 these straight from **SeamStitch Loader**'s matching outputs), and:
 
-1. Decodes the original video's frames before `start_frame` and after `end_frame`, resized to
-   match the regenerated segment's resolution.
+1. Decodes the original video's frames before `start_frame` and after `end_frame` at the
+   source's own resolution. **The source is the resolution ground truth**: the output is always the
+   source's size, and the untouched footage is never cropped or rescaled. If the regenerated frames
+   come back at a different size (normally only the Loader's `snap_to_multiple` rounding, e.g.
+   1088 for a 1080 source), just those frames are resized onto the source's resolution, and the
+   console says so — with a warning if the aspect ratio differs by more than 3%, which means the
+   generator was not fed the Loader's `width`/`height` or the Loader was cropped.
 2. In insert mode only (`insert` on), drops the regenerated segment's **first and last frame**
    unconditionally — they are the two kept frames either side of the join, which the generator
    was anchored on and which the output still has as the source's own frames.
@@ -237,13 +244,14 @@ the regenerated frames are for:
 | the segment's own first/last frame | kept (they stand in for the removed boundary frames) | always dropped (they duplicate the kept frames either side of the join) |
 | output length | source length, ± whatever the dedup dropped | source length **plus** the inserted frames |
 
-Set it by hand, or wire it from **SeamStitch Loader**'s own `insert` output once the Loader's
-insert mode lands — that is what will emit the matching `start_frame` / `end_frame` for a join
-(`end_frame = start_frame - 1` when nothing is trimmed). Insert mode needs at least three
+Wire it from **SeamStitch Loader**'s `insert` output (or set it by hand) — the Loader's insert
+mode emits the matching `start_frame` / `end_frame` for a join (`end_frame = start_frame - 1` when
+nothing is trimmed). Insert mode needs at least three
 regenerated frames, since the first and last are always dropped.
 
-Off, the node behaves exactly as it did in v0.1.0 — verified frame-for-frame and
-sample-for-sample against the tag (`tests/test_recombine_insert.py`).
+Off, the node behaves exactly as it did in v0.1.0 whenever the regenerated frames are the
+source's size — verified frame-for-frame and sample-for-sample against the tag
+(`tests/test_recombine_insert.py`).
 
 **Scope vs. the real VHS_VideoCombine:** video formats only (no gif/webp — pipe
 `combined_images` into a stock `VHS_VideoCombine` afterward for that), no per-format extra
