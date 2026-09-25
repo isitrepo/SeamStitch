@@ -275,8 +275,9 @@ class SeamStitchLoader:
                     "extend_amount using frame_rate; 'frames' takes it as a literal "
                     "frame count."}),
                 "bridge_frame_grid": (["ltx (8k+1)", "minimax (17k+5)", "none"], {"default": "ltx (8k+1)", "tooltip":
-                    "Only used when extend_bridge is on. Rounds frame_count up to a "
-                    "generator's required frame grid. 'ltx (8k+1)' matches LTX-2.5 "
+                    "The generator's required frame grid. Replace mode, only when "
+                    "extend_bridge is on: rounds frame_count UP onto it. Insert mode, "
+                    "always: snaps the bridge length to the NEAREST length on it. 'ltx (8k+1)' matches LTX-2.5 "
                     "(temporal downsample factor 8, a leading frame). 'minimax "
                     "(17k+5)' matches MiniMax H3's Motion Context (its own "
                     "generated-length grid; note it separately requires "
@@ -354,7 +355,8 @@ class SeamStitchLoader:
                 video, frame_rate, display_mode, start_time, end_time, duration, start_frame,
                 end_frame, duration_frames, custom_width, custom_height, resize_method,
                 crop_x, crop_y, crop_w, crop_h, save_first_frame, save_last_frame,
-                snap_to_multiple, join_frame, trim_each_side, seam_frame, input_video, input_audio)
+                snap_to_multiple, join_frame, trim_each_side, seam_frame, input_video, input_audio,
+                bridge_frame_grid)
         if input_video is not None:
             return self._load_from_tensor(
                 input_video, input_audio, video, frame_rate, display_mode,
@@ -780,7 +782,7 @@ class SeamStitchLoader:
                      start_frame, end_frame, duration_frames, custom_width, custom_height,
                      resize_method, crop_x, crop_y, crop_w, crop_h, save_first_frame,
                      save_last_frame, snap_to_multiple, join_frame, trim_each_side,
-                     seam_frame, input_video, input_audio):
+                     seam_frame, input_video, input_audio, bridge_frame_grid="ltx (8k+1)"):
         """Insert mode: nothing (or trim_each_side frames either side of the join) is
         cut out, and the two KEPT frames just outside that range are the anchors.
         Anchors are decoded through the ordinary replace-mode path, one frame each
@@ -865,7 +867,8 @@ class SeamStitchLoader:
         sr = b[1]["sample_rate"]
         audio_stub = {"waveform": torch.zeros((1, b[1]["waveform"].shape[1], 1024)), "sample_rate": sr}
 
-        frame_count, out_duration = insert_math.bridge_length(duration, duration_frames, display_mode, frame_rate)
+        frame_count, out_duration = insert_math.bridge_length(duration, duration_frames, display_mode, frame_rate,
+                                                              bridge_frame_grid)
         print(f"[SeamStitch] Insert mode: join {join}, trim_each_side {int(trim_each_side)} -> "
               f"anchors {plan['first_anchor']} / {plan['last_anchor']}, removed "
               f"[{plan['start_frame']}, {plan['end_frame']}], bridge {frame_count} frames "
