@@ -54,6 +54,22 @@ def test_snap_8n1(fps):
     assert im.bridge_length(0.0, 0, "seconds", 24)[0] == 9    # floor
 
 
+def test_insert_bridge_length_follows_bridge_frame_grid():
+    # MiniMax H3: nearest 17n+5, floored at 5, ties go up.
+    for frames in range(0, 120):
+        n, _ = im.bridge_length(0, frames, "frames", 24, im.GRID_MINIMAX)
+        assert n >= 5 and (n - 5) % 17 == 0
+    assert im.bridge_length(0, 48, "frames", 24, im.GRID_MINIMAX)[0] == 56   # nearer 56 than 39
+    assert im.bridge_length(0, 30, "frames", 24, im.GRID_MINIMAX)[0] == 22   # nearer 22 than 39
+    assert im.bridge_length(0, 31, "frames", 24, im.GRID_MINIMAX)[0] == 39   # nearer 39 than 22
+    assert im.bridge_length(0, 0, "frames", 24, im.GRID_MINIMAX)[0] == 5
+    # none: exact, floored at 3 so Recombine's anchor drop leaves a frame.
+    assert im.bridge_length(0, 36, "frames", 24, im.GRID_NONE)[0] == 36
+    assert im.bridge_length(0, 1, "frames", 24, im.GRID_NONE)[0] == 3
+    # The default and an explicit LTX grid agree.
+    assert im.bridge_length(0, 36, "frames", 24, im.GRID_LTX)[0] == im.bridge_length(0, 36, "frames", 24)[0] == 33
+
+
 def test_precedence():
     assert im.resolve_join(50, None) == (50, None)
     assert im.resolve_join(50, 50) == (50, None)

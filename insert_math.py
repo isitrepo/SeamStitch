@@ -54,9 +54,34 @@ def snap_8n1(frames):
     return lo if (n - lo) < (hi - n) else hi
 
 
-def bridge_length(duration_sec, duration_frames, display_mode, frame_rate):
-    """Editable bridge length -> (frame_count, duration_sec) on the 8n+1 grid."""
+def snap_17n5(frames):
+    """Nearest 17n+5 frame count (MiniMax H3 grid), floored at 5. Ties go up."""
+    n = max(5, int(round(frames)))
+    lo = ((n - 5) // 17) * 17 + 5
+    hi = lo + 17
+    return lo if (n - lo) < (hi - n) else hi
+
+
+GRID_LTX = "ltx (8k+1)"
+GRID_MINIMAX = "minimax (17k+5)"
+GRID_NONE = "none"
+
+
+def snap_to_grid(frames, grid):
+    """Nearest valid length on the Loader's bridge_frame_grid. 'none' keeps the
+    exact count, floored at 3 - Recombine's insert mode drops the first and last
+    frame, so it needs at least one left over."""
+    if grid == GRID_MINIMAX:
+        return snap_17n5(frames)
+    if grid == GRID_NONE:
+        return max(3, int(round(frames)))
+    return snap_8n1(frames)
+
+
+def bridge_length(duration_sec, duration_frames, display_mode, frame_rate, grid=GRID_LTX):
+    """Editable bridge length -> (frame_count, duration_sec), snapped to the
+    nearest length on `grid` (LTX 8n+1 by default)."""
     fr = float(frame_rate) if frame_rate > 0 else 24.0
     raw = duration_frames if display_mode == "frames" else duration_sec * fr
-    n = snap_8n1(raw)
+    n = snap_to_grid(raw, grid)
     return n, n / fr
