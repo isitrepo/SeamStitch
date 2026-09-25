@@ -1,7 +1,48 @@
 # Changelog
 
-Everything headed `0.2.0` below is committed as version `0.2.0` but **not published** — no push,
-no tag, no GitHub release. `v0.1.0` is the latest public release.
+Everything headed `0.2.0` or `0.3.0` below is committed but **not published** — no push, no tag,
+no GitHub release. `v0.1.0` is the latest public release.
+
+## 0.3.0 — motion guides (`context_frames`, `SeamStitchLTXGuides`) — in testing
+
+**Why.** On real footage (`None_00006.mp4`, range 113–137, LTX-2.5, 2026-09-25) the bridge
+reached its pinned last frame nearly still — steps of 0.3–3 over its last 12 frames — and then
+clip B carried on at 10–20 per frame, a jump of 18–24 at the join against the source's own 14.1.
+A single last-frame guide pins *where* the bridge ends, not how fast it is moving there.
+
+**Loader — `context_frames`** (widget, appended last; replace mode only). K > 0 adds three
+outputs, also appended last: `start_context` (real frames `[start_frame-K, start_frame-1]`),
+`end_context` (`[end_frame+1, end_frame+K]`) and `context_frames` (K). They are fetched in decode
+order relative to `start_frame` / `end_frame` — the convention Recombine cuts on, including on a
+stream that starts late, as Combine's output does — through the same decode path, so they get the
+gap's crop/resize/snap. `frame_count` becomes gap (+ extension) + 2K, always snapped up onto
+`bridge_frame_grid`. At K = 0 the new outputs are `first_frame` / `last_frame` and nothing else
+changes. The JS resets a non-numeric `context_frames` (an older save's positional `null`) to 0.
+
+**Recombine — `context_frames`** (widget, appended last). Drops K frames from each end of the
+regenerated clip before the dedup and carries the offset into the audio, as insert mode does for
+its one anchor frame each side. Refused together with `insert`.
+
+**New node — `SeamStitchLTXGuides`.** Pins `start_context` / `end_context` onto an LTX-2.x latent
+through core ComfyUI's own `LTXVAddGuide`, one single-frame guide per frame: `start_context[i]` at
+frame `i`, `end_context[j]` of K at `-(K-j)`. A multi-frame guide cannot do this — LTX puts a 9+
+frame guide only at frame 8n+1, which can never end on the last frame of an 8n+1-long video.
+Registered only if `comfy_extras.nodes_lt` imports.
+
+### Gate
+
+- `pytest tests/ -q` → **48 passed** (12 new): context frames match a plain decode-order walk on
+  both a t = 0 stream and the +31 ms offset one; `input_video` slices by index; grid and extension
+  arithmetic; the out-of-range errors name the clip length; Recombine lands only the bridge, with
+  the frames either side pixel-identical to the source, and bridge audio starting Q(K) samples in
+  (cross-correlation lag 0).
+- `SeamStitchLTXGuides` against ComfyUI's real `LTXVAddGuide` with a stand-in VAE: K = 4 on an
+  81-frame latent pins pixel frames **0, 1, 2, 3, 77, 78, 79, 80**, and `LTXVCropGuides` strips all
+  eight (19 latent frames back to 11).
+- Sandbox ComfyUI (`--cpu`, isolated dirs, port 8295): all four node IDs register, no import
+  failure. Loader and Recombine diagrams regenerated from its `/object_info`.
+- **Not yet verified: a real render.** Whether pinned context actually removes the stop-start at
+  the join is the open question this version exists to answer.
 
 ## 0.2.0 — Recombine keeps the source's resolution; its crop widgets removed (breaking)
 

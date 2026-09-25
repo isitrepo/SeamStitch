@@ -186,6 +186,18 @@ def _resolve_video_path(video):
     return None
 
 
+def _stream_timing(path):
+    """(duration_s, start_time_s) of a file's first video stream. start_time is not
+    always 0 - SeamStitchCombine's own output starts +31 ms late - and frame indices
+    are decode order, counted from the stream's own first frame."""
+    with av.open(path) as c:
+        vs = c.streams.video[0]
+        dur = float(vs.duration * vs.time_base) if vs.duration and vs.time_base else (
+            float(c.duration) / av.time_base if c.duration else 0.0)
+        base = float(vs.start_time * vs.time_base) if vs.start_time is not None and vs.time_base else 0.0
+    return dur, base
+
+
 def _list_input_videos():
     input_dir = folder_paths.get_input_directory()
     files = []
@@ -298,6 +310,18 @@ class SeamStitchLoader:
                 "trim_each_side": ("INT", {"default": 0, "min": 0, "max": 100000, "step": 1, "tooltip":
                     "Insert mode only. Frames removed either side of the join. 0 removes "
                     "nothing; N removes [join-N, join+N-1]."}),
+                # Appended last for the same positional-widget-values reason as above.
+                "context_frames": ("INT", {"default": 0, "min": 0, "max": 64, "step": 1, "tooltip":
+                    "Replace mode only. Motion guides: K > 0 hands the generator K real "
+                    "frames either side of the cut as well as the gap - start_context is "
+                    "[start_frame-K, start_frame-1], end_context is [end_frame+1, end_frame+K], "
+                    "decoded exactly as Recombine cuts. frame_count grows by 2K (snapped to "
+                    "bridge_frame_grid) so the bridge is generated as K context + gap + K "
+                    "context; wire the context_frames output into SeamStitchRecombine, which "
+                    "drops the K context frames from each end again. Pinning several real "
+                    "frames tells the model how fast things are moving at each join, not just "
+                    "where they are. 0 (default): start_context/end_context are just "
+                    "first_frame/last_frame and nothing else changes."}),
             },
             "optional": {
                 "seam_frame": ("INT", {"forceInput": True, "tooltip": "Insert mode only. Wire SeamStitchCombine's seam_frame here; it overrides join_frame."}),
@@ -306,8 +330,8 @@ class SeamStitchLoader:
             },
         }
 
-    RETURN_TYPES = ("IMAGE", "AUDIO", "FLOAT", "INT", "STRING", "IMAGE", "IMAGE", "STRING", "INT", "INT", "INT", "INT", "INT", "AUDIO", "BOOLEAN")
-    RETURN_NAMES = ("images", "audio", "duration", "frame_count", "filename", "first_frame", "last_frame", "source_video_path", "start_frame", "end_frame", "frame_rate", "width", "height", "full_clip_audio", "insert")
+    RETURN_TYPES = ("IMAGE", "AUDIO", "FLOAT", "INT", "STRING", "IMAGE", "IMAGE", "STRING", "INT", "INT", "INT", "INT", "INT", "AUDIO", "BOOLEAN", "IMAGE", "IMAGE", "INT")
+    RETURN_NAMES = ("images", "audio", "duration", "frame_count", "filename", "first_frame", "last_frame", "source_video_path", "start_frame", "end_frame", "frame_rate", "width", "height", "full_clip_audio", "insert", "start_context", "end_context", "context_frames")
     FUNCTION = "load_video"
     CATEGORY = "SeamStitch"
 
@@ -348,7 +372,17 @@ class SeamStitchLoader:
         remainder = (n - 1) % 8
         return n if remainder == 0 else n + (8 - remainder)
 
-    def load_video(self, video, frame_rate, display_mode, start_time, end_time, duration, start_frame, end_frame, duration_frames, custom_width=0, custom_height=0, resize_method="maintain aspect ratio", crop_x=0.0, crop_y=0.0, crop_w=1.0, crop_h=1.0, save_first_frame=False, save_last_frame=False, snap_to_multiple=32, extend_bridge=False, extend_amount=0.0, extend_unit="seconds", bridge_frame_grid="ltx (8k+1)", mode=insert_math.MODE_REPLACE, join_frame=0, trim_each_side=0, seam_frame=None, input_video=None, input_audio=None, **kwargs):
+    def load_video(self, video, frame_rate, display_mode, start_time, end_time, duration, start_frame, end_frame, duration_frames, custom_width=0, custom_height=0, resize_method="maintain aspect ratio", crop_x=0.0, crop_y=0.0, crop_w=1.0, crop_h=1.0, save_first_frame=False, save_last_frame=False, snap_to_multiple=32, extend_bridge=False, extend_amount=0.0, extend_unit="seconds", bridge_frame_grid="ltx (8k+1)", mode=insert_math.MODE_REPLACE, join_frame=0, trim_each_side=0, seam_frame=None, input_video=None, input_audio=None, context_frames=0, **kwargs):
+        if int(context_frames or 0) > 0:
+            if mode == insert_math.MODE_INSERT:
+                raise ValueError("context_frames is replace mode only - insert mode already pins "
+                                 "one kept frame either side of the join (its anchors). Set "
+                                 "context_frames to 0, or mode to 'replace range'.")
+            call = dict(locals())
+            for name in ("self", "kwargs"):
+                call.pop(name)
+            call["context_frames"] = 0
+            return self._with_context(self.load_video(**call, **kwargs), call, int(context_frames))
         skip_full_audio = kwargs.pop("_skip_full_audio", False)
         if mode == insert_math.MODE_INSERT:
             return self._load_insert(
@@ -369,7 +403,8 @@ class SeamStitchLoader:
             # Return blank defaults if no video is loaded
             empty_image = torch.zeros((1, 512, 512, 3), dtype=torch.float32)
             empty_audio = {"waveform": torch.zeros((1, 1, 44100)), "sample_rate": 44100}
-            return (empty_image, empty_audio, 0.0, 0, "", empty_image.clone(), empty_image.clone(), "", 0, 0, int(frame_rate), 512, 512, empty_audio.copy(), False)
+            return (empty_image, empty_audio, 0.0, 0, "", empty_image.clone(), empty_image.clone(), "", 0, 0, int(frame_rate), 512, 512, empty_audio.copy(), False,
+                    empty_image.clone(), empty_image.clone(), 0)
 
         # 1. Resolve path using ComfyUI standard paths or Absolute Path
         video_path = video  # Try exact/absolute path first
@@ -776,7 +811,8 @@ class SeamStitchLoader:
         out_frame_count = self._extended_frame_count(frame_count, int(frame_rate),
                                                        extend_bridge, extend_amount, extend_unit, bridge_frame_grid)
         out_duration = final_duration_sec if not extend_bridge else out_frame_count / (frame_rate if frame_rate > 0 else 24)
-        return (image_tensor, audio_dict, out_duration, out_frame_count, os.path.basename(video), first_frame, last_frame, video_path, start_frame_idx, end_frame_idx, int(frame_rate), out_width, out_height, full_clip_audio_dict, False)
+        return (image_tensor, audio_dict, out_duration, out_frame_count, os.path.basename(video), first_frame, last_frame, video_path, start_frame_idx, end_frame_idx, int(frame_rate), out_width, out_height, full_clip_audio_dict, False,
+                first_frame, last_frame, 0)
 
     def _load_insert(self, video, frame_rate, display_mode, start_time, end_time, duration,
                      start_frame, end_frame, duration_frames, custom_width, custom_height,
@@ -800,12 +836,7 @@ class SeamStitchLoader:
             path = _resolve_video_path(video) if video and video != "none" else None
             if not path:
                 raise FileNotFoundError(f"Video file not found: {video}")
-            with av.open(path) as c:
-                vs = c.streams.video[0]
-                dur = float(vs.duration * vs.time_base) if vs.duration and vs.time_base else (
-                    float(c.duration) / av.time_base if c.duration else 0.0)
-                if vs.start_time is not None and vs.time_base:
-                    base_time = float(vs.start_time * vs.time_base)
+            dur, base_time = _stream_timing(path)
             clip_frames = int(round(dur * fr))
 
         plan = insert_math.plan_insert(join, trim_each_side, clip_frames)
@@ -876,7 +907,62 @@ class SeamStitchLoader:
 
         return (images, audio_stub, out_duration, frame_count, label, first_frame, last_frame,
                 b[7], plan["start_frame"], plan["end_frame"], int(frame_rate), b[11], b[12],
-                b[13], True)
+                b[13], True, first_frame, last_frame, 0)
+
+    def _with_context(self, res, call, k):
+        """Replace mode with motion guides: add K real frames either side of the cut.
+
+        `res` is the ordinary replace-mode result for the same widgets. The context
+        frames are fetched in DECODE order relative to its start_frame/end_frame - the
+        convention SeamStitchRecombine cuts on - through the same decode path, so they
+        get exactly the crop/resize/snap the gap frames got."""
+        sf, ef, fr_i = int(res[8]), int(res[9]), int(res[10])
+        fr = float(fr_i) if fr_i > 0 else 24.0
+        gap = int(res[0].shape[0])
+        common = dict(call, extend_bridge=False, save_first_frame=False, save_last_frame=False)
+
+        if call.get("input_video") is not None:
+            clip_frames = int(call["input_video"].shape[0])
+
+            def fetch(a):
+                return self.load_video(**dict(common, display_mode="frames", start_frame=a,
+                                              end_frame=a + k))[0]
+        else:
+            path = res[7]
+            dur, base = _stream_timing(path)
+            clip_frames = int(round(dur * fr))
+
+            def fetch(a):
+                # Same thousandth-of-a-frame tolerance as _load_insert's anchors and
+                # recombine._decode_range, so a pts landing a hair early is not skipped.
+                t0 = max(0.0, base + a / fr - 1e-3 / fr)
+                return self.load_video(**dict(common, display_mode="seconds", start_time=t0,
+                                              end_time=t0 + k / fr), _skip_full_audio=True)[0]
+
+        if sf - k < 0 or ef + k > clip_frames - 1:
+            raise ValueError(
+                f"context_frames {k} needs frames {sf - k}..{sf - 1} before the range and "
+                f"{ef + 1}..{ef + k} after it, but the clip has {clip_frames} frames "
+                f"(0..{clip_frames - 1}) at {fr_i} fps. Lower context_frames or move the range "
+                f"away from the clip's ends.")
+
+        start_ctx, end_ctx = fetch(sf - k), fetch(ef + 1)
+        for name, got in (("start_context", start_ctx), ("end_context", end_ctx)):
+            if got.shape[0] != k:
+                raise RuntimeError(f"{name}: decoded {got.shape[0]} frame(s), expected {k}")
+
+        # frame_count covers context + gap (+ extension) + context, always snapped onto
+        # the generator's grid - the model has to be asked for a length it accepts.
+        ext_frames = 0.0
+        if call.get("extend_bridge"):
+            amount = float(call.get("extend_amount") or 0.0)
+            ext_frames = amount * fr if call.get("extend_unit") == "seconds" else amount
+        count = self._extended_frame_count(gap + 2 * k, fr_i, True, ext_frames, "frames",
+                                           call.get("bridge_frame_grid", "ltx (8k+1)"))
+        print(f"[SeamStitch] Motion guides: {k} context frame(s) each side - start_context "
+              f"{sf - k}..{sf - 1}, end_context {ef + 1}..{ef + k}; generate {count} frames "
+              f"({k} + {count - 2 * k} + {k}). Wire context_frames into SeamStitchRecombine.")
+        return res[:2] + (count / fr, count) + res[4:15] + (start_ctx, end_ctx, k)
 
     @staticmethod
     def _resize_batch(images, w, h):
@@ -1005,4 +1091,4 @@ class SeamStitchLoader:
         out_duration = final_duration_sec if not extend_bridge else out_frame_count / fr
         return (image_tensor, audio_dict, out_duration, out_frame_count, os.path.basename(label),
                 first_frame, last_frame, source_video_path, s_idx, s_idx + frame_count - 1, int(frame_rate),
-                out_width, out_height, full_clip_audio_dict, False)
+                out_width, out_height, full_clip_audio_dict, False, first_frame, last_frame, 0)

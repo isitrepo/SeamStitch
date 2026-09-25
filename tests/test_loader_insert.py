@@ -113,7 +113,7 @@ def test_insert_anchors_match_independent_decode(loader_mod):
     join = 40
     res = node.load_video(path, 24, "seconds", 0.0, 0.0, 2.0, 0, 0, 0, snap_to_multiple=0,
                           mode="insert at join", join_frame=join, trim_each_side=0)
-    images, audio, dur, count, _, first, last, _, sf, ef, fr, w, h, full, insert = res
+    images, audio, dur, count, _, first, last, _, sf, ef, fr, w, h, full, insert = res[:15]
     assert insert is True and images.shape[0] == 2
     assert (sf, ef) == (join, join - 1)
     assert count == 49 and dur == pytest.approx(49 / 24)
@@ -199,7 +199,7 @@ def test_insert_anchors_are_decode_order_on_an_offset_stream(offset_clip, loader
     join = 40
     res = node.load_video(path, 48, "frames", 0.0, 0.0, 0.0, 0, 0, 33, snap_to_multiple=0,
                           mode="insert at join", join_frame=join, trim_each_side=0)
-    images, _, _, count, _, first, last, _, sf, ef, _, _, _, _, insert = res
+    images, _, _, count, _, first, last, _, sf, ef, _, _, _, _, insert = res[:15]
     assert insert is True and (sf, ef) == (join, join - 1) and count == 33
 
     # Decode order, straight off the container - no timestamps involved at all.
@@ -218,3 +218,95 @@ def test_insert_anchors_are_decode_order_on_an_offset_stream(offset_clip, loader
     # And the two anchors must actually be different frames, which is the symptom
     # that reached the render: a freeze is what you get when they are the same.
     assert np.abs(first[0].numpy() - last[0].numpy()).mean() > 0.0
+
+
+# --- Motion guides: context_frames (replace mode) ---
+
+def _decode_order(path, indices):
+    import av
+    import numpy as np
+    want = {}
+    with av.open(path) as c:
+        for i, f in enumerate(c.decode(c.streams.video[0])):
+            if i in indices:
+                want[i] = f.to_ndarray(format="rgb24").astype(np.float32) / 255.0
+            if i > max(indices):
+                break
+    return want
+
+
+@pytest.mark.parametrize("which", ["plain", "offset"])
+def test_context_frames_are_decode_order_either_side_of_the_range(which, offset_clip, loader_mod):
+    """start_context = [sf-K, sf-1], end_context = [ef+1, ef+K], in decode order -
+    the frames SeamStitchRecombine keeps either side of the cut - including on a
+    stream that starts late, as SeamStitchCombine's output does."""
+    import numpy as np
+    path = offset_clip[0] if which == "offset" else os.path.join(VIDS, "4.mp4")
+    node = loader_mod.SeamStitchLoader()
+    k, sf, ef = 4, 30, 54                      # a 25-frame gap at 48 fps
+    res = node.load_video(path, 48, "frames", 0.0, 0.0, 0.0, sf, ef + 1, 0, snap_to_multiple=0,
+                          context_frames=k)
+    assert len(res) == 18
+    images, count, got_sf, got_ef, start_ctx, end_ctx, got_k = (res[0], res[3], res[8], res[9],
+                                                                res[15], res[16], res[17])
+    assert got_k == k and images.shape[0] == got_ef - got_sf + 1
+    assert start_ctx.shape[0] == k and end_ctx.shape[0] == k
+    gap = images.shape[0]
+    assert count >= gap + 2 * k and (count - 1) % 8 == 0 and count - (gap + 2 * k) < 8
+    want = _decode_order(path, set(range(got_sf - k, got_sf)) | set(range(got_ef + 1, got_ef + 1 + k)))
+    for i in range(k):
+        for got, idx in ((start_ctx[i], got_sf - k + i), (end_ctx[i], got_ef + 1 + i)):
+            diff = np.abs(got.numpy() - want[idx]).max()
+            assert diff < 3 / 255.0, f"context frame for decode index {idx} is off (max diff {diff})"
+
+
+def test_context_zero_is_first_and_last_frame(loader_mod):
+    import torch
+    path = os.path.join(VIDS, "4.mp4")
+    if not os.path.exists(path):
+        pytest.skip(f"missing {path}")
+    res = loader_mod.SeamStitchLoader().load_video(path, 24, "frames", 0.0, 0.0, 0.0, 10, 20, 0,
+                                                   snap_to_multiple=0)
+    assert res[17] == 0
+    assert torch.equal(res[15], res[5]) and torch.equal(res[16], res[6])
+
+
+def test_context_from_input_video_slices_by_index(loader_mod):
+    import torch
+    frames = torch.stack([torch.full((8, 8, 3), i / 100.0) for i in range(60)])
+    res = loader_mod.SeamStitchLoader().load_video(
+        "none", 24, "frames", 0.0, 0.0, 0.0, 20, 30, 0, snap_to_multiple=0,
+        input_video=frames, context_frames=3)
+    sf, ef = res[8], res[9]
+    assert (sf, ef) == (20, 29)
+    assert [round(float(f[0, 0, 0]) * 100) for f in res[15]] == [17, 18, 19]
+    assert [round(float(f[0, 0, 0]) * 100) for f in res[16]] == [30, 31, 32]
+    assert res[3] == 17          # 10 + 2*3 = 16 -> 17 on the LTX grid
+
+
+def test_context_extend_and_grid(loader_mod):
+    import torch
+    frames = torch.zeros((200, 8, 8, 3))
+    res = loader_mod.SeamStitchLoader().load_video(
+        "none", 24, "frames", 0.0, 0.0, 0.0, 50, 75, 0, snap_to_multiple=0, input_video=frames,
+        context_frames=4, extend_bridge=True, extend_amount=1.0, extend_unit="seconds")
+    assert res[3] == 57          # 25 gap + 24 extension + 8 context = 57, already 8k+1
+    assert res[2] == pytest.approx(57 / 24)
+
+
+@pytest.mark.parametrize("sf,ef,k", [(2, 20, 3), (50, 58, 2)])
+def test_context_out_of_range_names_clip_length(loader_mod, sf, ef, k):
+    import torch
+    frames = torch.zeros((60, 8, 8, 3))
+    with pytest.raises(ValueError, match="60 frames"):
+        loader_mod.SeamStitchLoader().load_video(
+            "none", 24, "frames", 0.0, 0.0, 0.0, sf, ef + 1, 0, snap_to_multiple=0,
+            input_video=frames, context_frames=k)
+
+
+def test_context_refused_in_insert_mode(loader_mod):
+    import torch
+    with pytest.raises(ValueError, match="replace mode only"):
+        loader_mod.SeamStitchLoader().load_video(
+            "none", 24, "frames", 0.0, 0.0, 0.0, 0, 0, 33, input_video=torch.zeros((60, 8, 8, 3)),
+            mode="insert at join", join_frame=30, context_frames=2)

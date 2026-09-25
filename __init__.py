@@ -25,6 +25,15 @@ try:
 except ImportError as e:
     logging.getLogger(__name__).warning(f"[SeamStitch] SeamStitchRecombine not loaded: {e}")
 
+# SeamStitchLTXGuides wraps core ComfyUI's own LTXVAddGuide (comfy_extras.nodes_lt);
+# a ComfyUI too old to have LTX support drops only this node.
+try:
+    from .ltx_guides import SeamStitchLTXGuides
+    NODE_CLASS_MAPPINGS["SeamStitchLTXGuides"] = SeamStitchLTXGuides
+    NODE_DISPLAY_NAME_MAPPINGS["SeamStitchLTXGuides"] = "SeamStitch LTX Guides"
+except ImportError as e:
+    logging.getLogger(__name__).warning(f"[SeamStitch] SeamStitchLTXGuides not loaded: {e}")
+
 WEB_DIRECTORY = "js"
 
 __all__ = ["NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS", "WEB_DIRECTORY"]
