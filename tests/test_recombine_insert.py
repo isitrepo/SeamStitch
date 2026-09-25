@@ -168,7 +168,7 @@ def node_v010(custom_nodes, tmp_path_factory):
 def ref(node, media):
     """Every source frame as the node itself decodes it - the ground truth the
     output frames are compared against, so codec loss cancels out."""
-    frames = node._decode_range(media["path"], FPS, 0, None, W, H)
+    frames = node._decode_range(media["path"], FPS, 0, None)
     assert frames.shape[0] == NSRC, frames.shape
     flat = frames.reshape(NSRC, -1)
     assert len({bytes(f.numpy().tobytes()) for f in flat}) == NSRC, "fingerprints collide"
@@ -486,3 +486,28 @@ def test_replace_mode_identical_to_v0_1_0(node, node_v010, media, ref, audio_mod
     assert torch.equal(new_aud["waveform"], old_aud["waveform"]), "audio samples changed"
     print(f"replace/{audio_mode}: {new_img.shape[0]} frames, picture sha256 {h_new[:16]}…, "
           f"{new_aud['waveform'].shape[-1]} audio samples - identical to v0.1.0")
+
+
+# ---------------------------------------------------------------------------
+# The source is the resolution ground truth
+# ---------------------------------------------------------------------------
+def test_output_is_always_the_source_resolution(node, media, ref, capsys):
+    """A regenerated segment at another size is resized onto the source; the
+    untouched footage either side comes through pixel-for-pixel."""
+    small = torch.nn.functional.interpolate(
+        _bridge_images(ref, 9, 20, 9).permute(0, 3, 1, 2), size=(32, 32), mode="area"
+    ).permute(0, 2, 3, 1)
+    img, _ = _call(node, media, images=small, start=10, end=20, insert=False)
+    assert tuple(img.shape[1:3]) == (H, W)
+    assert img.shape[0] == NSRC
+    assert torch.equal(img[:10], _f32(ref[:10]))
+    assert torch.equal(img[21:], _f32(ref[21:]))
+    out = capsys.readouterr().out
+    assert "resizing the 11 regenerated frame(s)" in out and "Warning" not in out
+
+
+def test_aspect_mismatch_is_called_out(node, media, ref, capsys):
+    wide = torch.zeros((11, 32, 64, 3), dtype=torch.float32)
+    img, _ = _call(node, media, images=wide, start=10, end=20, insert=False)
+    assert tuple(img.shape[1:3]) == (H, W)
+    assert "aspect ratio differs by" in capsys.readouterr().out

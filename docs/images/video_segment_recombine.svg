@@ -1,6 +1,6 @@
-<svg width="620" height="565" viewBox="0 0 620 565" xmlns="http://www.w3.org/2000/svg" font-family="Segoe UI, Helvetica, Arial, sans-serif">
-<rect x="0" y="0" width="620" height="565" fill="#1a1a1a"/>
-<rect x="24" y="10" width="572" height="545" rx="10" fill="#2a2a2a" stroke="#454545" stroke-width="1.5"/>
+<svg width="620" height="469" viewBox="0 0 620 469" xmlns="http://www.w3.org/2000/svg" font-family="Segoe UI, Helvetica, Arial, sans-serif">
+<rect x="0" y="0" width="620" height="469" fill="#1a1a1a"/>
+<rect x="24" y="10" width="572" height="449" rx="10" fill="#2a2a2a" stroke="#454545" stroke-width="1.5"/>
 <path d="M 24 40 Q 24 10 34 10 L 586 10 Q 596 10 596 40 Z" fill="#a15a2f"/>
 <text x="38" y="30" fill="#ffffff" font-size="14" font-weight="600">SeamStitch Recombine</text>
 <rect x="25" y="39" width="570" height="24" fill="#242424" opacity="0.4"/>
@@ -51,30 +51,16 @@
 <text x="578" y="328" fill="#e8e8e8" font-size="11" text-anchor="end">True</text>
 <rect x="25" y="336" width="570" height="24" fill="#242424" opacity="0.4"/>
 <rect x="34" y="339" width="552" height="19" rx="4" fill="#3a3a3a" stroke="#555" stroke-width="1"/>
-<text x="42" y="352" fill="#9a9a9a" font-size="11">crop_x</text>
-<text x="578" y="352" fill="#e8e8e8" font-size="11" text-anchor="end">0.0</text>
+<text x="42" y="352" fill="#9a9a9a" font-size="11">audio_mode</text>
+<text x="578" y="352" fill="#e8e8e8" font-size="11" text-anchor="end">original</text>
 <rect x="34" y="363" width="552" height="19" rx="4" fill="#3a3a3a" stroke="#555" stroke-width="1"/>
-<text x="42" y="376" fill="#9a9a9a" font-size="11">crop_y</text>
-<text x="578" y="376" fill="#e8e8e8" font-size="11" text-anchor="end">0.0</text>
+<text x="42" y="376" fill="#9a9a9a" font-size="11">audio_crossfade_ms</text>
+<text x="578" y="376" fill="#e8e8e8" font-size="11" text-anchor="end">20.0</text>
 <rect x="25" y="384" width="570" height="24" fill="#242424" opacity="0.4"/>
 <rect x="34" y="387" width="552" height="19" rx="4" fill="#3a3a3a" stroke="#555" stroke-width="1"/>
-<text x="42" y="400" fill="#9a9a9a" font-size="11">crop_w</text>
-<text x="578" y="400" fill="#e8e8e8" font-size="11" text-anchor="end">1.0</text>
+<text x="42" y="400" fill="#9a9a9a" font-size="11">audio_bridge_weight</text>
+<text x="578" y="400" fill="#e8e8e8" font-size="11" text-anchor="end">0.35</text>
 <rect x="34" y="411" width="552" height="19" rx="4" fill="#3a3a3a" stroke="#555" stroke-width="1"/>
-<text x="42" y="424" fill="#9a9a9a" font-size="11">crop_h</text>
-<text x="578" y="424" fill="#e8e8e8" font-size="11" text-anchor="end">1.0</text>
-<rect x="25" y="432" width="570" height="24" fill="#242424" opacity="0.4"/>
-<rect x="34" y="435" width="552" height="19" rx="4" fill="#3a3a3a" stroke="#555" stroke-width="1"/>
-<text x="42" y="448" fill="#9a9a9a" font-size="11">audio_mode</text>
-<text x="578" y="448" fill="#e8e8e8" font-size="11" text-anchor="end">original</text>
-<rect x="34" y="459" width="552" height="19" rx="4" fill="#3a3a3a" stroke="#555" stroke-width="1"/>
-<text x="42" y="472" fill="#9a9a9a" font-size="11">audio_crossfade_ms</text>
-<text x="578" y="472" fill="#e8e8e8" font-size="11" text-anchor="end">20.0</text>
-<rect x="25" y="480" width="570" height="24" fill="#242424" opacity="0.4"/>
-<rect x="34" y="483" width="552" height="19" rx="4" fill="#3a3a3a" stroke="#555" stroke-width="1"/>
-<text x="42" y="496" fill="#9a9a9a" font-size="11">audio_bridge_weight</text>
-<text x="578" y="496" fill="#e8e8e8" font-size="11" text-anchor="end">0.35</text>
-<rect x="34" y="507" width="552" height="19" rx="4" fill="#3a3a3a" stroke="#555" stroke-width="1"/>
-<text x="42" y="520" fill="#9a9a9a" font-size="11">insert</text>
-<text x="578" y="520" fill="#e8e8e8" font-size="11" text-anchor="end">False</text>
+<text x="42" y="424" fill="#9a9a9a" font-size="11">insert</text>
+<text x="578" y="424" fill="#e8e8e8" font-size="11" text-anchor="end">False</text>
 </svg>
