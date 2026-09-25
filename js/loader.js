@@ -56,13 +56,14 @@ app.registerExtension({
                     onConfigure.apply(this, arguments);
                 }
 
-                // Workflows saved before insert mode restore widget values by position, so
-                // mode/join_frame/trim_each_side can receive the button's null or the
-                // VideoUI widget's '' - reset anything that is not valid to its default.
+                // Workflows saved before insert mode (or before context_frames) restore
+                // widget values by position, so mode/join_frame/trim_each_side/context_frames
+                // can receive the button's null or the VideoUI widget's '' - reset anything
+                // that is not valid to its default.
                 if (this.widgets) {
                     const mw = this.widgets.find(w => w.name === "mode");
                     if (mw && mw.value !== "replace range" && mw.value !== "insert at join") mw.value = "replace range";
-                    for (const name of ["join_frame", "trim_each_side"]) {
+                    for (const name of ["join_frame", "trim_each_side", "context_frames"]) {
                         const w = this.widgets.find(x => x.name === name);
                         if (w && !(typeof w.value === "number" && Number.isFinite(w.value))) w.value = 0;
                     }

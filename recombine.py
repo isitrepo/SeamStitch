@@ -470,6 +470,9 @@ class SeamStitchRecombine:
                                        "tooltip": "Only used when audio_mode is 'combined'. How loud bridge_audio is mixed on top of the original gap audio (0 = original only, 1 = bridge at its native level added on top). Values above 1 amplify bridge_audio before mixing, in case its native level is too quiet to hear under the original gap audio. The mix is clamped to avoid clipping."}),
                 "insert": ("BOOLEAN", {"default": False,
                            "tooltip": "Off (default): the regenerated frames REPLACE source frames [start_frame, end_frame]. On: they are INSERTED between two kept frames and nothing is removed - wire this from SeamStitchLoader's 'insert' output. In insert mode end_frame may be start_frame - 1 (an empty range, nothing removed at all), the bridge's first and last frame are always dropped because they duplicate the kept frames either side of the join, and the audio under the inserted frames is bridge_audio when wired and silence otherwise - never the source's own audio, which belongs to frames that are still in the output."}),
+                # Appended last, for the positional widget_values reason above.
+                "context_frames": ("INT", {"default": 0, "min": 0, "max": 64, "step": 1,
+                                   "tooltip": "Motion guides: wire SeamStitchLoader's context_frames output here. The regenerated clip was generated as K real context frames + the bridge + K real context frames; the K at each end are dropped (they are source frames still in the output), and only the bridge between them is spliced in. 0 (default): nothing is dropped. Replace mode only."}),
             },
             "hidden": {
                 "prompt": "PROMPT",
@@ -487,7 +490,7 @@ class SeamStitchRecombine:
                   frame_rate, dedup_threshold, max_dedup_frames, filename_prefix, format,
                   save_output=True, original_audio_override=None, bridge_audio=None,
                   audio_mode="original", audio_bridge_weight=0.35, audio_crossfade_ms=20.0,
-                  insert=False, prompt=None, extra_pnginfo=None, **kwargs):
+                  insert=False, context_frames=0, prompt=None, extra_pnginfo=None, **kwargs):
 
         if not original_video_path or not os.path.exists(original_video_path):
             raise FileNotFoundError(f"original_video_path not found: {original_video_path}")
@@ -510,12 +513,28 @@ class SeamStitchRecombine:
             regenerated = regenerated[..., :3]
         src_w, src_h = _source_size(original_video_path)
 
-        # 1a. Insert mode only: the bridge's first and last frame ARE the two kept
-        #     frames either side of the join - the generator was anchored on them.
-        #     Nothing was removed to make room, so emitting them would show each of
-        #     those frames twice. Drop them unconditionally, before the dedup, and
-        #     carry the offset into the audio so the sound is cut at the same frames.
+        # 1a. Frames the generator was pinned on that are still in the output as the
+        #     source's own frames get dropped, before the dedup, with the offset
+        #     carried into the audio so the sound is cut at the same frames:
+        #     - motion guides (context_frames = K): K real frames either side of the
+        #       replaced range were generated around the bridge; drop K from each end.
+        #     - insert mode: the bridge's first and last frame ARE the two kept frames
+        #       either side of the join; nothing was removed to make room, so emitting
+        #       them would show each of those frames twice.
         anchor_dropped = 0
+        k = int(context_frames or 0)
+        if k > 0:
+            if insert:
+                raise ValueError("context_frames is replace mode only - insert mode already drops "
+                                 "its one anchor frame each side. Set context_frames to 0 or insert off.")
+            if regenerated.shape[0] <= 2 * k:
+                raise ValueError(f"context_frames is {k}, so the regenerated clip needs more than "
+                                 f"{2 * k} frames (got {regenerated.shape[0]}): {k} context frames are "
+                                 f"dropped from each end")
+            regenerated = regenerated[k:-k]
+            anchor_dropped = k
+            print(f"[SeamStitch] Motion guides: dropped {k} context frame(s) from each end of the "
+                  f"regenerated clip; {regenerated.shape[0]} bridge frame(s) left.")
         if insert:
             if regenerated.shape[0] < 3:
                 raise ValueError(f"insert mode needs at least 3 regenerated frames (got "

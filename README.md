@@ -1,7 +1,7 @@
 # SeamStitch
 
-Three ComfyUI nodes for a "trim a broken segment out of a video, regenerate it, splice it back
-in seamlessly" workflow:
+ComfyUI nodes for a "trim a broken segment out of a video, regenerate it, splice it back
+in seamlessly" workflow — three core nodes, plus an LTX helper:
 
 - **SeamStitch Loader** (`SeamStitchLoader`) — scrub/trim a video with an interactive timeline,
   and get first/last frame outputs for first-last-frame (FLF) generation pipelines, plus
@@ -14,6 +14,8 @@ in seamlessly" workflow:
 - **SeamStitch Recombine** (`SeamStitchRecombine`) — splice a regenerated replacement segment
   back into the *original* video at the exact frame range it was cut from, then encode the
   result.
+- **SeamStitch LTX Guides** (`SeamStitchLTXGuides`) — pin the Loader's motion-guide frames onto
+  an LTX-2.x latent, one frame per guide (see *Motion guides* below).
 
 ![Recommended wiring between the three nodes](docs/images/wiring_overview.svg)
 
@@ -149,6 +151,31 @@ is a tiny stub, and `full_clip_audio` stays the real whole-file audio. Anchors g
 crop/resize/snap as replace-mode frames. The join must leave room for both anchors, otherwise the
 node raises naming the clip length.
 
+#### Motion guides — `context_frames` (replace mode)
+
+A first/last-frame model told only *where* each end of the bridge must be eases into its
+endpoint and stops, and then the real footage carries on at full speed: a visible "still, then
+suddenly moving" at the join. `context_frames` = K hands the generator K **real** frames either
+side of the cut as well, so it also knows how fast things are moving there.
+
+| Output | Notes |
+| --- | --- |
+| `start_context` | The K real frames just **before** the range: `[start_frame-K, start_frame-1]`. |
+| `end_context` | The K real frames just **after** it: `[end_frame+1, end_frame+K]`. |
+| `context_frames` | K. Wire it into `SeamStitchRecombine.context_frames`. |
+
+`frame_count` / `duration` grow by 2K (plus any `extend_bridge` extension) and are snapped up onto
+`bridge_frame_grid`, so wire `frame_count` straight into the generator's length. The bridge is
+generated as K context + the new frames + K context; Recombine drops the K context frames from
+each end again, so only the new frames land in place of `[start_frame, end_frame]`. The context
+frames are decoded in decode order, exactly as Recombine cuts, with the same crop/resize/snap as
+the gap. The clip needs K frames to spare either side of the range, or the node raises naming the
+clip length.
+
+With `context_frames` at 0 (default) nothing changes: `start_context` / `end_context` are just
+`first_frame` / `last_frame`, so **SeamStitch LTX Guides** can always be wired in. Replace mode
+only — insert mode already pins one kept frame each side.
+
 Based on [WhatDreamsCost-ComfyUI](https://github.com/WhatDreamsCost/WhatDreamsCost-ComfyUI)'s
 Load Video UI node, with the outputs above added on top for FLF/splice workflows.
 
@@ -253,10 +280,32 @@ Off, the node behaves exactly as it did in v0.1.0 whenever the regenerated frame
 source's size — verified frame-for-frame and sample-for-sample against the tag
 (`tests/test_recombine_insert.py`).
 
+#### `context_frames` — motion guides
+
+Wire it from **SeamStitch Loader**'s `context_frames` output. K > 0 drops K frames from each end
+of the regenerated clip before anything else — the real context frames it was generated around,
+which are still in the output as the source's own frames — and carries the offset into the audio
+so bridge audio stays on the picture. Replace mode only. 0 (default) drops nothing.
+
 **Scope vs. the real VHS_VideoCombine:** video formats only (no gif/webp — pipe
 `combined_images` into a stock `VHS_VideoCombine` afterward for that), no per-format extra
 widgets, no meta-batch/VAE-latent support. This is a full standalone fork focused on the splice
 logic, not a wrapper around the stock node.
+
+### SeamStitch LTX Guides
+
+For LTX-2.x first/last-frame graphs. Takes `positive` / `negative` / `vae` / `latent` like
+`LTXVAddGuide`, plus the Loader's `start_context` and `end_context`, and pins every frame as its
+own single-frame guide: `start_context[i]` at frame `i`, the last `end_context` frame on the
+video's last frame and the rest just before it. It replaces the usual pair of `LTXVAddGuide`
+nodes (frame_idx 0 and -1) — at `context_frames` 0 it does exactly what that pair does. Downstream,
+`LTXVCropGuides` strips its guides like any others.
+
+Single-frame guides because LTX only accepts a 9+ frame guide starting at frame 8n+1, and on a
+video 8n+1 frames long no such guide can end on the last frame. `strength` applies to every
+pinned frame; `img_compression` runs `LTXVPreprocess` on each frame first (leave 0 if they already
+went through one). Wraps core ComfyUI's own `LTXVAddGuide`, so it needs a ComfyUI with LTX
+support; without it only this node is skipped at startup.
 
 ## Recommended wiring
 

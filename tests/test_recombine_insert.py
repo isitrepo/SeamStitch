@@ -511,3 +511,54 @@ def test_aspect_mismatch_is_called_out(node, media, ref, capsys):
     img, _ = _call(node, media, images=wide, start=10, end=20, insert=False)
     assert tuple(img.shape[1:3]) == (H, W)
     assert "aspect ratio differs by" in capsys.readouterr().out
+
+
+# ---------------------------------------------------------------------------
+# Motion guides: context_frames
+# ---------------------------------------------------------------------------
+def _call_ctx(node, media, images, start, end, k, **kw):
+    out = node.SeamStitchRecombine().recombine(
+        images, media["path"], start, end, FPS, 0.0, 6, "ss_test", "video/h264-mp4",
+        save_output=False, audio_crossfade_ms=FADE_MS, context_frames=k, **kw)
+    return out["result"][1], out["result"][2]
+
+
+@pytest.mark.parametrize("k", [1, 3])
+def test_context_frames_are_dropped_and_the_bridge_replaces_the_range(node, media, ref, k):
+    """Generated as K context + bridge + K context: only the bridge lands, in place of
+    [start, end], and everything either side is the source's own frames."""
+    start, end = 20, 29
+    inner = _bridge_images(ref, 0, 0, 12)[1:-1]
+    images = torch.cat([_f32(ref[start - k:start]), inner, _f32(ref[end + 1:end + 1 + k])])
+    img, aud = _call_ctx(node, media, images, start, end, k)
+    assert img.shape[0] == start + inner.shape[0] + (NSRC - end - 1)
+    assert torch.equal(img[:start], _f32(ref[:start]))
+    assert torch.equal(img[start + inner.shape[0]:], _f32(ref[end + 1:]))
+    got = img[start:start + inner.shape[0]].mul(255).round()
+    assert torch.equal(got, inner.mul(255).round())
+
+
+def test_context_frames_bridge_audio_starts_after_the_context(node, media, ref):
+    """Bridge audio runs on the generated clip's own timeline, so its first K frames
+    of sound belong to the dropped context: the gap must start Q(K) samples in."""
+    k, start, end = 3, 20, 29
+    inner = _bridge_images(ref, 0, 0, 12)[1:-1]
+    n = k + inner.shape[0] + k
+    images = torch.cat([_f32(ref[start - k:start]), inner, _f32(ref[end + 1:end + 1 + k])])
+    bridge = _bridge_audio(n)
+    _, aud = _call_ctx(node, media, images, start, end, k, audio_mode="bridge",
+                       bridge_audio=_audio_dict(bridge),
+                       original_audio_override=_audio_dict(media["audio"]))
+    out = aud["waveform"][0]
+    mid = q(start) + q(inner.shape[0] // 2) - 400
+    seg = out[0, mid:mid + 800]
+    lag, corr = _lag(seg, bridge[0], q(k) + q(inner.shape[0] // 2) - 400)
+    assert corr > 0.99 and lag == 0, (lag, corr)
+
+
+def test_context_frames_refused_with_insert_and_when_too_short(node, media, ref):
+    images = _bridge_images(ref, 19, 20, 5)
+    with pytest.raises(ValueError, match="replace mode only"):
+        _call_ctx(node, media, images, 20, 19, 2, insert=True)
+    with pytest.raises(ValueError, match="more than 6 frames"):
+        _call_ctx(node, media, images[:6], 20, 25, 3)
