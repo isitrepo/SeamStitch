@@ -16,6 +16,8 @@ in seamlessly" workflow — three core nodes, plus an LTX helper:
   result.
 - **SeamStitch LTX Guides** (`SeamStitchLTXGuides`) — pin the Loader's motion-guide frames onto
   an LTX-2.x latent, one frame per guide (see *Motion guides* below).
+- **SeamStitch MiniMax Guides** (`SeamStitchMiniMaxGuides`) — the same for a MiniMax H3 latent,
+  one single-frame anchor per frame or one clip anchor per side.
 
 ![Recommended wiring between the three nodes](docs/images/wiring_overview.svg)
 

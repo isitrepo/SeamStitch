@@ -34,6 +34,15 @@ try:
 except ImportError as e:
     logging.getLogger(__name__).warning(f"[SeamStitch] SeamStitchLTXGuides not loaded: {e}")
 
+# SeamStitchMiniMaxGuides wraps core ComfyUI's own MiniMaxH3AddGuide
+# (comfy_extras.nodes_minimax_h3); a ComfyUI without H3 support drops only this node.
+try:
+    from .minimax_guides import SeamStitchMiniMaxGuides
+    NODE_CLASS_MAPPINGS["SeamStitchMiniMaxGuides"] = SeamStitchMiniMaxGuides
+    NODE_DISPLAY_NAME_MAPPINGS["SeamStitchMiniMaxGuides"] = "SeamStitch MiniMax Guides"
+except ImportError as e:
+    logging.getLogger(__name__).warning(f"[SeamStitch] SeamStitchMiniMaxGuides not loaded: {e}")
+
 WEB_DIRECTORY = "js"
 
 __all__ = ["NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS", "WEB_DIRECTORY"]
