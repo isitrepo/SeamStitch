@@ -616,10 +616,17 @@ class SeamStitchLoader:
                 if pad_left > 0 or pad_top > 0 or pad_right > 0 or pad_bottom > 0:
                     frame_rgb = np.pad(frame_rgb, ((pad_top, pad_bottom), (pad_left, pad_right), (0, 0)), mode='constant', constant_values=0)
 
-                # Duplicate or skip frames perfectly based on timestamps to meet forced framerate.
-                # FIX: Use strictly less than (<) for actual_end_time to prevent the loop from fetching an extra +1 frame
-                # at the exact boundary of the duration slice!
-                while expected_target_time <= frame_time and expected_target_time < actual_end_time - 1e-5:
+                # Duplicate or skip frames based on timestamps to meet the forced framerate.
+                # Strictly less than actual_end_time, so the slice never fetches an extra
+                # frame at its exact end. Both comparisons carry a thousandth-of-a-frame
+                # tolerance and the target is derived from the frame count, never
+                # accumulated - recombine._decode_range's rule. Accumulating
+                # frame_interval drifted a hair past an exactly-equal frame time, which
+                # skipped that frame and doubled the next (frames 10..19 of a 24 fps clip
+                # came back 10, 12, 12, 13...), and dropped a range's final frame
+                # (20..29 came back as 20..28, end_frame one short).
+                tol = frame_interval * 1e-3
+                while expected_target_time <= frame_time + tol and expected_target_time < actual_end_time - tol:
                     if image_tensor is None and expected_frames > 0:
                         # First frame: allocate the tensor
                         height, width = frame_rgb.shape[:2]
@@ -647,7 +654,8 @@ class SeamStitchLoader:
                     if pbar:
                         pbar.update(1)
 
-                    expected_target_time += frame_interval
+                    emitted = frames_loaded if image_tensor is not None else len(frames)
+                    expected_target_time = actual_start_time + emitted * frame_interval
 
         # Convert frames to ComfyUI Image standard format [N, H, W, C], float32, range 0.0-1.0
         if image_tensor is not None:
