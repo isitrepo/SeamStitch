@@ -168,8 +168,11 @@ def resolve_target(target, cut):
             raise SequenceError(
                 "a bridged gap needs real footage on both sides (and trim_each_side frames more "
                 "on each) - move it between two clips")
+        # The gap on the strip is the number of NEW frames. The generator also renders
+        # the two kept frames either side (Recombine drops them again) and re-renders
+        # the trimmed ones, so it is asked for gap + 2*trim + 2.
         return {"mode": "insert at join", "start": join - trim, "end": join + trim - 1,
-                "join": join, "trim": trim, "length": g["frames"] + 2 * trim}
+                "join": join, "trim": trim, "length": g["frames"] + 2 * trim + 2}
     raise SequenceError("nothing is marked to regenerate - mark a range (I / O), click a seam and "
                         "pick 'bridge this cut', or open a gap")
 
