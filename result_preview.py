@@ -4,7 +4,7 @@ Wire Recombine's Filenames in, plus the Timeline's (or Loader's) source_video_pa
 start_frame / end_frame / frame_rate. After the run the node plays the result with
 the regenerated span marked, and rates each of its two joins:
 
-    ratio = the picture change across the join / the median change around it
+    ratio = the picture change across the join / the typical change around it
 
 on small grey thumbnails (codec noise averages out). ~1 means the join moves like
 the footage around it; a hard cut reads many times higher. The same measurement
@@ -15,10 +15,13 @@ hard cut 9.8x -> after: seamless 1.1x".
 its only clip, so the next splice starts from this one - one splice at a time,
 as many times as it takes.
 
-Thresholds (pixel domain): < 1.6 seamless, < 2.6 soft bump, else hard cut. They sit
-a little above obvpm-timeline's latent-domain 1.2 / 1.8 because a thumbnail diff
-of ordinary motion is noisier than a latent step; calibrated on the pack's real
-test footage (see tests/test_result_preview.py and docs/CHANGELOG.md).
+"Typical" is the 75th percentile of the frame-to-frame changes in the 24 frames
+either side, not the median: footage whose frames repeat in pairs (24 fps content
+in a 48 fps file - Test vids/1.mp4 is) has every other change near zero, so a
+median baseline called ordinary motion a 40x cut. With the 75th percentile the
+natural worst step of all four real test clips is 1.27-1.66x, and the 4.mp4 ->
+2.mp4 hard cut reads 6.5x. Thresholds (pixel domain): < 1.8 seamless, < 3.0 soft
+bump, else hard cut.
 """
 
 import os
@@ -32,7 +35,8 @@ try:
 except ImportError:
     import timeline as tl
 
-SEAMLESS, SOFT = 1.6, 2.6
+SEAMLESS, SOFT = 1.8, 3.0
+BASELINE_PCT = 75
 WINDOW = 24            # frames either side of a join used for the baseline
 THUMB_W = 96
 
@@ -56,7 +60,7 @@ def _thumbs(path, fr, start, end):
 
 
 def join_ratio(path, fr, join, window=WINDOW):
-    """Ratio of the change INTO frame `join` to the median change of the frames
+    """Ratio of the change INTO frame `join` to the typical (75th percentile) change of the frames
     around it. None when there is not enough footage either side."""
     s, th = _thumbs(path, fr, join - window, join + window)
     k = join - s
@@ -65,7 +69,7 @@ def join_ratio(path, fr, join, window=WINDOW):
     d = np.array([np.abs(th[i] - th[i - 1]).mean() for i in range(1, len(th))])
     step = float(d[k - 1])
     rest = np.delete(d, k - 1)
-    base = float(np.median(rest)) if rest.size else 0.0
+    base = float(np.percentile(rest, BASELINE_PCT)) if rest.size else 0.0
     return step / max(base, 0.5), step
 
 
@@ -81,7 +85,7 @@ def worst_in_range(path, fr, lo, hi, window=WINDOW):
     for j in range(max(lo, s + 1), min(hi + 1, s + len(th))):
         k = j - s
         rest = np.delete(d, k - 1)
-        r = float(d[k - 1]) / max(float(np.median(rest)), 0.5)
+        r = float(d[k - 1]) / max(float(np.percentile(rest, BASELINE_PCT)), 0.5)
         if best[0] is None or r > best[0]:
             best = (r, j)
     return best
@@ -110,6 +114,13 @@ def analyse(result, source, fr, start, end):
     for name, j in (("into the new frames", joins[0]), ("back to the footage", joins[1])):
         ratio, step = join_ratio(result, fr, j) if 0 < j < r_frames else (None, None)
         rows.append({"name": name, "frame": j, "ratio": ratio, "verdict": verdict(ratio)})
+    # The two joins can both be clean while the new frames themselves still cut
+    # (a generator that ignored its prompt, or a bridge that is the old frames):
+    # rate the worst step INSIDE the regenerated span as well.
+    inside, at = (worst_in_range(result, fr, joins[0] + 1, joins[1] - 1)
+                  if joins[1] - joins[0] >= 3 else (None, None))
+    rows.append({"name": "inside the new frames", "frame": at if at is not None else joins[0],
+                 "ratio": inside, "verdict": verdict(inside)})
     before, where = (worst_in_range(source, fr, max(1, start), min(s_frames - 1, max(start, end)))
                      if s_frames > 2 else (None, None))
     return {"frames": r_frames, "source_frames": s_frames, "inserted": inserted,
