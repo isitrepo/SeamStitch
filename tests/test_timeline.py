@@ -93,7 +93,7 @@ def test_targets():
             tm.resolve_target(bad, cut)
     gcut = tm.resolve_cut(tm.parse_sequence("a\n~ 20\nb"), {"a": 30, "b": 30}.get)
     g = tm.resolve_target({"mode": "gap", "trim": 2}, gcut)
-    assert g == {"mode": "insert at join", "start": 28, "end": 31, "join": 30, "trim": 2, "length": 24}
+    assert g == {"mode": "insert at join", "start": 28, "end": 31, "join": 30, "trim": 2, "length": 26}
     with pytest.raises(tm.SequenceError):
         tm.resolve_target({"mode": "replace", "start": 5, "end": 9}, gcut)
     two = tm.resolve_cut(tm.parse_sequence("a\n~ 3\nb\n~ 4\na"), {"a": 30, "b": 30}.get)
@@ -250,7 +250,7 @@ def test_timeline_node_outputs_match_loader(dirs):
     assert (names["start_frame"], names["end_frame"]) == (30, 29)
     assert codes(names["first_frame"].numpy() * 255) == [29]
     assert codes(names["last_frame"].numpy() * 255) == [30]
-    assert names["frame_count"] == 17                      # 20 -> nearest 8k+1
+    assert names["frame_count"] == 25                      # 20 + 2 anchors -> nearest 8k+1
 
 
 def test_identity_roundtrip_through_recombine(dirs, recombine):

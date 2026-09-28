@@ -3,6 +3,25 @@
 Everything headed `0.2.0` or `0.3.0` below is committed but **not published** — no push, no tag,
 no GitHub release. `v0.1.0` is the latest public release.
 
+## prototype/timeline — SeamStitch Timeline + Result Preview (branch, not merged)
+
+**Why.** Kay asked for obvpm-timeline-style editor controls on the SeamStitch splice. One node now
+does Combine + Loader: a strip to arrange/trim/cut clips and one marked splice (range, cut, or gap).
+See README "SeamStitch Timeline (prototype)".
+
+**Loader fix (applies to every graph, not just the timeline).** The replace-mode frame sampler
+accumulated `frame_interval` and drifted: an exactly-equal frame time was skipped and the next one
+doubled (frames 10..19 of a frame-coded 48 fps clip came back `10, 12, 12, 13...`), and a range lost
+its final frame (`20..29` came back `20..28`, `end_frame` one short). The target is now derived from
+the frame count with a thousandth-of-a-frame tolerance — `recombine._decode_range`'s rule.
+Regression test `test_loader_replace_decode_is_index_exact`.
+
+**Verified** (test ComfyUI on port 8199, CPU, `Test vids/4.mp4` + `2.mp4`): identity bridge through
+Timeline → Recombine gives the cut back frame for frame (also a unit test); a crossfade stand-in
+bridge over cut frames 236–259 took *before 6.9x hard cut* to 0.44 / 0.36 / 0.41 seamless; a gap
+of 24 inserted exactly 24 frames (520 total); a bridge built from the wrong frames was flagged hard
+cut at both joins. No GPU generation was run through it yet.
+
 ## 0.3.0 — motion guides (`context_frames`, `SeamStitchLTXGuides`) — in testing
 
 **Why.** On real footage (`None_00006.mp4`, range 113–137, LTX-2.5, 2026-09-25) the bridge

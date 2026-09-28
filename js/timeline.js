@@ -316,7 +316,7 @@ function buildTimeline(node) {
             const g = gaps[0], join = cutBefore(g.i), trim = tg.trim | 0;
             if (join - trim - 1 < 0 || join + trim > t.cut - 1) return { err: "a bridged gap needs real footage on both sides" };
             if (ctxK()) return { err: "context_frames is for ranges only - set it to 0 for a gap bridge" };
-            return { mode: "gap", start: join - trim, end: join + trim - 1, join, trim, length: g.e.frames + 2 * trim, gen: snapNearest(g.e.frames + 2 * trim, grid()) };
+            return { mode: "gap", start: join - trim, end: join + trim - 1, join, trim, length: g.e.frames + 2 * trim + 2, gen: snapNearest(g.e.frames + 2 * trim + 2, grid()) };
         }
         return { none: true };
     }
@@ -467,7 +467,7 @@ function buildTimeline(node) {
             nextBar.append(lead, el("span", {}, `bridges the gap at cut frame ${p.join}${p.trim ? `, trimming ${p.trim}f each side` : ""}`),
                 el("span", { color: C.dim }, "→"),
                 el("span", { fontWeight: "bold" }, `generator ${p.gen}f`),
-                el("span", { color: C.dim }, `(${grid()}, the gap is ${p.length}f; insert mode)`));
+                el("span", { color: C.dim }, `(${grid()}; its first and last frame are the two kept frames either side, so ${p.gen - 2} new frames go in for ${p.length - 2}f of gap${p.trim ? " + trim" : ""}${p.gen !== p.length ? ", rounded to the grid" : ""})`));
             const trimIn = el("input", { width: "38px", background: "#111", color: C.text, border: "1px solid #444", fontSize: "11px" });
             trimIn.type = "number"; trimIn.min = "0"; trimIn.value = String(p.trim);
             trimIn.title = "trim_each_side: frames removed either side of the gap";

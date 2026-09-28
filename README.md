@@ -309,6 +309,51 @@ pinned frame; `img_compression` runs `LTXVPreprocess` on each frame first (leave
 went through one). Wraps core ComfyUI's own `LTXVAddGuide`, so it needs a ComfyUI with LTX
 support; without it only this node is skipped at startup.
 
+### SeamStitch Timeline (prototype)
+
+A one-track mini video editor that replaces the Combine → Loader pair. Its controls follow
+[comfyui-obvpm-timeline](https://github.com/chanon/comfyui-obvpm-timeline)'s Timeline node;
+the splice model underneath is SeamStitch's own.
+
+- **The strip.** Drag videos onto the node (or **+ add** from the input folder). Blocks are sized
+  by the frames they play. Drag a block to reorder it; drag the grips on the lower half of its
+  edges to trim; **cut left / cut right / split** act at the playhead; **uncut** restores the
+  whole clip. **✎** edits the strip as text: `path @ enter..exit` per clip, `~ N` for an N-frame
+  gap.
+- **Mark one splice** (one at a time):
+  - *a range* — press **I** / **O** at the playhead, or drag along the purple row under the
+    strip, then drag that row's edges. Replace mode, exactly as the Loader's.
+  - *a cut between two clips* — click the **✂** pill on the join and pick **bridge this cut**
+    (N frames either side, replace mode — the way S5 measured to smooth a hard cut).
+  - *a gap* — ✂ → **open a gap here**. The gap is the number of NEW frames; it becomes insert
+    mode with the generator asked for gap + 2 (its first and last frame are the kept frames
+    either side, which Recombine drops again).
+- **Next-run bar** says what the next queue will do and how many frames the generator will be
+  asked for, using the Loader's own rules (`bridge_frame_grid`, `context_frames`,
+  `extend_frames`). Context frames show as lighter bands either side of the range.
+- **Preview.** *quick* plays the clips one after another straight from their files; *full* has the
+  server build the real cut — the file Recombine will splice — and plays that. Space plays,
+  ←/→ step a frame (shift: 10), Home/End jump; keys only act while the pointer is over the node.
+
+**Outputs are SeamStitch Loader's 18, in the same order, computed by the Loader itself on the
+assembled cut**, so the node drops into an existing graph where the Loader was. The cut is decoded on
+Recombine's own index-exact timeline and encoded once at `frame_rate` (`assemble_crf`, default 12),
+into `input/seamstitch_timeline/`, cached by content. A strip that is one untouched clip at its own
+frame rate is passed through as the file itself — no re-encode before Recombine. Clips of a different
+size are fitted onto the first clip's (`mismatch_fit` crop / pad).
+
+### SeamStitch Result Preview (prototype)
+
+Wire Recombine's `Filenames` plus the Timeline's (or Loader's) `source_video_path`, `start_frame`,
+`end_frame` and `frame_rate`. After the run it plays the result with the regenerated span marked and
+rates three things: the join **into the new frames**, the join **back to the footage**, and the worst
+step **inside the new frames** — each as the picture change across it over the typical (75th
+percentile) change in the 24 frames around it: under 1.8 *seamless*, under 3.0 *soft bump*, else
+*hard cut*. The same measure on the original range is shown as *before*. On the four real test clips
+ordinary motion peaks at 1.27–1.66; the 4 → 2 hard cut reads 6.5. It rates motion continuity, not
+picture quality — a plain crossfade reads seamless. **use as timeline** puts the result on the
+Timeline as its only clip, so the next splice starts from it.
+
 ## Recommended wiring
 
 ```
