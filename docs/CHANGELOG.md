@@ -29,6 +29,17 @@ frame `i`, `end_context[j]` of K at `-(K-j)`. A multi-frame guide cannot do this
 frame guide only at frame 8n+1, which can never end on the last frame of an 8n+1-long video.
 Registered only if `comfy_extras.nodes_lt` imports.
 
+**New node — `SeamStitchMiniMaxGuides`.** The MiniMax H3 counterpart, through core ComfyUI's own
+`MiniMaxH3AddGuide`. H3 places each keyframe on the target timeline by pixel frame, so
+`anchor_mode` "per frame" (default) pins every context frame as its own single-frame anchor at any
+index, the same placement as the LTX node. "clip" anchors each side as one multi-frame clip (start at
+0, end at -K), H3's own motion anchor with fewer tokens, but only for K = 5, 22, 39... (17k+5);
+other K is refused. Also outputs `first_anchor` / `last_anchor` (`start_context[0]`,
+`end_context[-1]`) for `MiniMaxH3ReferenceToVideo`'s reference images, so "Picture 1/2" in an FL2VA
+prompt still mean the bridge's first and last frame. Checked against the real `MiniMaxH3AddGuide` on
+a 73-frame H3 latent: K = 4 per frame lands on 0-3 and 69-72, K = 5 clip on 0 and 68-72, K = 1 is
+the plain 0 / 72 pair. Registered only if `comfy_extras.nodes_minimax_h3` imports.
+
 ### Gate
 
 - `pytest tests/ -q` → **48 passed** (12 new): context frames match a plain decode-order walk on
