@@ -19,10 +19,11 @@ anchor_mode:
   tokens, but H3 only takes clips of 5, 22, 39... (17k + 5) frames, so K must be
   one of those.
 
-first_anchor / last_anchor are start_context[0] and end_context[-1], the frames that
-land exactly on the bridge's first and last frame - feed them to
-MiniMaxH3ReferenceToVideo's ref_image_0 / ref_image_1 so "Picture 1" and "Picture 2"
-in the prompt still mean the video's first and last frame.
+For MiniMaxH3ReferenceToVideo's ref_image_0 / ref_image_1, take start_context[0] and
+end_context[-1] with core ImageFromBatch (batch_index 0 and -1, length 1), so "Picture 1"
+and "Picture 2" in the prompt still mean the bridge's first and last frame. They cannot
+come out of this node: its conditioning comes from MiniMaxH3ReferenceToVideo, so feeding
+anything back into that node's references would be a dependency cycle.
 
 With context_frames = 0 on the Loader, start_context / end_context are just
 first_frame / last_frame, and this node does exactly what the usual pair of
@@ -71,8 +72,8 @@ class SeamStitchMiniMaxGuides:
             },
         }
 
-    RETURN_TYPES = ("CONDITIONING", "IMAGE", "IMAGE")
-    RETURN_NAMES = ("positive", "first_anchor", "last_anchor")
+    RETURN_TYPES = ("CONDITIONING",)
+    RETURN_NAMES = ("positive",)
     FUNCTION = "apply"
     CATEGORY = "SeamStitch"
 
@@ -86,4 +87,4 @@ class SeamStitchMiniMaxGuides:
                                                  image=frames).args[0]
         print(f"[SeamStitch] MiniMax guides ({anchor_mode}): pinned {k_start} frame(s) at the start "
               f"and {k_end} at the end.")
-        return positive, start_context[:1], end_context[-1:]
+        return (positive,)
