@@ -21,12 +21,9 @@ const C = {
     target: "rgba(168, 85, 247, 0.55)", targetEdge: "#c084fc", ctx: "rgba(168, 85, 247, 0.22)",
     play: "#f59e0b", seam: "#e5e7eb", warn: "#fbbf24", err: "#f87171", ok: "#34d399",
 };
-const RULER_H = 20, TRACK_Y = 24, TRACK_H = 44, BAND_Y = 72, BAND_H = 16, CANVAS_H = 92;
-const EDGE_PX = 7;
-// The seam pill sits at the TOP of the track and the trim grips on the lower half, so
-// the two never overlap at a join between two clips (they did at mid-height, and
-// grabbing either clip's edge there opened the seam menu instead).
-const SEAM_Y = TRACK_Y + 9, GRIP_Y0 = TRACK_Y + 20;
+// Strip geometry lives per node (see setScale in buildTimeline): it grows with the node's
+// width so the strip, its text and the buttons stay readable on a big node.
+
 
 // ---------------------------------------------------------------- pure mirrors of timeline_math.py
 
@@ -98,7 +95,7 @@ function el(tag, style, text) {
 function button(label, title, onclick) {
     const b = el("button", {
         background: "#2a2f3a", color: C.text, border: "1px solid #3b4252", borderRadius: "4px",
-        padding: "2px 7px", fontSize: "11px", cursor: "pointer", whiteSpace: "nowrap", lineHeight: "18px",
+        padding: "0.15em 0.6em", fontSize: "1em", cursor: "pointer", whiteSpace: "nowrap", lineHeight: "1.6em",
     }, label);
     b.title = title || "";
     b.onclick = (ev) => { ev.stopPropagation(); onclick(ev); };
@@ -161,11 +158,26 @@ function buildTimeline(node) {
         msg: "", msgKind: "dim", loadingProbe: 0,
     };
 
+    // ------------------------------------------------------------ geometry (scales with the node)
+    // U = node width / 800, clamped to 1..2.5. The seam pill sits at the TOP of the track, the
+    // clip's name bar (drag it to reorder) under it, and the trim grips on the lower half, so
+    // none of them overlap at a join between two clips.
+    let U = 1, RULER_H, TRACK_Y, TRACK_H, BAND_Y, BAND_H, CANVAS_H, EDGE_PX, SEAM_Y, GRIP_Y0, LABEL_Y1;
+    function setScale(u) {
+        U = u;
+        RULER_H = Math.round(20 * U); TRACK_Y = RULER_H + Math.round(4 * U); TRACK_H = Math.round(44 * U);
+        BAND_Y = TRACK_Y + TRACK_H + Math.round(4 * U); BAND_H = Math.round(16 * U); CANVAS_H = BAND_Y + BAND_H + 2;
+        EDGE_PX = Math.round(7 * U); SEAM_Y = TRACK_Y + Math.round(9 * U);
+        LABEL_Y1 = TRACK_Y + Math.round(18 * U); GRIP_Y0 = LABEL_Y1 + 2;
+    }
+    setScale(1);
+    const font = (px, bold) => `${bold ? "bold " : ""}${Math.round(px * U)}px sans-serif`;
+
     // ------------------------------------------------------------ DOM
     const root = el("div", {
         display: "flex", flexDirection: "column", gap: "4px", width: "100%", height: "100%",
         boxSizing: "border-box", fontFamily: "sans-serif", fontSize: "11px", color: C.text,
-        userSelect: "none", outline: "none",
+        userSelect: "none", outline: "none", overflow: "hidden",
     });
     root.tabIndex = 0;
 
@@ -175,14 +187,14 @@ function buildTimeline(node) {
     video.muted = false;
     video.playsInline = true;
     video.preload = "auto";
-    const overlay = el("div", { position: "absolute", left: "6px", top: "4px", fontSize: "11px", fontWeight: "bold",
+    const overlay = el("div", { position: "absolute", left: "6px", top: "4px", fontSize: "1em", fontWeight: "bold",
         color: C.text, textShadow: "0 0 3px #000", pointerEvents: "none" });
     const gapCover = el("div", { position: "absolute", inset: "0", background: "repeating-linear-gradient(45deg,#111 0 10px,#1b1b1b 10px 20px)",
-        display: "none", alignItems: "center", justifyContent: "center", color: C.dim, fontSize: "13px" }, "gap - the bridge goes here");
+        display: "none", alignItems: "center", justifyContent: "center", color: C.dim, fontSize: "1.2em" }, "gap - the bridge goes here");
     const dropHint = el("div", { position: "absolute", inset: "0", display: "none", alignItems: "center", justifyContent: "center",
         background: "rgba(59,98,168,0.35)", border: "2px dashed #8fb3ff", color: "#fff", fontSize: "14px" }, "drop videos to add them to the strip");
     const emptyHint = el("div", { position: "absolute", inset: "0", display: "flex", alignItems: "center", justifyContent: "center",
-        color: C.dim, fontSize: "12px", textAlign: "center", padding: "10px" },
+        color: C.dim, fontSize: "1.1em", textAlign: "center", padding: "10px" },
         "Drag videos here, or use + add.\nThen mark what to regenerate: I / O for a range, or click a cut between clips.");
     emptyHint.style.whiteSpace = "pre-line";
     videoBox.append(video, gapCover, emptyHint, overlay, dropHint);
@@ -203,8 +215,7 @@ function buildTimeline(node) {
         bAdd, bText, el("span", { width: "6px" }), bIn, bOut, bClear, status);
 
     const canvas = el("canvas", { width: "100%", height: `${CANVAS_H}px`, display: "block", cursor: "default",
-        borderRadius: "4px", touchAction: "none" });
-    canvas.height = CANVAS_H;
+        borderRadius: "4px", touchAction: "none", flex: "0 0 auto" });
 
     const selBar = el("div", { display: "flex", gap: "4px", alignItems: "center", minHeight: "22px", flexWrap: "wrap" });
     const nextBar = el("div", { display: "flex", gap: "6px", alignItems: "center", minHeight: "22px", padding: "2px 6px",
@@ -222,6 +233,27 @@ function buildTimeline(node) {
     widget.computeSize = (width) => [Math.max(400, (width || node.size[0]) - 20), 460];
     if (node.size[0] < 760) node.size[0] = 760;
     if (node.size[1] < 820) node.size[1] = 820;
+
+    // The widget fills whatever height the node has below its other widgets (the video
+    // grows with it), and the strip/text scale with the node's width. Checked every frame
+    // the node draws - the Loader does the same - because resizes arrive by several paths.
+    function fitToNode() {
+        const u = Math.max(1, Math.min(2.5, node.size[0] / 800));
+        if (Math.abs(u - U) > 0.01) {
+            setScale(u);
+            root.style.fontSize = `${Math.round(11 * U)}px`;
+            canvas.style.height = `${CANVAS_H}px`;
+            refresh();
+        }
+        if (widget.last_y) {
+            const h = Math.max(300, node.size[1] - widget.last_y - 15);
+            if (Math.abs((parseFloat(root.style.height) || 0) - h) > 1) root.style.height = `${h}px`;
+        }
+    }
+    const onDrawFg = node.onDrawForeground;
+    node.onDrawForeground = function () { const r = onDrawFg?.apply(this, arguments); fitToNode(); return r; };
+    const onResize = node.onResize;
+    node.onResize = function () { const r = onResize?.apply(this, arguments); fitToNode(); return r; };
 
     // ------------------------------------------------------------ helpers
     function toast(msg, kind = "dim") { S.msg = msg; S.msgKind = kind; status.textContent = msg; status.style.color = C[kind] || C.dim; status.title = msg; }
@@ -338,20 +370,25 @@ function buildTimeline(node) {
 
     function drawCanvas() {
         const w = Math.max(50, canvas.clientWidth | 0);
-        if (canvas.width !== w) canvas.width = w;
+        // Backing store at device pixels times the graph zoom, so text stays sharp when
+        // the node is zoomed in. Drawing coordinates stay in CSS pixels.
+        const k = (window.devicePixelRatio || 1) * Math.max(1, Math.min(4, app.canvas?.ds?.scale || 1));
+        const bw = Math.round(w * k), bh = Math.round(CANVAS_H * k);
+        if (canvas.width !== bw || canvas.height !== bh) { canvas.width = bw; canvas.height = bh; }
         const g = canvas.getContext("2d");
+        g.setTransform(k, 0, 0, k, 0, 0);
         g.fillStyle = C.bg; g.fillRect(0, 0, w, CANVAS_H);
         const t = totals();
         // ruler
         g.fillStyle = C.ruler; g.fillRect(0, 0, w, RULER_H);
         const secPx = S.fr * S.pxPerFrame;
-        const stepSec = [0.25, 0.5, 1, 2, 5, 10, 15, 30, 60, 120].find(s => s * secPx >= 50) || 300;
-        g.fillStyle = C.tick; g.strokeStyle = C.tick; g.font = "10px sans-serif"; g.textBaseline = "top";
+        const stepSec = [0.25, 0.5, 1, 2, 5, 10, 15, 30, 60, 120].find(s => s * secPx >= 50 * U) || 300;
+        g.fillStyle = C.tick; g.strokeStyle = C.tick; g.font = font(10); g.textBaseline = "top";
         for (let s = Math.floor(x2f(0) / S.fr / stepSec) * stepSec; s * S.fr <= x2f(w); s += stepSec) {
             const x = Math.round(f2x(s * S.fr)) + 0.5;
             if (x < 0) continue;
-            g.beginPath(); g.moveTo(x, RULER_H - 6); g.lineTo(x, RULER_H); g.stroke();
-            g.fillText(stepSec < 1 ? `${s.toFixed(2)}s` : `${s}s`, x + 2, 3);
+            g.beginPath(); g.moveTo(x, RULER_H - 6 * U); g.lineTo(x, RULER_H); g.stroke();
+            g.fillText(stepSec < 1 ? `${s.toFixed(2)}s` : `${s}s`, x + 2, 3 * U);
         }
         // track
         g.textBaseline = "middle";
@@ -371,14 +408,16 @@ function buildTimeline(node) {
                 g.fillStyle = S.sel === x.i ? C.clipSel : C.clip;
                 g.fillRect(x0 + 1, TRACK_Y, Math.max(1, x1 - x0 - 2), TRACK_H);
                 g.fillStyle = C.clipEdge;
-                g.fillRect(x0 + 1, GRIP_Y0, 3, TRACK_Y + TRACK_H - GRIP_Y0 - 3);
-                g.fillRect(x1 - 4, GRIP_Y0, 3, TRACK_Y + TRACK_H - GRIP_Y0 - 3);
+                g.fillRect(x0 + 1, GRIP_Y0, 3 * U, TRACK_Y + TRACK_H - GRIP_Y0 - 3);
+                g.fillRect(x1 - 1 - 3 * U, GRIP_Y0, 3 * U, TRACK_Y + TRACK_H - GRIP_Y0 - 3);
                 g.save(); g.beginPath(); g.rect(x0 + 6, TRACK_Y, Math.max(0, x1 - x0 - 12), TRACK_H); g.clip();
-                g.fillStyle = C.text; g.font = "bold 11px sans-serif";
-                g.fillText(x.e.path.split(/[\\/]/).pop(), x0 + 7, TRACK_Y + 13);
-                g.font = "10px sans-serif"; g.fillStyle = C.dim;
+                g.fillStyle = "rgba(0,0,0,0.18)"; g.fillRect(x0 + 1, TRACK_Y, Math.max(1, x1 - x0 - 2), LABEL_Y1 - TRACK_Y);
+                g.fillStyle = C.dim; g.font = font(9, true); g.fillText("⠿", x0 + 7, TRACK_Y + 9 * U);
+                g.fillStyle = C.text; g.font = font(11, true);
+                g.fillText(x.e.path.split(/[\\/]/).pop(), x0 + 7 + 10 * U, TRACK_Y + 9 * U);
+                g.font = font(10); g.fillStyle = C.dim;
                 const cutNote = inf && (x.e.enter > 0 || exitOf(x.e) < inf.frames) ? ` · plays ${x.e.enter}-${exitOf(x.e) - 1} of ${inf.frames}` : "";
-                g.fillText(inf ? `${x.len}f · ${(x.len / S.fr).toFixed(2)}s${cutNote}` : "probing…", x0 + 7, TRACK_Y + 30);
+                g.fillText(inf ? `${x.len}f · ${(x.len / S.fr).toFixed(2)}s${cutNote}` : "probing…", x0 + 7, TRACK_Y + 30 * U);
                 g.restore();
                 if (x.i > 0 && t.L[x.i - 1].e.kind === "clip") seams.push(x);
             }
@@ -395,7 +434,7 @@ function buildTimeline(node) {
             }
             g.fillStyle = C.target; g.fillRect(f2x(s0), TRACK_Y, f2x(s1) - f2x(s0), TRACK_H);
             g.fillStyle = C.targetEdge; g.fillRect(f2x(s0), BAND_Y + 2, f2x(s1) - f2x(s0), BAND_H - 4);
-            g.fillStyle = "#fff"; g.font = "10px sans-serif";
+            g.fillStyle = "#fff"; g.font = font(10);
             g.fillText(`regenerate ${p.end - p.start + 1}f`, f2x(s0) + 3, BAND_Y + BAND_H / 2);
         } else if (p.mode === "gap") {
             const gx = t.L.find(x => x.e.kind === "gap");
@@ -406,7 +445,7 @@ function buildTimeline(node) {
         } else if (S.drag && S.drag.kind === "band") {
             // nothing yet
         } else {
-            g.fillStyle = "#4b5563"; g.font = "10px sans-serif";
+            g.fillStyle = "#4b5563"; g.font = font(10);
             g.fillText("drag here to mark a range to regenerate", 6, BAND_Y + BAND_H / 2);
         }
         // seam pills
@@ -414,21 +453,21 @@ function buildTimeline(node) {
             const sx = f2x(x.strip);
             const hot = S.hover && S.hover.kind === "seam" && S.hover.i === x.i;
             g.fillStyle = hot ? C.targetEdge : C.seam;
-            g.beginPath(); g.arc(sx, SEAM_Y, hot ? 8 : 6, 0, Math.PI * 2); g.fill();
-            g.fillStyle = "#111"; g.font = "bold 9px sans-serif"; g.textAlign = "center";
+            g.beginPath(); g.arc(sx, SEAM_Y, (hot ? 8 : 6) * U, 0, Math.PI * 2); g.fill();
+            g.fillStyle = "#111"; g.font = font(9, true); g.textAlign = "center";
             g.fillText("✂", sx, SEAM_Y + 1); g.textAlign = "left";
         }
         // playhead
         const px = Math.round(f2x(S.playhead)) + 0.5;
         g.strokeStyle = C.play; g.lineWidth = 1.5;
         g.beginPath(); g.moveTo(px, 0); g.lineTo(px, CANVAS_H); g.stroke(); g.lineWidth = 1;
-        g.fillStyle = C.play; g.beginPath(); g.moveTo(px - 5, 0); g.lineTo(px + 5, 0); g.lineTo(px, 7); g.fill();
+        g.fillStyle = C.play; g.beginPath(); g.moveTo(px - 5 * U, 0); g.lineTo(px + 5 * U, 0); g.lineTo(px, 7 * U); g.fill();
     }
 
     function drawSelBar() {
         selBar.innerHTML = "";
         const x = layout()[S.sel];
-        if (!x) { selBar.append(el("span", { color: C.dim }, "click a clip to select it · drag its edges to trim · drag it to reorder · click ✂ between clips for bridge options")); return; }
+        if (!x) { selBar.append(el("span", { color: C.dim }, "drag across a clip or the ruler to scrub (wheel over the picture steps frames) · drag a clip's ⠿ name bar to reorder · drag its lower edges to trim · ✂ between clips for bridge options")); return; }
         if (x.e.kind === "gap") {
             selBar.append(el("span", { fontWeight: "bold" }, `gap · ${x.len} frames (${(x.len / S.fr).toFixed(2)}s)`),
                 button("−8", "Shorter", () => { x.e.frames = Math.max(1, x.e.frames - 8); save(false); }),
@@ -468,7 +507,7 @@ function buildTimeline(node) {
                 el("span", { color: C.dim }, "→"),
                 el("span", { fontWeight: "bold" }, `generator ${p.gen}f`),
                 el("span", { color: C.dim }, `(${grid()}; its first and last frame are the two kept frames either side, so ${p.gen - 2} new frames go in for ${p.length - 2}f of gap${p.trim ? " + trim" : ""}${p.gen !== p.length ? ", rounded to the grid" : ""})`));
-            const trimIn = el("input", { width: "38px", background: "#111", color: C.text, border: "1px solid #444", fontSize: "11px" });
+            const trimIn = el("input", { width: "3.5em", background: "#111", color: C.text, border: "1px solid #444", fontSize: "1em" });
             trimIn.type = "number"; trimIn.min = "0"; trimIn.value = String(p.trim);
             trimIn.title = "trim_each_side: frames removed either side of the gap";
             trimIn.onchange = () => setTarget({ mode: "gap", trim: Math.max(0, trimIn.value | 0) });
@@ -766,9 +805,10 @@ function buildTimeline(node) {
             const x0 = f2x(x.strip), x1 = f2x(x.strip + x.len);
             const last = x.i === t.L.length - 1;
             if (p.x >= x0 && (p.x < x1 || (last && p.x < x1 + EDGE_PX)) && p.y >= TRACK_Y && p.y <= TRACK_Y + TRACK_H) {
-                if (x1 - p.x < EDGE_PX) return { kind: "edge", side: "right", i: x.i };
-                if (p.x - x0 < EDGE_PX && x.e.kind === "clip") return { kind: "edge", side: "left", i: x.i };
-                return { kind: "block", i: x.i };
+                if (p.y >= GRIP_Y0 && x1 - p.x < EDGE_PX) return { kind: "edge", side: "right", i: x.i };
+                if (p.y >= GRIP_Y0 && p.x - x0 < EDGE_PX && x.e.kind === "clip") return { kind: "edge", side: "left", i: x.i };
+                if (p.y < LABEL_Y1) return { kind: "label", i: x.i };
+                return { kind: "body", i: x.i };
             }
         }
         return { kind: "empty" };
@@ -779,7 +819,7 @@ function buildTimeline(node) {
         const h = hit(p);
         S.hover = h;
         canvas.style.cursor = h.kind === "edge" || h.kind === "bandEdge" ? "ew-resize" : h.kind === "seam" ? "pointer" :
-            h.kind === "block" ? "grab" : h.kind === "ruler" ? "text" : h.kind === "band" ? "crosshair" : "default";
+            h.kind === "label" ? "grab" : h.kind === "body" || h.kind === "ruler" ? "col-resize" : h.kind === "band" ? "crosshair" : "default";
         drawCanvas();
     });
     canvas.addEventListener("pointerleave", () => { if (!S.drag) { S.hover = null; drawCanvas(); } });
@@ -799,10 +839,16 @@ function buildTimeline(node) {
             refresh();
             return;
         }
-        if (h.kind === "block") {
+        if (h.kind === "label") {           // the name bar: drag to reorder
             S.sel = h.i;
-            seekStrip(x2f(p.x));   // (pointerdown.detail is always 0 in Chrome - never gate on it)
             S.drag = { kind: "move", i: h.i, startX: p.x, moved: false };
+            refresh();
+            return;
+        }
+        if (h.kind === "body") {            // the clip itself: drag to scrub, like the Loader's bar
+            S.sel = h.i;
+            S.drag = { kind: "scrub" };
+            seekStrip(x2f(p.x));
             refresh();
             return;
         }
@@ -847,7 +893,7 @@ function buildTimeline(node) {
             drawCanvas();
             const g = canvas.getContext("2d");
             const ix = to < L.length ? f2x(L[to].strip) : f2x(totals().strip);
-            g.fillStyle = C.play; g.fillRect(ix - 1.5, TRACK_Y - 2, 3, TRACK_H + 4);
+            g.fillStyle = C.play; g.fillRect(ix - 1.5 * U, TRACK_Y - 2, 3 * U, TRACK_H + 4);
             return;
         }
         if (d.kind === "band" || d.kind === "bandEdge") {
@@ -876,13 +922,19 @@ function buildTimeline(node) {
     });
     canvas.addEventListener("dblclick", (ev) => {
         const h = hit(local(ev));
-        if (h.kind === "block" && layout()[h.i].e.kind === "clip") { S.sel = h.i; cutAt("split"); }
+        if ((h.kind === "body" || h.kind === "label") && layout()[h.i].e.kind === "clip") { S.sel = h.i; cutAt("split"); }
     });
     canvas.addEventListener("wheel", (ev) => {
         ev.preventDefault(); ev.stopPropagation();
         const p = local(ev);
         if (p.y < RULER_H || ev.ctrlKey) zoomBy(ev.deltaY < 0 ? 1.2 : 1 / 1.2, p.x);
         else { S.scroll = Math.max(0, S.scroll + (ev.deltaX || ev.deltaY)); drawCanvas(); }
+    }, { passive: false });
+
+    // Wheel over the picture steps frames (shift: 10), like a jog wheel.
+    videoBox.addEventListener("wheel", (ev) => {
+        ev.preventDefault(); ev.stopPropagation();
+        seekStrip(S.playhead + (ev.deltaY > 0 ? 1 : -1) * (ev.shiftKey ? 10 : 1));
     }, { passive: false });
 
     // keyboard, only while the pointer is over the widget

@@ -59,6 +59,16 @@ function build(node) {
     w.computeSize = (width) => [Math.max(300, (width || node.size[0]) - 20), 380];
     if (node.size[0] < 520) node.size[0] = 520;
     if (node.size[1] < 520) node.size[1] = 520;
+    // Fill the node's height below its inputs, so resizing the node grows the player.
+    const onDrawFg = node.onDrawForeground;
+    node.onDrawForeground = function () {
+        const r = onDrawFg?.apply(this, arguments);
+        if (w.last_y) {
+            const h = Math.max(260, node.size[1] - w.last_y - 15);
+            if (Math.abs((parseFloat(root.style.height) || 0) - h) > 1) root.style.height = `${h}px`;
+        }
+        return r;
+    };
 
     let D = null, loopSeam = null;
 
