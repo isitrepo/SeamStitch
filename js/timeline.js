@@ -199,7 +199,7 @@ function buildTimeline(node) {
     emptyHint.style.whiteSpace = "pre-line";
     videoBox.append(video, gapCover, emptyHint, overlay, dropHint);
 
-    const bar1 = el("div", { display: "flex", gap: "4px", alignItems: "center", flexWrap: "wrap" });
+    const bar1 = el("div", { display: "flex", gap: "4px", alignItems: "center", flexWrap: "wrap", flexShrink: "0" });
     const bPlay = button("▶", "Play / pause (space)", () => togglePlay());
     const bMode = button("quick", "quick: plays the clips one after another, instantly. full: builds the real cut (the file Recombine will splice) and plays that.", () => setMode(S.mode === "quick" ? "full" : "quick"));
     const bZoomOut = button("−", "Zoom out (wheel over the ruler)", () => zoomBy(1 / 1.4));
@@ -217,8 +217,8 @@ function buildTimeline(node) {
     const canvas = el("canvas", { width: "100%", height: `${CANVAS_H}px`, display: "block", cursor: "default",
         borderRadius: "4px", touchAction: "none", flex: "0 0 auto" });
 
-    const selBar = el("div", { display: "flex", gap: "4px", alignItems: "center", minHeight: "22px", flexWrap: "wrap" });
-    const nextBar = el("div", { display: "flex", gap: "6px", alignItems: "center", minHeight: "22px", padding: "2px 6px",
+    const selBar = el("div", { display: "flex", gap: "4px", alignItems: "center", minHeight: "1.8em", flexWrap: "wrap", flexShrink: "0" });
+    const nextBar = el("div", { display: "flex", gap: "6px", alignItems: "center", minHeight: "1.8em", padding: "2px 6px", flexShrink: "0",
         background: "#1e1b2e", border: "1px solid #3b2d5c", borderRadius: "4px", flexWrap: "wrap" });
 
     const fileInput = el("input", { display: "none" });
@@ -467,7 +467,7 @@ function buildTimeline(node) {
     function drawSelBar() {
         selBar.innerHTML = "";
         const x = layout()[S.sel];
-        if (!x) { selBar.append(el("span", { color: C.dim }, "drag across a clip or the ruler to scrub (wheel over the picture steps frames) · drag a clip's ⠿ name bar to reorder · drag its lower edges to trim · ✂ between clips for bridge options")); return; }
+        if (!x) { selBar.append(el("span", { color: C.dim }, "drag a clip or the ruler to scrub · wheel over the picture: step frames · ⠿ name bar: reorder · lower edges: trim · ✂: bridge options")); return; }
         if (x.e.kind === "gap") {
             selBar.append(el("span", { fontWeight: "bold" }, `gap · ${x.len} frames (${(x.len / S.fr).toFixed(2)}s)`),
                 button("−8", "Shorter", () => { x.e.frames = Math.max(1, x.e.frames - 8); save(false); }),
@@ -651,6 +651,7 @@ function buildTimeline(node) {
     function zoomBy(k, anchorX) {
         const ax = anchorX ?? canvas.clientWidth / 2;
         const f = x2f(ax);
+        S.fitted = false;
         S.pxPerFrame = Math.min(40, Math.max(0.05, S.pxPerFrame * k));
         S.scroll = Math.max(0, f * S.pxPerFrame - ax);
         drawCanvas();
@@ -660,6 +661,7 @@ function buildTimeline(node) {
     function requestFit() { S.needFit = true; if (canvas.clientWidth > 100) fit(); }
     function fit() {
         S.needFit = false;
+        S.fitted = true;          // stays fitted through node resizes until the user zooms
         const t = totals();
         const w = Math.max(100, canvas.clientWidth - 10);
         if (t.strip > 0) S.pxPerFrame = Math.min(40, Math.max(0.05, w / t.strip));
@@ -979,7 +981,9 @@ function buildTimeline(node) {
         w.callback = function () { const r = cb ? cb.apply(this, arguments) : undefined; if (w === frW) { probeAll(); S.full = null; if (S.mode === "full") setMode("quick"); } else refresh(); return r; };
     }
 
-    new ResizeObserver(() => { if (S.needFit && canvas.clientWidth > 100) fit(); else drawCanvas(); }).observe(canvas);
+    new ResizeObserver(() => {
+        if ((S.needFit || S.fitted) && canvas.clientWidth > 100) fit(); else drawCanvas();
+    }).observe(canvas);
     const onRemoved = node.onRemoved;
     node.onRemoved = function () { window.removeEventListener("keydown", onKey, true); closePopup(); video.pause(); video.removeAttribute("src"); return onRemoved?.apply(this, arguments); };
 
