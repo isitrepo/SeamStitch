@@ -274,7 +274,7 @@ def _fit_to_source(frames_u8, src_w, src_h):
 # per-format encode widgets (crf/preset/etc.) are needed.
 # ---------------------------------------------------------------------------
 def _encode_video(images, frame_rate, filename_prefix, format, save_output,
-                   audio, prompt, extra_pnginfo):
+                   audio, prompt, extra_pnginfo, format_kwargs=None):
     if images.shape[0] == 0:
         return {"ui": {"gifs": []}, "result": ((save_output, []),)}
 
@@ -318,7 +318,10 @@ def _encode_video(images, frame_rate, filename_prefix, format, save_output,
         )
 
     format_type, format_ext = format.split("/")
-    video_format = apply_format_widgets(format_ext, {})
+    # The format's own settings (crf, pix_fmt, save_metadata...). This used to pass an
+    # empty dict, so every encode silently fell back to the format defaults (h264: crf
+    # 19) whatever the caller set - one reason graphs re-encoded through VHS afterwards.
+    video_format = apply_format_widgets(format_ext, dict(format_kwargs or {}))
     has_alpha = first_image.shape[-1] == 4
     video_format["has_alpha"] = has_alpha
 
@@ -473,6 +476,9 @@ class SeamStitchRecombine:
                 # Appended last, for the positional widget_values reason above.
                 "context_frames": ("INT", {"default": 0, "min": 0, "max": 64, "step": 1,
                                    "tooltip": "Motion guides: wire SeamStitchLoader's context_frames output here. The regenerated clip was generated as K real context frames + the bridge + K real context frames; the K at each end are dropped (they are source frames still in the output), and only the bridge between them is spliced in. 0 (default): nothing is dropped. Replace mode only."}),
+                # Appended last, for the positional widget_values reason above.
+                "skip_encode": ("BOOLEAN", {"default": False,
+                                "tooltip": "On: splice only - combined_images and audio come out, but no video is written (Filenames is empty). Use it when SeamStitch Result Preview (or VHS Video Combine) saves the final video, so the splice is not encoded twice."}),
             },
             "hidden": {
                 "prompt": "PROMPT",
@@ -490,7 +496,8 @@ class SeamStitchRecombine:
                   frame_rate, dedup_threshold, max_dedup_frames, filename_prefix, format,
                   save_output=True, original_audio_override=None, bridge_audio=None,
                   audio_mode="original", audio_bridge_weight=0.35, audio_crossfade_ms=20.0,
-                  insert=False, context_frames=0, prompt=None, extra_pnginfo=None, **kwargs):
+                  insert=False, context_frames=0, skip_encode=False, prompt=None, extra_pnginfo=None,
+                  **kwargs):
 
         if not original_video_path or not os.path.exists(original_video_path):
             raise FileNotFoundError(f"original_video_path not found: {original_video_path}")
@@ -604,8 +611,11 @@ class SeamStitchRecombine:
                                    start_frame, end_frame, anchor_dropped + first_kept,
                                    deduped.shape[0], insert=insert)
 
+        if skip_encode:
+            print("[SeamStitch] Recombine: skip_encode is on - splice returned, no video written.")
+            return {"ui": {"gifs": []}, "result": ((save_output, []), combined, audio)}
         result = _encode_video(combined, frame_rate, filename_prefix, format, save_output,
-                                audio, prompt, extra_pnginfo)
+                                audio, prompt, extra_pnginfo, format_kwargs=kwargs)
         result["result"] = result["result"] + (combined, audio)
         return result
 
