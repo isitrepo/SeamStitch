@@ -42,7 +42,12 @@ except ImportError:  # imported as a top-level module (tests)
     from loader import SeamStitchLoader, _list_input_videos
 
 _VIDEO_EXTENSIONS = ('.mp4', '.webm', '.mkv', '.avi', '.mov', '.m4v', '.flv', '.wmv')
+_RGB_PIX = ('gbr', 'rgb', 'bgr', 'argb', 'abgr', 'rgba', 'bgra')
 CUT_SUBDIR = "seamstitch_timeline"
+CODEC_LOSSLESS = "lossless (ffv1)"
+CODEC_H264 = "h264"
+# Cached cuts kept in input/seamstitch_timeline (a lossless cut is large).
+KEEP_CUTS = 8
 # Bumped whenever the assembly would produce different bytes for the same inputs,
 # so a cached cut from an older rule is not reused.
 _ASSEMBLY_VERSION = "1"
@@ -103,7 +108,7 @@ def probe(path, frame_rate):
         }
     fr = float(frame_rate) if frame_rate and frame_rate > 0 else (round(native) or 24)
     info["frame_rate"] = fr
-    info["frames"] = int(np.floor((last - base) * fr + 1e-3)) + 1
+    info["frames"] = int(np.floor((last - base) * fr + max(1e-3, tb * fr))) + 1
     info["duration"] = info["frames"] / fr
     if len(_PROBE_CACHE) > 512:
         _PROBE_CACHE.clear()
@@ -157,6 +162,11 @@ def _iter_frames(path, frame_rate, start_idx, end_idx):
         t_start = base + start_idx / fr
         t_end = base + end_idx / fr if end_idx is not None else None
         interval = 1.0 / fr
+        # A frame's timestamp can sit up to one tick of the stream's clock early: MKV counts
+        # whole milliseconds, so a 48 fps frame due at 83.333 ms is stored at 83 ms. With only
+        # a thousandth-of-a-frame tolerance that frame was skipped and every later index was
+        # off by one (FFV1 masters read back one frame late). Tolerate one tick.
+        tol = max(interval * 1e-3, float(vs.time_base or 0))
         vs.thread_type = "AUTO"
         c.seek(int(t_start / float(vs.time_base)), stream=vs, backward=True)
         idx, target = start_idx, t_start
@@ -169,9 +179,12 @@ def _iter_frames(path, frame_rate, start_idx, end_idx):
             if t_end is not None and ft > t_end + interval:
                 break
             rgb = None
-            while target <= ft + interval * 1e-3:
+            while target <= ft + tol:
                 if end_idx is not None and idx >= end_idx:
                     break
+                if rgb is None and frame.format.name.startswith(_RGB_PIX):
+                    # RGB-coded (FFV1 rgb / gbrp): no YUV matrix to apply - see loader._RGB_PIX.
+                    rgb = frame.to_ndarray(format="rgb24")
                 if rgb is None:
                     try:
                         rgb = frame.reformat(format="rgb24", src_colorspace=cs, src_color_range=cr,
@@ -267,9 +280,9 @@ def plan_cut(sequence, frame_rate):
     return cut, fr
 
 
-def _cut_key(cut, fr, crf, fit):
+def _cut_key(cut, fr, crf, fit, codec=CODEC_LOSSLESS):
     h = hashlib.sha256()
-    h.update(json.dumps([_ASSEMBLY_VERSION, fr, int(crf), fit]).encode())
+    h.update(json.dumps([_ASSEMBLY_VERSION, fr, int(crf), fit, codec]).encode())
     for p in cut["pieces"]:
         st = os.stat(p["path"])
         h.update(json.dumps([os.path.abspath(p["path"]), st.st_mtime_ns, st.st_size,
@@ -293,14 +306,38 @@ def passthrough_path(cut, fr):
     return p["path"]
 
 
-def build_cut(cut, fr, crf=12, fit="crop"):
-    """Assemble the cut (or pass the single source through). Returns the path."""
+def _prune_cuts(out_dir, keep_path):
+    """Keep the newest KEEP_CUTS cuts (and their previews); the rest are rebuilt on demand."""
+    try:
+        cuts = sorted((os.path.join(out_dir, f) for f in os.listdir(out_dir)
+                       if f.startswith("cut_") and "_preview" not in f and not f.endswith(".part.mp4")
+                       and not f.endswith(".part.mkv")), key=os.path.getmtime, reverse=True)
+        for old in cuts[KEEP_CUTS:]:
+            if os.path.abspath(old) == os.path.abspath(keep_path):
+                continue
+            for f in (old, os.path.splitext(old)[0] + "_preview.mp4"):
+                try:
+                    os.remove(f)
+                except OSError:
+                    pass
+    except OSError:
+        pass
+
+
+def build_cut(cut, fr, crf=12, fit="crop", codec=CODEC_LOSSLESS):
+    """Assemble the cut (or pass the single source through). Returns the path.
+
+    Lossless (default): FFV1, RGB planes, FLAC - the frames Recombine reads back are
+    exactly the decoded sources (measured: an h264 4:2:0 cut at crf 12 shifted the
+    picture -1.2 levels on Test vids/4.mp4, and that loss stacked with the final encode).
+    h264: much smaller, one lossy generation."""
     same = passthrough_path(cut, fr)
     if same:
         return same
+    lossless = codec != CODEC_H264
     out_dir = os.path.join(folder_paths.get_input_directory(), CUT_SUBDIR)
     os.makedirs(out_dir, exist_ok=True)
-    out = os.path.join(out_dir, f"cut_{_cut_key(cut, fr, crf, fit)}.mp4")
+    out = os.path.join(out_dir, f"cut_{_cut_key(cut, fr, crf, fit, codec)}{'.mkv' if lossless else '.mp4'}")
     with _BUILD_LOCK:
         if os.path.isfile(out) and os.path.getsize(out) > 0:
             return out
@@ -322,18 +359,22 @@ def build_cut(cut, fr, crf=12, fit="crop"):
 
         fd, apath = tempfile.mkstemp(suffix=".f32", dir=out_dir)
         os.close(fd)
-        tmp = out + ".part.mp4"
+        tmp = os.path.splitext(out)[0] + (".part.mkv" if lossless else ".part.mp4")
         try:
             wav.astype("<f4").tofile(apath)
             cmd = [_ffmpeg_exe(), "-v", "error", "-y",
                    "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{w}x{h}", "-r", str(fr), "-i", "-",
                    "-f", "f32le", "-ar", str(sr), "-ac", "2", "-i", apath,
-                   "-map", "0:v", "-map", "1:a",
-                   "-vf", "scale=out_color_matrix=bt709:out_range=tv,format=yuv420p",
-                   "-c:v", "libx264", "-crf", str(int(crf)), "-preset", "medium",
-                   "-colorspace", "bt709", "-color_primaries", "bt709", "-color_trc", "bt709",
-                   "-color_range", "tv",
-                   "-c:a", "aac", "-b:a", "256k", "-movflags", "+faststart", tmp]
+                   "-map", "0:v", "-map", "1:a"]
+            if lossless:
+                cmd += ["-c:v", "ffv1", "-level", "3", "-pix_fmt", "gbrp", "-g", "1", "-slices", "16",
+                        "-slicecrc", "1", "-color_primaries", "bt709", "-color_trc", "bt709",
+                        "-c:a", "flac", tmp]
+            else:
+                cmd += ["-vf", "scale=out_color_matrix=bt709:out_range=tv,format=yuv420p",
+                        "-c:v", "libx264", "-crf", str(int(crf)), "-preset", "medium",
+                        "-colorspace", "bt709", "-color_primaries", "bt709", "-color_trc", "bt709",
+                        "-color_range", "tv", "-c:a", "aac", "-b:a", "256k", "-movflags", "+faststart", tmp]
             proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stderr=subprocess.PIPE)
             written = 0
             try:
@@ -362,8 +403,28 @@ def build_cut(cut, fr, crf=12, fit="crop"):
                 except OSError:
                     pass
         print(f"[SeamStitch] Timeline: assembled {len(cut['pieces'])} piece(s), {written} frames at "
-              f"{fr} fps, {w}x{h} -> {out}")
+              f"{fr} fps, {w}x{h}, {codec} -> {out}")
+        _prune_cuts(out_dir, out)
     return out
+
+
+def preview_copy(path):
+    """What the browser plays for the full preview: the cut itself when it is H.264, else a
+    small H.264 copy beside it (Chrome cannot play FFV1). Colour-tagged BT.709 like the rest."""
+    if not path.lower().endswith(".mkv"):
+        return path
+    prev = os.path.splitext(path)[0] + "_preview.mp4"
+    if os.path.isfile(prev) and os.path.getmtime(prev) >= os.path.getmtime(path):
+        return prev
+    tmp = prev + ".part.mp4"
+    subprocess.run([_ffmpeg_exe(), "-v", "error", "-y", "-i", path, "-map", "0:v:0", "-map", "0:a:0?",
+                    "-vf", "scale=out_color_matrix=bt709:out_range=tv,format=yuv420p",
+                    "-c:v", "libx264", "-crf", "18", "-preset", "fast",
+                    "-colorspace", "bt709", "-color_primaries", "bt709", "-color_trc", "bt709",
+                    "-color_range", "tv", "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", tmp],
+                   check=True, capture_output=True)
+    os.replace(tmp, prev)
+    return prev
 
 
 # ---------------------------------------------------------------------------
@@ -401,10 +462,13 @@ async def _build_route(request):
         cut, fr = plan_cut(body.get("sequence", ""), int(body.get("frame_rate", 0) or 0))
         crf = int(body.get("crf", 12))
         fit = body.get("fit", "crop")
+        codec = body.get("codec", CODEC_LOSSLESS)
         import asyncio
-        path = await asyncio.get_event_loop().run_in_executor(None, build_cut, cut, fr, crf, fit)
-        return web.json_response({"path": path, "frames": cut["frames"], "frame_rate": fr,
-                                  "passthrough": path == passthrough_path(cut, fr)})
+        loop = asyncio.get_event_loop()
+        path = await loop.run_in_executor(None, build_cut, cut, fr, crf, fit, codec)
+        play = await loop.run_in_executor(None, preview_copy, path)
+        return web.json_response({"path": path, "play_path": play, "frames": cut["frames"],
+                                  "frame_rate": fr, "passthrough": path == passthrough_path(cut, fr)})
     except Exception as e:
         return _json_error(e)
 
@@ -452,8 +516,15 @@ class SeamStitchTimeline:
                     "When clips differ in size, each is fitted onto the FIRST clip's size: crop "
                     "fills and trims the overhang, pad fits inside with black bars."}),
                 "assemble_crf": ("INT", {"default": 12, "min": 0, "max": 51, "step": 1, "tooltip":
-                    "x264 quality of the assembled cut (lower = better, bigger). Only used when "
-                    "the strip is more than one untouched clip."}),
+                    "x264 quality of the assembled cut when cut_codec is h264 (lower = better, "
+                    "bigger). Only used when the strip is more than one untouched clip."}),
+                # Appended last: ComfyUI restores widget values by position.
+                "cut_codec": ([CODEC_LOSSLESS, CODEC_H264], {"default": CODEC_LOSSLESS, "tooltip":
+                    "How the strip is assembled when it is more than one untouched clip. lossless "
+                    "(ffv1): the cut is exactly the decoded clips - no colour shift before the final "
+                    "save - but large (~1.6 GB a minute at 832x1280). h264: small, one lossy "
+                    "generation (about -1 luma level on 4:2:0). The browser always plays a small "
+                    "H.264 copy."}),
             },
         }
 
@@ -479,11 +550,11 @@ class SeamStitchTimeline:
         return h.hexdigest()
 
     def run(self, sequence, target, frame_rate, bridge_frame_grid, context_frames, extend_frames,
-            snap_to_multiple, mismatch_fit, assemble_crf):
+            snap_to_multiple, mismatch_fit, assemble_crf, cut_codec=CODEC_LOSSLESS):
         cut, fr = plan_cut(sequence, frame_rate)
         plan = tm.resolve_target(tm.parse_target(target), cut)
         tm.validate_context(plan, cut, context_frames)
-        path = build_cut(cut, fr, assemble_crf, mismatch_fit)
+        path = build_cut(cut, fr, assemble_crf, mismatch_fit, cut_codec)
 
         common = dict(video=path, frame_rate=fr, display_mode="frames", start_time=0.0,
                       end_time=0.0, duration=0.0, snap_to_multiple=snap_to_multiple,

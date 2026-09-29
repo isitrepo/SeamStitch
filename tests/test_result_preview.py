@@ -91,3 +91,14 @@ def test_preview_rates_existing_filenames(dirs):
     assert out["result"][0] == path and ui["saved"] is False and ui["inserted"] == 12
     with pytest.raises(ValueError):
         rp.SeamStitchResultPreview().preview(path, 24, 35, 24)
+
+
+def test_format_settings_only_reach_formats_that_have_them():
+    import result_preview as rp
+    h264 = [["pix_fmt", ["yuv420p", "yuv420p10le"]], ["crf", "INT", {}], ["save_metadata", "BOOLEAN", {}], ["trim_to_audio", "BOOLEAN", {}]]
+    ffv1 = [["level", ["0", "1", "3"]], ["pix_fmt", ["rgba64le", "yuv420p"]], ["save_metadata", "BOOLEAN", {}]]
+    prores = [["profile", ["lt", "standard", "hq", "4444", "4444xq"]]]
+    assert rp.format_settings("video/h264-mp4", 12, "yuv420p10le", True, h264) == \
+        {"save_metadata": True, "trim_to_audio": False, "has_alpha": False, "crf": 12, "pix_fmt": "yuv420p10le"}
+    assert "pix_fmt" not in rp.format_settings("video/ffv1-mkv", 12, "yuv420p", True, ffv1)
+    assert rp.format_settings("video/ProRes", 12, "yuv420p", True, prores)["profile"] == "4444"
