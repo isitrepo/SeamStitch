@@ -288,3 +288,32 @@ def test_loader_replace_decode_is_index_exact(dirs, fr, s, e):
     step = 48 // fr
     assert codes(r[0].numpy() * 255) == list(range(s * step, e * step, step))
     assert (r[8], r[9]) == (s, e - 1)
+
+
+def test_recombine_passes_format_settings_and_can_skip_encode(dirs, recombine):
+    """crf/pix_fmt reached the encoder as an empty dict (format defaults, crf 19, always);
+    skip_encode returns the splice without writing anything."""
+    import torch
+    import timeline as tl
+    from loader import SeamStitchLoader
+    inp, _ = dirs
+    make_clip(str(inp / "a.mp4"), 30, 24, offset=0)
+    res = dict(zip(SeamStitchLoader.RETURN_NAMES, tl.SeamStitchTimeline().run(
+        "a.mp4", json.dumps({"mode": "replace", "start": 10, "end": 14}), 0, tm.GRID_NONE, 0, 0, 0, "crop", 0)))
+    seen = {}
+    real = recombine._encode_video
+
+    def spy(images, *a, **k):
+        seen.update(k)
+        return {"ui": {"gifs": []}, "result": ((False, []),)}
+    recombine._encode_video = spy
+    try:
+        node = recombine.SeamStitchRecombine()
+        args = (res["images"], res["source_video_path"], 10, 14, 24, 0.0, 0, "t", "video/h264-mp4")
+        node.recombine(*args, save_output=False, crf=12, pix_fmt="yuv420p10le")
+        assert seen["format_kwargs"] == {"crf": 12, "pix_fmt": "yuv420p10le"}
+        seen.clear()
+        out = node.recombine(*args, save_output=False, skip_encode=True)
+        assert not seen and out["result"][0] == (False, []) and out["result"][1].shape[0] == 30
+    finally:
+        recombine._encode_video = real

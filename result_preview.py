@@ -15,6 +15,18 @@ hard cut 9.8x -> after: seamless 1.1x".
 its only clip, so the next splice starts from this one - one splice at a time,
 as many times as it takes.
 
+SAVING. Wire Recombine's combined_images / audio into `images` / `audio` and this
+node writes the final video itself, through the very encode path VHS Video Combine
+uses (recombine._encode_video is a fork of it): RGB in, tagged as BT.709, converted
+with scale=out_color_matrix=bt709 and written with bt709 primaries/trc/matrix and
+tv range, plus the first-frame PNG carrying the workflow. So it replaces a VHS
+Video Combine "Final Video" node with no change in colour. Set Recombine's
+skip_encode on so the splice is not encoded twice. Formats a browser cannot play
+(ProRes, FFV1, H.265) get a small H.264 proxy in temp for the player; the analysis
+and the saved file are the real one. "save frame" in the UI writes the frame under
+the playhead as a PNG, colour-converted from the saved file - for first/last-frame
+references, instead of a screen grab through the browser's player.
+
 "Typical" is the 75th percentile of the frame-to-frame changes in the 24 frames
 either side, not the median: footage whose frames repeat in pairs (24 fps content
 in a 48 fps file - Test vids/1.mp4 is) has every other change near zero, so a
@@ -24,11 +36,16 @@ natural worst step of all four real test clips is 1.27-1.66x, and the 4.mp4 ->
 bump, else hard cut.
 """
 
+import datetime
 import os
+import re
+import subprocess
 
 import av
 import numpy as np
 import folder_paths
+from aiohttp import web
+from server import PromptServer
 
 try:
     from . import timeline as tl
@@ -129,10 +146,11 @@ def analyse(result, source, fr, start, end):
 
 
 def _view_params(path):
-    """/view query for a file under output or input, else None (served through
+    """/view query for a file under output, input or temp, else None (served through
     the Loader's own file route instead)."""
     for kind, base in (("output", folder_paths.get_output_directory()),
-                       ("input", folder_paths.get_input_directory())):
+                       ("input", folder_paths.get_input_directory()),
+                       ("temp", folder_paths.get_temp_directory())):
         base = os.path.abspath(base)
         ap = os.path.abspath(path)
         if ap.lower().startswith(base.lower() + os.sep):
@@ -142,32 +160,157 @@ def _view_params(path):
     return None
 
 
+# Container/codec pairs Chrome plays natively; anything else gets an H.264 proxy.
+_PLAYABLE = {"h264-mp4", "nvenc_h264-mp4", "webm", "av1-webm", "nvenc_av1-mp4"}
+_DATE = re.compile(r"%date:([^%]+)%")
+
+
+def _expand_date(prefix):
+    """VHS-style %date:yyyyMMdd_hhmmss% in filename_prefix, expanded server side so it
+    works the same queued from the UI or the API."""
+    def sub(m):
+        f = m.group(1)
+        for a, b in (("yyyy", "%Y"), ("yy", "%y"), ("MM", "%m"), ("dd", "%d"),
+                     ("hh", "%H"), ("mm", "%M"), ("ss", "%S")):
+            f = f.replace(a, b)
+        return datetime.datetime.now().strftime(f)
+    return _DATE.sub(sub, prefix)
+
+
+def _formats():
+    try:
+        try:
+            from .recombine import get_video_formats
+        except ImportError:
+            from recombine import get_video_formats
+        names = [f for f in get_video_formats()[0] if "png" not in f]
+    except Exception:
+        names = []
+    return names or ["video/h264-mp4"]
+
+
+def _encode(images, audio, fr, prefix, fmt, save_output, format_kwargs, prompt, extra_pnginfo):
+    """Write the video through VHS's own encode path (recombine._encode_video)."""
+    try:
+        from . import recombine as rc
+    except ImportError:
+        import recombine as rc
+    if images.shape[-1] == 4:
+        images = images[..., :3]
+    res = rc._encode_video(images, fr, _expand_date(prefix), fmt, save_output, audio,
+                           prompt, extra_pnginfo, format_kwargs=format_kwargs)
+    return res["result"][0]
+
+
+def _proxy(path):
+    """Small H.264 copy for the browser player, in temp. Colour tags carried over."""
+    out_dir = os.path.join(folder_paths.get_temp_directory(), "seamstitch_preview")
+    os.makedirs(out_dir, exist_ok=True)
+    out = os.path.join(out_dir, os.path.splitext(os.path.basename(path))[0] + "_proxy.mp4")
+    cmd = [tl._ffmpeg_exe(), "-v", "error", "-y", "-i", path, "-map", "0:v:0", "-map", "0:a:0?",
+           "-c:v", "libx264", "-crf", "16", "-preset", "fast", "-pix_fmt", "yuv420p",
+           "-colorspace", "bt709", "-color_primaries", "bt709", "-color_trc", "bt709",
+           "-color_range", "tv", "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", out]
+    subprocess.run(cmd, check=True, capture_output=True)
+    return out
+
+
+def _allowed(path):
+    ap = os.path.abspath(path).lower()
+    return any(ap.startswith(os.path.abspath(b).lower() + os.sep) for b in
+               (folder_paths.get_output_directory(), folder_paths.get_input_directory(),
+                folder_paths.get_temp_directory()))
+
+
+def grab_frame(path, frame, fr):
+    """Frame `frame` of the video as a PNG in output/seamstitch_frames, converted with the
+    file's own colour metadata (the Loader/Recombine decode). Returns the PNG path."""
+    from PIL import Image
+    f = next(tl._iter_frames(path, fr, int(frame), int(frame) + 1), None)
+    if f is None:
+        raise ValueError(f"frame {frame} is past the end of {os.path.basename(path)}")
+    out_dir = os.path.join(folder_paths.get_output_directory(), "seamstitch_frames")
+    os.makedirs(out_dir, exist_ok=True)
+    stem = os.path.splitext(os.path.basename(path))[0]
+    out = os.path.join(out_dir, f"{stem}_f{int(frame):05d}.png")
+    Image.fromarray(f).save(out, compress_level=4)
+    return out
+
+
+@PromptServer.instance.routes.post("/seamstitch/result/grab")
+async def _grab_route(request):
+    try:
+        body = await request.json()
+        path = body.get("path", "")
+        if not (os.path.isfile(path) and _allowed(path)):
+            return web.json_response({"error": "not a video in the output/input/temp folders"}, status=400)
+        import asyncio
+        out = await asyncio.get_event_loop().run_in_executor(
+            None, grab_frame, path, int(body.get("frame", 0)), int(body.get("frame_rate", 24)) or 24)
+        return web.json_response({"path": out, "view": _view_params(out)})
+    except Exception as e:
+        return web.json_response({"error": str(e)}, status=400)
+
+
 class SeamStitchResultPreview:
     @classmethod
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "filenames": ("VHS_FILENAMES", {"tooltip": "SeamStitch Recombine's Filenames output."}),
                 "source_video_path": ("STRING", {"forceInput": True, "tooltip":
                     "The video the splice was cut from - the Timeline's or Loader's source_video_path."}),
                 "start_frame": ("INT", {"forceInput": True}),
                 "end_frame": ("INT", {"forceInput": True}),
                 "frame_rate": ("INT", {"forceInput": True}),
+                "filename_prefix": ("STRING", {"default": "seamstitch_%date:yyyyMMdd_hhmmss%", "tooltip":
+                    "Only used when images is wired. %date:yyyyMMdd_hhmmss% is replaced, as on VHS Video Combine."}),
+                "format": (_formats(), {"default": "video/h264-mp4", "tooltip":
+                    "VHS's own formats and encode path, so the colours match VHS Video Combine. "
+                    "h264-mp4 at crf 12 is visually lossless and plays everywhere; ProRes (hq / 4444) "
+                    "or FFV1 are for a master with no generation loss (the player uses a proxy)."}),
+                "crf": ("INT", {"default": 12, "min": 0, "max": 51, "step": 1, "tooltip":
+                    "Quality for h264/h265/webm formats: lower = better, 0 = lossless. 12 matches the "
+                    "Final Video setting this node replaces."}),
+                "pix_fmt": (["yuv420p", "yuv420p10le"], {"default": "yuv420p", "tooltip":
+                    "yuv420p plays everywhere; yuv420p10le keeps 10-bit gradients (h264/h265 only)."}),
+                "save_metadata": ("BOOLEAN", {"default": True, "tooltip":
+                    "Embed the workflow in the video, as VHS does (the first-frame PNG always carries it)."}),
+                "save_output": ("BOOLEAN", {"default": True, "tooltip":
+                    "On: save to the output folder. Off: temp only (preview)."}),
             },
+            "optional": {
+                "images": ("IMAGE", {"tooltip": "Recombine's combined_images: this node saves the final video "
+                                     "(set Recombine's skip_encode on)."}),
+                "audio": ("AUDIO", {"tooltip": "Recombine's audio, muxed in when images is wired."}),
+                "filenames": ("VHS_FILENAMES", {"tooltip": "Instead of images: a video Recombine (or VHS) "
+                                                "already wrote - shown and rated, not re-encoded."}),
+            },
+            "hidden": {"prompt": "PROMPT", "extra_pnginfo": "EXTRA_PNGINFO"},
         }
 
-    RETURN_TYPES = ("STRING",)
-    RETURN_NAMES = ("result_path",)
+    RETURN_TYPES = ("STRING", "VHS_FILENAMES")
+    RETURN_NAMES = ("result_path", "Filenames")
     OUTPUT_NODE = True
     FUNCTION = "preview"
     CATEGORY = "SeamStitch"
-    DESCRIPTION = ("Plays the spliced result with the regenerated span marked, rates both joins "
-                   "(seamless / soft bump / hard cut) against the original, and can put the result "
-                   "back on the Timeline for the next splice.")
+    DESCRIPTION = ("Saves the spliced video (VHS's encode path and colours), plays it with the "
+                   "regenerated span marked, rates both joins against the original, saves frames as "
+                   "PNGs, and can put the result back on the Timeline for the next splice.")
 
-    def preview(self, filenames, source_video_path, start_frame, end_frame, frame_rate):
-        result = _result_path(filenames)
+    def preview(self, source_video_path, start_frame, end_frame, frame_rate,
+                filename_prefix="seamstitch_%date:yyyyMMdd_hhmmss%", format="video/h264-mp4", crf=12,
+                pix_fmt="yuv420p", save_metadata=True, save_output=True, images=None, audio=None,
+                filenames=None, prompt=None, extra_pnginfo=None):
         fr = int(frame_rate) or 24
+        if images is not None:
+            filenames = _encode(images, audio, fr, filename_prefix, format, save_output,
+                                {"crf": int(crf), "pix_fmt": pix_fmt, "save_metadata": bool(save_metadata),
+                                 "trim_to_audio": False}, prompt, extra_pnginfo)
+            print(f"[SeamStitch] Result: saved {format} (crf {crf}, {pix_fmt}) -> {filenames[1][-1]}")
+        elif filenames is None:
+            raise ValueError("Wire Recombine's combined_images (+ audio) into images to save the video "
+                             "here, or its Filenames into filenames.")
+        result = _result_path(filenames)
         a = analyse(result, source_video_path, fr, int(start_frame), int(end_frame))
         for row in a["joins"]:
             r = "n/a" if row["ratio"] is None else f"{row['ratio']:.2f}x"
@@ -176,5 +319,16 @@ class SeamStitchResultPreview:
         if b["ratio"] is not None:
             print(f"[SeamStitch] Result: original worst join in the replaced range: {b['ratio']:.2f}x "
                   f"{b['verdict']} at frame {b['frame']}")
-        ui = dict(a, path=result, frame_rate=fr, start=int(start_frame), view=_view_params(result))
-        return {"ui": {"seamstitch_result": [ui]}, "result": (result,)}
+        fmt_name = str(format).split("/")[-1]
+        play = result
+        if images is not None and fmt_name not in _PLAYABLE:
+            try:
+                play = _proxy(result)
+            except Exception as e:
+                print(f"[SeamStitch] Result: no browser proxy for {os.path.basename(result)}: {e}")
+        master = _view_params(result)
+        timeline_path = (f"{master['subfolder']}/{master['filename']}" if master['subfolder'] else master['filename']) \
+            if master and master["type"] == "output" else result
+        ui = dict(a, path=result, frame_rate=fr, start=int(start_frame), view=_view_params(play),
+                  play_path=play, saved=bool(images is not None and save_output), timeline_path=timeline_path)
+        return {"ui": {"seamstitch_result": [ui]}, "result": (result, filenames)}
