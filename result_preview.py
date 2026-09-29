@@ -189,6 +189,35 @@ def _formats():
     return names or ["video/h264-mp4"]
 
 
+def format_settings(fmt, crf, pix_fmt, save_metadata, widgets=None):
+    """The node's settings, handed only to formats that have them. pix_fmt must not
+    reach FFV1 (its default rgba64le is 16-bit RGB - no YUV conversion, truly lossless)
+    and ProRes is written as 4444 (4:4:4 10-bit) rather than VHS's default hq (4:2:2):
+    4:2:0/4:2:2 chroma is what costs ~1-2 levels of colour on re-encode (measured
+    -1.2 mean on Test vids/4.mp4 even at crf 0, -0.1 at 4:4:4)."""
+    if widgets is None:
+        try:
+            try:
+                from .recombine import get_video_formats
+            except ImportError:
+                from recombine import get_video_formats
+            widgets = get_video_formats()[1].get(fmt, [])
+        except Exception:
+            widgets = []
+    names = {w[0]: w for w in widgets}
+    # has_alpha: ProRes picks its pix_fmt from it (VHS Video Combine always supplies it);
+    # the frames reaching here are RGB, alpha is stripped before encoding.
+    out = {"save_metadata": bool(save_metadata), "trim_to_audio": False, "has_alpha": False}
+    if "crf" in names:
+        out["crf"] = int(crf)
+    if "pix_fmt" in names and isinstance(names["pix_fmt"][1], list) and pix_fmt in names["pix_fmt"][1] \
+            and "ffv1" not in fmt:
+        out["pix_fmt"] = pix_fmt
+    if "profile" in names and "ProRes" in fmt:
+        out["profile"] = "4444"
+    return out
+
+
 def _encode(images, audio, fr, prefix, fmt, save_output, format_kwargs, prompt, extra_pnginfo):
     """Write the video through VHS's own encode path (recombine._encode_video)."""
     try:
@@ -265,9 +294,10 @@ class SeamStitchResultPreview:
                 "filename_prefix": ("STRING", {"default": "seamstitch_%date:yyyyMMdd_hhmmss%", "tooltip":
                     "Only used when images is wired. %date:yyyyMMdd_hhmmss% is replaced, as on VHS Video Combine."}),
                 "format": (_formats(), {"default": "video/h264-mp4", "tooltip":
-                    "VHS's own formats and encode path, so the colours match VHS Video Combine. "
-                    "h264-mp4 at crf 12 is visually lossless and plays everywhere; ProRes (hq / 4444) "
-                    "or FFV1 are for a master with no generation loss (the player uses a proxy)."}),
+                    "VHS's own formats and encode path - h264-mp4 matches VHS Video Combine pixel for pixel. "
+                    "Any 4:2:0 format (h264/h265 yuv420p) costs ~1-2 levels of colour on re-encode, VHS "
+                    "included. For a master with none: video/ffv1-mkv (16-bit RGB, lossless) or "
+                    "video/ProRes (written as 4444). Those play through an H.264 proxy here."}),
                 "crf": ("INT", {"default": 12, "min": 0, "max": 51, "step": 1, "tooltip":
                     "Quality for h264/h265/webm formats: lower = better, 0 = lossless. 12 matches the "
                     "Final Video setting this node replaces."}),
@@ -303,10 +333,10 @@ class SeamStitchResultPreview:
                 filenames=None, prompt=None, extra_pnginfo=None):
         fr = int(frame_rate) or 24
         if images is not None:
-            filenames = _encode(images, audio, fr, filename_prefix, format, save_output,
-                                {"crf": int(crf), "pix_fmt": pix_fmt, "save_metadata": bool(save_metadata),
-                                 "trim_to_audio": False}, prompt, extra_pnginfo)
-            print(f"[SeamStitch] Result: saved {format} (crf {crf}, {pix_fmt}) -> {filenames[1][-1]}")
+            settings = format_settings(format, crf, pix_fmt, save_metadata)
+            filenames = _encode(images, audio, fr, filename_prefix, format, save_output, settings,
+                                prompt, extra_pnginfo)
+            print(f"[SeamStitch] Result: saved {format} {settings} -> {filenames[1][-1]}")
         elif filenames is None:
             raise ValueError("Wire Recombine's combined_images (+ audio) into images to save the video "
                              "here, or its Filenames into filenames.")

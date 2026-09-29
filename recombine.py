@@ -158,6 +158,11 @@ def _decode_range(video_path, frame_rate, start_frame_idx, end_frame_idx):
 
     fr = float(frame_rate) if frame_rate > 0 else 24.0
     frame_interval = 1.0 / fr
+    # A frame's timestamp can sit up to one tick of the stream's clock early: MKV counts
+    # whole milliseconds, so a 48 fps frame due at 83.333 ms is stored at 83 ms. With only
+    # a thousandth-of-a-frame tolerance that frame was skipped and every later index was
+    # off by one (FFV1 masters read back one frame late). Tolerate one tick.
+    tick_tol = max(frame_interval * 1e-3, float(video_stream.time_base or 0))
 
     # Frame indices count from the stream's own first frame, which is not
     # necessarily at t=0. SeamStitchCombine's concat demuxer leaves a small
@@ -197,18 +202,24 @@ def _decode_range(video_path, frame_rate, start_frame_idx, end_frame_idx):
         if end_time is not None and frame_time > end_time + frame_interval:
             break
 
-        try:
-            frame = frame.reformat(format="rgb24", src_colorspace=src_colorspace,
-                                    src_color_range=src_color_range, dst_color_range=dst_range)
+        # An RGB-coded stream (FFV1 rgb / gbrp, as Result Preview can write) has no YUV
+        # matrix or range: passing src_colorspace/src_color_range made swscale treat its
+        # planes as YUV and scrambled the picture (errors up to 237 levels). Convert straight.
+        if frame.format.name.startswith(("gbr", "rgb", "bgr", "argb", "abgr", "rgba", "bgra")):
             frame_rgb = frame.to_ndarray(format='rgb24')
-        except Exception:
-            frame_rgb = frame.to_ndarray(format='rgb24')
+        else:
+            try:
+                frame = frame.reformat(format="rgb24", src_colorspace=src_colorspace,
+                                        src_color_range=src_color_range, dst_color_range=dst_range)
+                frame_rgb = frame.to_ndarray(format='rgb24')
+            except Exception:
+                frame_rgb = frame.to_ndarray(format='rgb24')
 
         # Tolerance of a thousandth of a frame (~21 us at 48 fps): the target is
         # derived from frame_idx rather than accumulated, but pts -> float still
         # lands a hair either side of an exactly-equal target, and losing that
         # comparison drops the range's final frame.
-        while expected_target_time <= frame_time + frame_interval * 1e-3:
+        while expected_target_time <= frame_time + tick_tol:
             if end_frame_idx is not None and frame_idx >= end_frame_idx:
                 break
             frames_out.append(frame_rgb)

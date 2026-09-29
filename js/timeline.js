@@ -677,7 +677,8 @@ function buildTimeline(node) {
         const x = entryAtStrip(S.playhead);
         if (S.mode === "full" && S.full) {
             const c = stripToCut(S.playhead);
-            if (!video.src.includes(encodeURIComponent(S.full.path))) video.src = viewURL(S.full.path);
+            const fp = S.full.play_path || S.full.path;
+            if (!video.src.includes(encodeURIComponent(fp))) video.src = viewURL(fp);
             video.currentTime = (c + 0.5) / S.fr;
         } else if (x && x.e.kind === "clip") {
             const inf = S.info[x.e.path];
@@ -705,13 +706,13 @@ function buildTimeline(node) {
             try {
                 const r = await api.fetchApi("/seamstitch/timeline/build", { method: "POST", body: JSON.stringify({
                     sequence: seqW.value, frame_rate: frW ? frW.value : 0, crf: (W("assemble_crf") || {}).value ?? 12,
-                    fit: (W("mismatch_fit") || {}).value || "crop" }) });
+                    fit: (W("mismatch_fit") || {}).value || "crop", codec: (W("cut_codec") || {}).value || "lossless (ffv1)" }) });
                 const j = await r.json();
                 if (!r.ok) throw new Error(j.error);
                 S.full = j;
                 S.mode = "full";
                 video.dataset.src = "";
-                video.src = viewURL(j.path);
+                video.src = viewURL(j.play_path || j.path);
                 video.addEventListener("loadedmetadata", () => seekStrip(p0), { once: true });
                 toast(j.passthrough ? "full: the source itself (one untouched clip - no re-encode)" : `full: built the cut, ${j.frames} frames - this is the file Recombine splices`, "ok");
             } catch (e) { toast(`build failed: ${e.message || e}`, "err"); S.mode = "quick"; }

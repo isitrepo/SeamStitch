@@ -317,3 +317,26 @@ def test_recombine_passes_format_settings_and_can_skip_encode(dirs, recombine):
         assert not seen and out["result"][0] == (False, []) and out["result"][1].shape[0] == 30
     finally:
         recombine._encode_video = real
+
+
+def test_rgb_mkv_decodes_exactly(dirs, recombine):
+    """FFV1 in MKV: RGB planes (no YUV matrix) and millisecond timestamps (a 48 fps frame
+    due at 83.333 ms is stored at 83 ms). Both used to shift or scramble frames."""
+    from loader import SeamStitchLoader
+    import timeline as tl
+    inp, _ = dirs
+    n, w, h = 40, 64, 48
+    frames = np.stack([np.full((h, w, 3), 16 + i * LEVEL_STEP, np.uint8) for i in range(n)])
+    frames[:, :, :, 0] = 200                       # a colour, so a YUV mix-up shows
+    path = str(inp / "m.mkv")
+    subprocess.run([_ffmpeg(), "-v", "error", "-y", "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{w}x{h}",
+                    "-r", "48", "-i", "-", "-c:v", "ffv1", "-pix_fmt", "gbrp", path],
+                   input=frames.tobytes(), check=True)
+    assert tl.probe(path, 48)["frames"] == n
+    a = np.stack(list(tl._iter_frames(path, 48, 5, 30)))
+    b = recombine._decode_range(path, 48, 5, 30).numpy()
+    c = (SeamStitchLoader().load_video(video=path, frame_rate=48, display_mode="frames", start_time=0,
+                                       end_time=0, duration=0, start_frame=5, end_frame=30,
+                                       duration_frames=0, snap_to_multiple=0)[0].numpy() * 255).round()
+    for got in (a, b, c):
+        assert np.abs(got.astype(int) - frames[5:30].astype(int)).max() <= 1

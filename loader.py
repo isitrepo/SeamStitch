@@ -19,6 +19,12 @@ except ImportError:  # imported as a top-level module (tests)
     import insert_math
 
 _VIDEO_EXTENSIONS = ('.mp4', '.webm', '.mkv', '.avi', '.mov', '.m4v', '.flv', '.wmv')
+# Pixel formats that store RGB planes, not YUV (e.g. FFV1's gbrp / gbrap16le).
+_RGB_PIX = ('gbr', 'rgb', 'bgr', 'argb', 'abgr', 'rgba', 'bgra')
+
+
+class _PlainRGB(Exception):
+    """Internal: this frame is RGB-coded, convert without a YUV matrix."""
 
 
 # Custom API route to serve video files from anywhere on the user's system for the frontend preview.
@@ -562,6 +568,11 @@ class SeamStitchLoader:
 
             # Custom sampling to force specific framerate
             frame_interval = 1.0 / float(frame_rate) if frame_rate > 0 else 1.0/24.0
+            # A frame's timestamp can sit up to one tick of the stream's clock early: MKV counts
+            # whole milliseconds, so a 48 fps frame due at 83.333 ms is stored at 83 ms. With only
+            # a thousandth-of-a-frame tolerance that frame was skipped and every later index was
+            # off by one (FFV1 masters read back one frame late). Tolerate one tick.
+            tick_tol = max(frame_interval * 1e-3, float(video_stream.time_base or 0))
             expected_target_time = actual_start_time
 
             # Pre-calculate expected frames
@@ -579,7 +590,8 @@ class SeamStitchLoader:
                 if frame_time is None:
                     frame_time = float(frame.pts * float(video_stream.time_base)) if frame.pts and video_stream.time_base else 0.0
 
-                if frame_time < actual_start_time:
+                # One tick of the stream's clock early is still this frame (see tol below).
+                if frame_time < actual_start_time - tick_tol:
                     continue
 
                 # Add a slight buffer (interval) to ensure we evaluate the boundary correctly
@@ -590,12 +602,19 @@ class SeamStitchLoader:
                 # Omit dst_colorspace so swscale defaults naturally for RGB output
                 # (passing it can cause the YUV matrix to be applied incorrectly).
                 try:
+                    # An RGB-coded stream (FFV1 rgb / gbrp, as Result Preview can write) has no YUV
+                    # matrix or range: passing src_colorspace/src_color_range made swscale treat its
+                    # planes as YUV and scrambled the picture (errors up to 237 levels). Convert straight.
+                    if frame.format.name.startswith(_RGB_PIX):
+                        raise _PlainRGB
                     frame = frame.reformat(
                         format="rgb24",
                         src_colorspace=src_colorspace,
                         src_color_range=src_color_range,
                         dst_color_range=dst_range
                     )
+                    frame_rgb = frame.to_ndarray(format='rgb24')
+                except _PlainRGB:
                     frame_rgb = frame.to_ndarray(format='rgb24')
                 except Exception as e:
                     # Fallback: if explicit color reformat fails, use PyAV's default conversion
@@ -625,7 +644,7 @@ class SeamStitchLoader:
                 # skipped that frame and doubled the next (frames 10..19 of a 24 fps clip
                 # came back 10, 12, 12, 13...), and dropped a range's final frame
                 # (20..29 came back as 20..28, end_frame one short).
-                tol = frame_interval * 1e-3
+                tol = max(frame_interval * 1e-3, tick_tol)
                 while expected_target_time <= frame_time + tol and expected_target_time < actual_end_time - tol:
                     if image_tensor is None and expected_frames > 0:
                         # First frame: allocate the tensor
