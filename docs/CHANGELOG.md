@@ -36,8 +36,9 @@ separately; it all ships here, so this is the entry to read when upgrading.
 
 ### Fixed
 
-- **Recombine ignored `crf` / `pix_fmt`**: it passed an empty format dict to the encoder, so every
-  encode was the format default (crf 19). It now honours them.
+- **Recombine ignored the format's own settings** (`crf`, `pix_fmt`…): it passed an empty dict to
+  the encoder, so every encode was the format default (crf 19). Settings supplied by name now reach
+  the encoder; in the UI, Result Preview has the `crf` / `pix_fmt` widgets.
 - **Loader frame drift** in replace mode (skipped/doubled frames, a range's last frame dropped) —
   below.
 - **Decode of RGB-coded (FFV1) and millisecond-timestamp (MKV) files**, in the Loader, Recombine and

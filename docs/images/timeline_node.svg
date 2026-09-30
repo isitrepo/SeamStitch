@@ -1,0 +1,86 @@
+<svg width="620" height="783" viewBox="0 0 620 783" xmlns="http://www.w3.org/2000/svg" font-family="Segoe UI, Helvetica, Arial, sans-serif">
+<rect x="0" y="0" width="620" height="783" fill="#1a1a1a"/>
+<rect x="24" y="10" width="572" height="763" rx="10" fill="#2a2a2a" stroke="#454545" stroke-width="1.5"/>
+<path d="M 24 40 Q 24 10 34 10 L 586 10 Q 596 10 596 40 Z" fill="#7b4fa8"/>
+<text x="38" y="30" fill="#ffffff" font-size="14" font-weight="600">SeamStitch Timeline</text>
+<rect x="25" y="39" width="570" height="24" fill="#242424" opacity="0.4"/>
+<circle cx="596" cy="51.0" r="5.5" fill="#64b5f6" stroke="#1a1a1a" stroke-width="1.5"/>
+<text x="584" y="55.0" fill="#e8e8e8" font-size="12" text-anchor="end">images</text>
+<circle cx="596" cy="75.0" r="5.5" fill="#ff8a80" stroke="#1a1a1a" stroke-width="1.5"/>
+<text x="584" y="79.0" fill="#e8e8e8" font-size="12" text-anchor="end">audio</text>
+<rect x="25" y="87" width="570" height="24" fill="#242424" opacity="0.4"/>
+<circle cx="596" cy="99.0" r="5.5" fill="#b0bec5" stroke="#1a1a1a" stroke-width="1.5"/>
+<text x="584" y="103.0" fill="#e8e8e8" font-size="12" text-anchor="end">duration</text>
+<circle cx="596" cy="123.0" r="5.5" fill="#b0bec5" stroke="#1a1a1a" stroke-width="1.5"/>
+<text x="584" y="127.0" fill="#e8e8e8" font-size="12" text-anchor="end">frame_count</text>
+<rect x="25" y="135" width="570" height="24" fill="#242424" opacity="0.4"/>
+<circle cx="596" cy="147.0" r="5.5" fill="#b0bec5" stroke="#1a1a1a" stroke-width="1.5"/>
+<text x="584" y="151.0" fill="#e8e8e8" font-size="12" text-anchor="end">filename</text>
+<circle cx="596" cy="171.0" r="5.5" fill="#64b5f6" stroke="#1a1a1a" stroke-width="1.5"/>
+<text x="584" y="175.0" fill="#e8e8e8" font-size="12" text-anchor="end">first_frame</text>
+<rect x="25" y="183" width="570" height="24" fill="#242424" opacity="0.4"/>
+<circle cx="596" cy="195.0" r="5.5" fill="#64b5f6" stroke="#1a1a1a" stroke-width="1.5"/>
+<text x="584" y="199.0" fill="#e8e8e8" font-size="12" text-anchor="end">last_frame</text>
+<circle cx="596" cy="219.0" r="5.5" fill="#b0bec5" stroke="#1a1a1a" stroke-width="1.5"/>
+<text x="584" y="223.0" fill="#e8e8e8" font-size="12" text-anchor="end">source_video_path</text>
+<rect x="25" y="231" width="570" height="24" fill="#242424" opacity="0.4"/>
+<circle cx="596" cy="243.0" r="5.5" fill="#b0bec5" stroke="#1a1a1a" stroke-width="1.5"/>
+<text x="584" y="247.0" fill="#e8e8e8" font-size="12" text-anchor="end">start_frame</text>
+<circle cx="596" cy="267.0" r="5.5" fill="#b0bec5" stroke="#1a1a1a" stroke-width="1.5"/>
+<text x="584" y="271.0" fill="#e8e8e8" font-size="12" text-anchor="end">end_frame</text>
+<rect x="25" y="279" width="570" height="24" fill="#242424" opacity="0.4"/>
+<circle cx="596" cy="291.0" r="5.5" fill="#b0bec5" stroke="#1a1a1a" stroke-width="1.5"/>
+<text x="584" y="295.0" fill="#e8e8e8" font-size="12" text-anchor="end">frame_rate</text>
+<circle cx="596" cy="315.0" r="5.5" fill="#b0bec5" stroke="#1a1a1a" stroke-width="1.5"/>
+<text x="584" y="319.0" fill="#e8e8e8" font-size="12" text-anchor="end">width</text>
+<rect x="25" y="327" width="570" height="24" fill="#242424" opacity="0.4"/>
+<circle cx="596" cy="339.0" r="5.5" fill="#b0bec5" stroke="#1a1a1a" stroke-width="1.5"/>
+<text x="584" y="343.0" fill="#e8e8e8" font-size="12" text-anchor="end">height</text>
+<circle cx="596" cy="363.0" r="5.5" fill="#ff8a80" stroke="#1a1a1a" stroke-width="1.5"/>
+<text x="584" y="367.0" fill="#e8e8e8" font-size="12" text-anchor="end">full_clip_audio</text>
+<rect x="25" y="375" width="570" height="24" fill="#242424" opacity="0.4"/>
+<circle cx="596" cy="387.0" r="5.5" fill="#b0bec5" stroke="#1a1a1a" stroke-width="1.5"/>
+<text x="584" y="391.0" fill="#e8e8e8" font-size="12" text-anchor="end">insert</text>
+<circle cx="596" cy="411.0" r="5.5" fill="#64b5f6" stroke="#1a1a1a" stroke-width="1.5"/>
+<text x="584" y="415.0" fill="#e8e8e8" font-size="12" text-anchor="end">start_context</text>
+<rect x="25" y="423" width="570" height="24" fill="#242424" opacity="0.4"/>
+<circle cx="596" cy="435.0" r="5.5" fill="#64b5f6" stroke="#1a1a1a" stroke-width="1.5"/>
+<text x="584" y="439.0" fill="#e8e8e8" font-size="12" text-anchor="end">end_context</text>
+<circle cx="596" cy="459.0" r="5.5" fill="#b0bec5" stroke="#1a1a1a" stroke-width="1.5"/>
+<text x="584" y="463.0" fill="#e8e8e8" font-size="12" text-anchor="end">context_frames</text>
+<rect x="25" y="471" width="570" height="24" fill="#242424" opacity="0.4"/>
+<circle cx="596" cy="483.0" r="5.5" fill="#b0bec5" stroke="#1a1a1a" stroke-width="1.5"/>
+<text x="584" y="487.0" fill="#e8e8e8" font-size="12" text-anchor="end">end_seconds</text>
+<circle cx="596" cy="507.0" r="5.5" fill="#b0bec5" stroke="#1a1a1a" stroke-width="1.5"/>
+<text x="584" y="511.0" fill="#e8e8e8" font-size="12" text-anchor="end">picture_timing</text>
+<line x1="34" y1="528" x2="586" y2="528" stroke="#454545" stroke-width="1"/>
+<rect x="34" y="531" width="552" height="19" rx="4" fill="#3a3a3a" stroke="#555" stroke-width="1"/>
+<text x="42" y="544" fill="#9a9a9a" font-size="11">frame_rate</text>
+<text x="578" y="544" fill="#e8e8e8" font-size="11" text-anchor="end">0</text>
+<rect x="25" y="552" width="570" height="24" fill="#242424" opacity="0.4"/>
+<rect x="34" y="555" width="552" height="19" rx="4" fill="#3a3a3a" stroke="#555" stroke-width="1"/>
+<text x="42" y="568" fill="#9a9a9a" font-size="11">bridge_frame_grid</text>
+<text x="578" y="568" fill="#e8e8e8" font-size="11" text-anchor="end">ltx (8k+1)</text>
+<rect x="34" y="579" width="552" height="19" rx="4" fill="#3a3a3a" stroke="#555" stroke-width="1"/>
+<text x="42" y="592" fill="#9a9a9a" font-size="11">context_frames</text>
+<text x="578" y="592" fill="#e8e8e8" font-size="11" text-anchor="end">0</text>
+<rect x="25" y="600" width="570" height="24" fill="#242424" opacity="0.4"/>
+<rect x="34" y="603" width="552" height="19" rx="4" fill="#3a3a3a" stroke="#555" stroke-width="1"/>
+<text x="42" y="616" fill="#9a9a9a" font-size="11">extend_frames</text>
+<text x="578" y="616" fill="#e8e8e8" font-size="11" text-anchor="end">0</text>
+<rect x="34" y="627" width="552" height="19" rx="4" fill="#3a3a3a" stroke="#555" stroke-width="1"/>
+<text x="42" y="640" fill="#9a9a9a" font-size="11">snap_to_multiple</text>
+<text x="578" y="640" fill="#e8e8e8" font-size="11" text-anchor="end">32</text>
+<rect x="25" y="648" width="570" height="24" fill="#242424" opacity="0.4"/>
+<rect x="34" y="651" width="552" height="19" rx="4" fill="#3a3a3a" stroke="#555" stroke-width="1"/>
+<text x="42" y="664" fill="#9a9a9a" font-size="11">mismatch_fit</text>
+<text x="578" y="664" fill="#e8e8e8" font-size="11" text-anchor="end">crop</text>
+<rect x="34" y="675" width="552" height="19" rx="4" fill="#3a3a3a" stroke="#555" stroke-width="1"/>
+<text x="42" y="688" fill="#9a9a9a" font-size="11">assemble_crf</text>
+<text x="578" y="688" fill="#e8e8e8" font-size="11" text-anchor="end">12</text>
+<rect x="25" y="696" width="570" height="24" fill="#242424" opacity="0.4"/>
+<rect x="34" y="699" width="552" height="19" rx="4" fill="#3a3a3a" stroke="#555" stroke-width="1"/>
+<text x="42" y="712" fill="#9a9a9a" font-size="11">cut_codec</text>
+<text x="578" y="712" fill="#e8e8e8" font-size="11" text-anchor="end">lossless (ffv1)</text>
+<text x="310.0" y="741" fill="#9a9a9a" font-size="10.5" text-anchor="middle" font-style="italic">The strip editor, preview player and next-run bar render below the widgets shown here.</text>
+</svg>

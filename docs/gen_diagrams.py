@@ -10,10 +10,10 @@ Usage:
 returns from a running ComfyUI instance with this pack installed (a sandboxed
 instance is fine - see docs/CHANGELOG.md for the recipe used to capture one).
 
-This only regenerates the three per-node diagrams (load_video_ui_first_last.svg,
-combine_clips_simple.svg, video_segment_recombine.svg). docs/images/wiring_overview.svg
-is a hand-drawn overview of how the three nodes connect and is not derived from
-object_info - it is left untouched.
+This regenerates the per-node diagrams (see NODE_OUTPUT_FILE below). The other files in
+docs/images/ (wiring_overview.svg, wiring_legacy.svg, timeline_ui.svg, result_preview_ui.svg)
+are hand-drawn explanatory diagrams and are not derived from object_info - they are left
+untouched.
 
 Deliberately excluded from each diagram: widgets each node's own JS extension
 hides at node-creation time (see HIDDEN_WIDGETS below) and buttons the JS adds
@@ -34,10 +34,14 @@ SOCKET_TYPES = {
     "CONDITIONING", "CONTROL_NET", "STYLE_MODEL", "CLIP_VISION",
     "VHS_FILENAMES", "VHS_VIDEOINFO",
 }
+# Inputs with forceInput are sockets even when their type (INT, STRING...) is normally a widget.
 
 SOCKET_COLOR = {
     "IMAGE": "#64b5f6",
     "AUDIO": "#ff8a80",
+    "CONDITIONING": "#ffcc80",
+    "LATENT": "#ff80ab",
+    "VAE": "#ef5350",
     "VHS_FILENAMES": "#ce93d8",
 }
 WIDGET_TYPE_COLOR = {
@@ -56,6 +60,8 @@ HIDDEN_WIDGETS = {
         "display_mode", "crop_x", "crop_y", "crop_w", "crop_h",
         "start_frame", "end_frame", "duration_frames",
     },
+    # The strip UI edits these two; they are hidden widgets, not something to type into.
+    "SeamStitchTimeline": {"sequence", "target"},
 }
 
 # Buttons added at runtime by each node's JS extension (onNodeCreated) -
@@ -65,24 +71,38 @@ DYNAMIC_BUTTONS = {
     "SeamStitchLoader": ["choose file to upload", "Load Video"],
     "SeamStitchCombine": ["choose A file", "choose B file", "Load Video"],
     "SeamStitchRecombine": [],
+    "SeamStitchTimeline": ["+ add", "play", "quick/full", "zoom", "fit", "I", "O", "clear mark", "edit text"],
+    "SeamStitchResultPreview": ["seam 1", "seam 2", "worst inside", "stop", "save frame", "use as timeline"],
 }
 
 CAPTIONS = {
     "SeamStitchLoader": "Interactive timeline/crop UI and the buttons above render below the widgets shown here.",
     "SeamStitchCombine": "A + B previews render between the file pickers and the status line.",
     "SeamStitchRecombine": None,
+    "SeamStitchTimeline": "The strip editor, preview player and next-run bar render below the widgets shown here.",
+    "SeamStitchResultPreview": "The player, verdict panel and buttons render below the widgets shown here.",
+    "SeamStitchLTXGuides": None,
+    "SeamStitchMiniMaxGuides": None,
 }
 
 NODE_HEADER_COLOR = {
     "SeamStitchLoader": "#2f6fa5",
     "SeamStitchCombine": "#2f8f5b",
     "SeamStitchRecombine": "#a15a2f",
+    "SeamStitchTimeline": "#7b4fa8",
+    "SeamStitchResultPreview": "#2f8f8f",
+    "SeamStitchLTXGuides": "#8f7a2f",
+    "SeamStitchMiniMaxGuides": "#a84f6b",
 }
 
 NODE_OUTPUT_FILE = {
     "SeamStitchLoader": "load_video_ui_first_last.svg",
     "SeamStitchCombine": "combine_clips_simple.svg",
     "SeamStitchRecombine": "video_segment_recombine.svg",
+    "SeamStitchTimeline": "timeline_node.svg",
+    "SeamStitchResultPreview": "result_preview_node.svg",
+    "SeamStitchLTXGuides": "ltx_guides_node.svg",
+    "SeamStitchMiniMaxGuides": "minimax_guides_node.svg",
 }
 
 ROW_H = 24
@@ -113,7 +133,8 @@ def _classify(node_info, hidden):
     for name, spec in list(required.items()) + list(optional.items()):
         is_optional = name in optional
         type_spec = spec[0]
-        if isinstance(type_spec, str) and type_spec in SOCKET_TYPES:
+        force = len(spec) > 1 and isinstance(spec[1], dict) and spec[1].get("forceInput")
+        if (isinstance(type_spec, str) and type_spec in SOCKET_TYPES) or force:
             sockets.append((name, type_spec, is_optional))
         elif name not in hidden:
             widgets.append((name, _widget_default_text(spec)))
