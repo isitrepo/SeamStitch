@@ -1,0 +1,27 @@
+<svg width="620" height="253" viewBox="0 0 620 253" xmlns="http://www.w3.org/2000/svg" font-family="Segoe UI, Helvetica, Arial, sans-serif">
+<rect x="0" y="0" width="620" height="253" fill="#1a1a1a"/>
+<rect x="24" y="10" width="572" height="233" rx="10" fill="#2a2a2a" stroke="#454545" stroke-width="1.5"/>
+<path d="M 24 40 Q 24 10 34 10 L 586 10 Q 596 10 596 40 Z" fill="#a84f6b"/>
+<text x="38" y="30" fill="#ffffff" font-size="14" font-weight="600">SeamStitch MiniMax Guides</text>
+<rect x="25" y="39" width="570" height="24" fill="#242424" opacity="0.4"/>
+<circle cx="24" cy="51.0" r="5.5" fill="#ffcc80" stroke="#1a1a1a" stroke-width="1.5"/>
+<text x="36" y="55.0" fill="#e8e8e8" font-size="12">positive</text>
+<circle cx="596" cy="51.0" r="5.5" fill="#ffcc80" stroke="#1a1a1a" stroke-width="1.5"/>
+<text x="584" y="55.0" fill="#e8e8e8" font-size="12" text-anchor="end">positive</text>
+<circle cx="24" cy="75.0" r="5.5" fill="#ff80ab" stroke="#1a1a1a" stroke-width="1.5"/>
+<text x="36" y="79.0" fill="#e8e8e8" font-size="12">latent</text>
+<rect x="25" y="87" width="570" height="24" fill="#242424" opacity="0.4"/>
+<circle cx="24" cy="99.0" r="5.5" fill="#ef5350" stroke="#1a1a1a" stroke-width="1.5"/>
+<text x="36" y="103.0" fill="#e8e8e8" font-size="12">vae</text>
+<circle cx="24" cy="123.0" r="5.5" fill="#64b5f6" stroke="#1a1a1a" stroke-width="1.5"/>
+<text x="36" y="127.0" fill="#e8e8e8" font-size="12">start_context</text>
+<rect x="25" y="135" width="570" height="24" fill="#242424" opacity="0.4"/>
+<circle cx="24" cy="147.0" r="5.5" fill="#64b5f6" stroke="#1a1a1a" stroke-width="1.5"/>
+<text x="36" y="151.0" fill="#e8e8e8" font-size="12">end_context</text>
+<circle cx="24" cy="171.0" r="5.5" fill="#ef5350" stroke="#1a1a1a" stroke-width="1.5"/>
+<text x="36" y="175.0" fill="#e8e8e8" font-size="12" font-style="italic">audio_vae</text>
+<line x1="34" y1="192" x2="586" y2="192" stroke="#454545" stroke-width="1"/>
+<rect x="34" y="195" width="552" height="19" rx="4" fill="#3a3a3a" stroke="#555" stroke-width="1"/>
+<text x="42" y="208" fill="#9a9a9a" font-size="11">anchor_mode</text>
+<text x="578" y="208" fill="#e8e8e8" font-size="11" text-anchor="end">per frame</text>
+</svg>

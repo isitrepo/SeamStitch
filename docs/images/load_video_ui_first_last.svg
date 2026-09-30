@@ -1,18 +1,20 @@
-<svg width="620" height="1023" viewBox="0 0 620 1023" xmlns="http://www.w3.org/2000/svg" font-family="Segoe UI, Helvetica, Arial, sans-serif">
-<rect x="0" y="0" width="620" height="1023" fill="#1a1a1a"/>
-<rect x="24" y="10" width="572" height="1003" rx="10" fill="#2a2a2a" stroke="#454545" stroke-width="1.5"/>
+<svg width="620" height="999" viewBox="0 0 620 999" xmlns="http://www.w3.org/2000/svg" font-family="Segoe UI, Helvetica, Arial, sans-serif">
+<rect x="0" y="0" width="620" height="999" fill="#1a1a1a"/>
+<rect x="24" y="10" width="572" height="979" rx="10" fill="#2a2a2a" stroke="#454545" stroke-width="1.5"/>
 <path d="M 24 40 Q 24 10 34 10 L 586 10 Q 596 10 596 40 Z" fill="#2f6fa5"/>
 <text x="38" y="30" fill="#ffffff" font-size="14" font-weight="600">SeamStitch Loader</text>
 <rect x="25" y="39" width="570" height="24" fill="#242424" opacity="0.4"/>
-<circle cx="24" cy="51.0" r="5.5" fill="#64b5f6" stroke="#1a1a1a" stroke-width="1.5"/>
-<text x="36" y="55.0" fill="#e8e8e8" font-size="12" font-style="italic">input_video</text>
+<circle cx="24" cy="51.0" r="5.5" fill="#b0bec5" stroke="#1a1a1a" stroke-width="1.5"/>
+<text x="36" y="55.0" fill="#e8e8e8" font-size="12" font-style="italic">seam_frame</text>
 <circle cx="596" cy="51.0" r="5.5" fill="#64b5f6" stroke="#1a1a1a" stroke-width="1.5"/>
 <text x="584" y="55.0" fill="#e8e8e8" font-size="12" text-anchor="end">images</text>
-<circle cx="24" cy="75.0" r="5.5" fill="#ff8a80" stroke="#1a1a1a" stroke-width="1.5"/>
-<text x="36" y="79.0" fill="#e8e8e8" font-size="12" font-style="italic">input_audio</text>
+<circle cx="24" cy="75.0" r="5.5" fill="#64b5f6" stroke="#1a1a1a" stroke-width="1.5"/>
+<text x="36" y="79.0" fill="#e8e8e8" font-size="12" font-style="italic">input_video</text>
 <circle cx="596" cy="75.0" r="5.5" fill="#ff8a80" stroke="#1a1a1a" stroke-width="1.5"/>
 <text x="584" y="79.0" fill="#e8e8e8" font-size="12" text-anchor="end">audio</text>
 <rect x="25" y="87" width="570" height="24" fill="#242424" opacity="0.4"/>
+<circle cx="24" cy="99.0" r="5.5" fill="#ff8a80" stroke="#1a1a1a" stroke-width="1.5"/>
+<text x="36" y="103.0" fill="#e8e8e8" font-size="12" font-style="italic">input_audio</text>
 <circle cx="596" cy="99.0" r="5.5" fill="#b0bec5" stroke="#1a1a1a" stroke-width="1.5"/>
 <text x="584" y="103.0" fill="#e8e8e8" font-size="12" text-anchor="end">duration</text>
 <circle cx="596" cy="123.0" r="5.5" fill="#b0bec5" stroke="#1a1a1a" stroke-width="1.5"/>
@@ -119,9 +121,5 @@
 <rect x="34" y="915" width="552" height="19" rx="4" fill="#3a3a3a" stroke="#555" stroke-width="1"/>
 <text x="42" y="928" fill="#9a9a9a" font-size="11">context_frames</text>
 <text x="578" y="928" fill="#e8e8e8" font-size="11" text-anchor="end">0</text>
-<rect x="25" y="936" width="570" height="24" fill="#242424" opacity="0.4"/>
-<rect x="34" y="939" width="552" height="19" rx="4" fill="#3a3a3a" stroke="#555" stroke-width="1"/>
-<text x="42" y="952" fill="#9a9a9a" font-size="11">seam_frame</text>
-<text x="578" y="952" fill="#e8e8e8" font-size="11" text-anchor="end"></text>
-<text x="310.0" y="981" fill="#9a9a9a" font-size="10.5" text-anchor="middle" font-style="italic">Interactive timeline/crop UI and the buttons above render below the widgets shown here.</text>
+<text x="310.0" y="957" fill="#9a9a9a" font-size="10.5" text-anchor="middle" font-style="italic">Interactive timeline/crop UI and the buttons above render below the widgets shown here.</text>
 </svg>
