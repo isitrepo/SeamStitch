@@ -1,7 +1,9 @@
 # SeamStitch
 
 ComfyUI nodes for a "trim a broken segment out of a video, regenerate it, splice it back
-in seamlessly" workflow — three core nodes, plus an LTX helper:
+in seamlessly" workflow — a Loader, a Combine and a Recombine, a one-track Timeline editor that
+replaces the first two, a Result Preview that saves and rates the result, and guide helpers for
+LTX and MiniMax:
 
 - **SeamStitch Loader** (`SeamStitchLoader`) — scrub/trim a video with an interactive timeline,
   and get first/last frame outputs for first-last-frame (FLF) generation pipelines, plus
@@ -18,6 +20,10 @@ in seamlessly" workflow — three core nodes, plus an LTX helper:
   an LTX-2.x latent, one frame per guide (see *Motion guides* below).
 - **SeamStitch MiniMax Guides** (`SeamStitchMiniMaxGuides`) — the same for a MiniMax H3 latent,
   one single-frame anchor per frame or one clip anchor per side.
+- **SeamStitch Timeline** (`SeamStitchTimeline`) — a one-track editor (arrange, trim, cut, gap) and
+  splice marker; outputs exactly what the Loader does, so it drops in where Combine + Loader were.
+- **SeamStitch Result Preview** (`SeamStitchResultPreview`) — saves the final video through VHS's
+  encode path, plays it with the regenerated span marked, and rates the joins.
 
 ![Recommended wiring between the three nodes](docs/images/wiring_overview.svg)
 
@@ -64,17 +70,17 @@ git clone https://github.com/kosinkadink/ComfyUI-VideoHelperSuite.git
 pip install -r ComfyUI-VideoHelperSuite/requirements.txt
 ```
 
-Restart ComfyUI. All three nodes appear under the **SeamStitch** category in the node search
+Restart ComfyUI. All the nodes appear under the **SeamStitch** category in the node search
 (double-click the canvas and type a node's name, or right-click → Add Node → SeamStitch).
 
 ### Dependency: ComfyUI-VideoHelperSuite
 
-`SeamStitchRecombine` is a fork of ComfyUI-VideoHelperSuite's `VHS_VideoCombine` node and
-reuses VHS's own ffmpeg-format handling, encode pipeline, and audio extraction internals
+`SeamStitchRecombine` and `SeamStitchResultPreview` are built on ComfyUI-VideoHelperSuite's
+`VHS_VideoCombine` node and reuse VHS's own ffmpeg-format handling, encode pipeline, and audio extraction internals
 directly (rather than duplicating hundreds of lines of ffmpeg-piping code). At import time it
 locates VHS's installed folder automatically — it doesn't matter what that folder is named, it
 scans every `custom_nodes` sibling for a `videohelpersuite` package — and adds it to `sys.path`.
-**If VHS isn't found, the other two nodes still load normally**; only `SeamStitchRecombine` is
+**If VHS isn't found, the other nodes still load normally**; only `SeamStitchRecombine` is
 skipped, with a warning logged at startup naming the problem.
 
 ## Nodes
@@ -178,6 +184,13 @@ With `context_frames` at 0 (default) nothing changes: `start_context` / `end_con
 `first_frame` / `last_frame`, so **SeamStitch LTX Guides** can always be wired in. Replace mode
 only — insert mode already pins one kept frame each side.
 
+**Frame accuracy.** Replace mode used to drift: it accumulated the frame interval, so an
+exactly-equal frame time was skipped and the next one doubled (frames 10..19 of a 48 fps clip came
+back `10, 12, 12, 13…`), and a range lost its last frame (`end_frame` one short). The sampler now
+derives each target from the frame count, the same rule Recombine decodes with. Separately, files
+coded as RGB (FFV1) and files with millisecond timestamps (MKV) now decode exactly; the same fixes
+apply in Recombine and the Timeline.
+
 Based on [WhatDreamsCost-ComfyUI](https://github.com/WhatDreamsCost/WhatDreamsCost-ComfyUI)'s
 Load Video UI node, with the outputs above added on top for FLF/splice workflows.
 
@@ -259,7 +272,15 @@ these straight from **SeamStitch Loader**'s matching outputs), and:
    from the file itself, or from `original_audio_override` (which must be on the source file's own
    timeline, as `SeamStitchLoader`'s `full_clip_audio` is). The file's own video/audio start
    offset is honoured — `SeamStitchCombine`'s output delays its video 31 ms to cover AAC priming.
-6. Encodes the result via ffmpeg. The `format` widget defaults to `video/h264-mp4`.
+6. Encodes the result via ffmpeg. The `format` widget defaults to `video/h264-mp4`, and the
+   `crf` / `pix_fmt` / `save_metadata` widgets are honoured. (Before 0.3.0 the node passed an empty
+   format dict to the encoder, so every encode was the format's default — h264 crf 19 — whatever
+   the widgets said.)
+
+   **`skip_encode`** (BOOLEAN, off by default, appended last): splice only. `combined_images` and
+   `audio` come out but no video is written (`Filenames` is empty). Turn it on when
+   **SeamStitch Result Preview** (or VHS Video Combine) saves the final video, so the splice is not
+   encoded twice.
 
 #### `insert` — put a bridge between two frames instead of over a range
 
@@ -309,52 +330,134 @@ pinned frame; `img_compression` runs `LTXVPreprocess` on each frame first (leave
 went through one). Wraps core ComfyUI's own `LTXVAddGuide`, so it needs a ComfyUI with LTX
 support; without it only this node is skipped at startup.
 
-### SeamStitch Timeline (prototype)
+### SeamStitch MiniMax Guides
 
-A one-track mini video editor that replaces the Combine → Loader pair. Its controls follow
-[comfyui-obvpm-timeline](https://github.com/chanon/comfyui-obvpm-timeline)'s Timeline node;
-the splice model underneath is SeamStitch's own.
+The MiniMax H3 counterpart of LTX Guides: pins the Loader's (or Timeline's) `start_context` /
+`end_context` onto an H3 latent through core ComfyUI's own `MiniMaxH3AddGuide`. Inputs: `positive`,
+`latent`, `vae`, `start_context`, `end_context`, `anchor_mode`, and an optional `audio_vae`
+(not needed for image anchors). Output: the `positive` conditioning.
 
-- **The strip.** Drag videos onto the node (or **+ add** from the input folder). Blocks are sized
-  by the frames they play. Drag a block to reorder it; drag the grips on the lower half of its
-  edges to trim; **cut left / cut right / split** act at the playhead; **uncut** restores the
-  whole clip. **✎** edits the strip as text: `path @ enter..exit` per clip, `~ N` for an N-frame
-  gap.
-- **Mark one splice** (one at a time):
-  - *a range* — press **I** / **O** at the playhead, or drag along the purple row under the
-    strip, then drag that row's edges. Replace mode, exactly as the Loader's.
-  - *a cut between two clips* — click the **✂** pill on the join and pick **bridge this cut**
-    (N frames either side, replace mode — the way S5 measured to smooth a hard cut).
-  - *a gap* — ✂ → **open a gap here**. The gap is the number of NEW frames; it becomes insert
-    mode with the generator asked for gap + 2 (its first and last frame are the kept frames
-    either side, which Recombine drops again).
-- **Next-run bar** says what the next queue will do and how many frames the generator will be
-  asked for, using the Loader's own rules (`bridge_frame_grid`, `context_frames`,
-  `extend_frames`). Context frames show as lighter bands either side of the range.
-- **Preview.** *quick* plays the clips one after another straight from their files; *full* has the
-  server build the real cut — the file Recombine will splice — and plays that. Space plays,
-  ←/→ step a frame (shift: 10), Home/End jump; keys only act while the pointer is over the node.
+- **`anchor_mode` = `per frame`** (default): every context frame is its own single-frame anchor,
+  `start_context[i]` at bridge frame `i` and the last `end_context` frame on the bridge's last
+  frame. Works for any `context_frames`, and places frames exactly like the LTX node.
+- **`anchor_mode` = `clip`**: each side is one multi-frame clip anchor (start at 0, end at -K) —
+  H3's own motion anchor, fewer tokens — but only for K = 5, 22, 39… (**17k+5**); any other K is
+  refused.
+- Set the Loader's / Timeline's `bridge_frame_grid` to `minimax (17k+5)` so `frame_count` lands on
+  H3's length grid.
+- For `MiniMaxH3ReferenceToVideo`'s reference images ("Picture 1" / "Picture 2" in the prompt),
+  take `start_context` frame 0 and `end_context` frame -1 with core ComfyUI's **ImageFromBatch**
+  (index 0 and index -1, length 1). This node has no image outputs on purpose: its conditioning
+  comes from the reference node, so wiring images out of it made a dependency cycle. The Timeline's
+  `end_seconds` / `picture_timing` outputs give the time "Picture 2" must appear at.
 
-**Outputs are SeamStitch Loader's 18, in the same order, computed by the Loader itself on the
-assembled cut**, so the node drops into an existing graph where the Loader was. The cut is decoded on
-Recombine's own index-exact timeline and encoded once at `frame_rate` (`assemble_crf`, default 12),
-into `input/seamstitch_timeline/`, cached by content. A strip that is one untouched clip at its own
-frame rate is passed through as the file itself — no re-encode before Recombine. Clips of a different
-size are fitted onto the first clip's (`mismatch_fit` crop / pad).
+Needs a ComfyUI with MiniMax H3 support; without it only this node is skipped at startup.
 
-### SeamStitch Result Preview (prototype)
+### SeamStitch Timeline
 
-Wire Recombine's `Filenames` plus the Timeline's (or Loader's) `source_video_path`, `start_frame`,
-`end_frame` and `frame_rate`. After the run it plays the result with the regenerated span marked and
-rates three things: the join **into the new frames**, the join **back to the footage**, and the worst
-step **inside the new frames** — each as the picture change across it over the typical (75th
-percentile) change in the 24 frames around it: under 1.8 *seamless*, under 3.0 *soft bump*, else
-*hard cut*. The same measure on the original range is shown as *before*. On the four real test clips
-ordinary motion peaks at 1.27–1.66; the 4 → 2 hard cut reads 6.5. It rates motion continuity, not
-picture quality — a plain crossfade reads seamless. **use as timeline** puts the result on the
+A one-track mini video editor that replaces the Combine → Loader pair: the strip *is* the combine,
+the marked splice *is* the trim. Its controls follow
+[comfyui-obvpm-timeline](https://github.com/chanon/comfyui-obvpm-timeline)'s Timeline node
+(GPL-3.0); the splice model underneath is SeamStitch's own.
+
+**The strip**
+
+- Drag videos onto the node (or **+ add** from the input folder). Blocks are sized by the frames
+  they play.
+- Drag the **⠿ name bar** of a block to reorder it. Drag the grips on the lower half of its edges
+  to trim. **cut left / cut right / split** act at the playhead; **uncut** restores the whole clip.
+  **✎** edits the strip as text: `path @ enter..exit` per clip, `~ N` for an N-frame gap.
+- **Scrub:** drag a clip or the ruler. Wheel over the picture steps frames (shift: 10); wheel over
+  the ruler zooms. Space plays, ←/→ step a frame (shift: 10), Home/End jump; keys only act while the
+  pointer is over the node.
+- The whole node scales with its width — strip, text and buttons stay readable on a big node.
+
+**Mark one splice** (one at a time)
+
+- *A range* — press **I** / **O** at the playhead, or drag along the purple row under the strip,
+  then drag that row's edges. Replace mode, exactly as the Loader's. Markers snap to whole frames.
+- *A cut between two clips* — click the **✂** pill on the join and pick **bridge this cut** (N
+  frames either side, replace mode). Measured to smooth a hard cut far better than insert mode.
+- *A gap* — ✂ → **open a gap here**. The gap is the number of NEW frames. With no markers it is a
+  pure insert: insert mode, the generator asked for gap + 2 (its first and last frame are the kept
+  frames either side, which Recombine drops again). A gap also takes I/O markers:
+  - **markers either side of the join** — replace the footage across the join **plus** the gap's
+    frames (the Loader's `extend_bridge`): the generator is asked for the marked range plus the gap.
+  - **markers on the gap's own edges** — a pure insert.
+
+**Next-run bar** says what the next queue will do and how many frames the generator will be asked
+for, using the Loader's own rules (`bridge_frame_grid`, `context_frames`, `extend_frames`), and
+where the generator's last frame falls ("Picture 2 at N s"). Context frames show as lighter bands
+either side of the range.
+
+**Preview.** *quick* plays the clips one after another straight from their files; *full* has the
+server build the real cut — the file Recombine will splice — and plays that.
+
+**Outputs** are SeamStitch Loader's 18, in the Loader's order, computed by the Loader itself on the
+assembled cut — so the node drops in where the Loader was — **plus two appended at the end**:
+
+| Output | Notes |
+| --- | --- |
+| `end_seconds` | FLOAT. Time of the generator's last frame, `(frame_count - 1) / frame_rate`: where the pinned end frame sits, i.e. when "Picture 2" must appear. |
+| `picture_timing` | STRING. A MiniMax reference-prompt alignment line with those numbers filled in; concatenate it in front of the scene description so the time never goes stale when markers, gap, extension or grid change the length. |
+
+**Widgets:** `frame_rate` (0 = the first clip's), `bridge_frame_grid`, `context_frames`,
+`extend_frames`, `snap_to_multiple`, `mismatch_fit` (clips of a different size are fitted onto the
+first clip's: crop / pad), and **`cut_codec`**:
+
+- `lossless` (default): the cut is assembled as FFV1 — exactly the decoded clips, no colour shift
+  before the final save — but large (about 1.6 GB a minute at 832×1280).
+- `h264`: small, one lossy generation; quality is `assemble_crf` (default 12).
+
+The cut goes into `input/seamstitch_timeline/`, cached by content, and is decoded on Recombine's own
+index-exact timeline. A strip that is one untouched clip at its own frame rate is passed through as
+the file itself — no re-encode before Recombine. The browser always plays a small H.264 copy.
+
+### SeamStitch Result Preview
+
+Wire Recombine's `combined_images` / `audio` (with Recombine's `skip_encode` on) — or, instead,
+its `Filenames` — plus the Timeline's (or Loader's) `source_video_path`, `start_frame`, `end_frame`
+and `frame_rate`.
+
+**It saves the final video.** With `images` wired it encodes through VHS's own encode path, so an
+`h264-mp4` save is pixel-identical to VHS Video Combine. Widgets: `filename_prefix` (default is
+date-stamped, `seamstitch_%date:yyyyMMdd_hhmmss%`), `format`, `crf` (default 12), `pix_fmt`
+(`yuv420p` / `yuv420p10le`), `save_metadata` (embeds the workflow, as VHS does), `save_output`
+(off = temp only). Formats are VHS's, including **FFV1 (mkv)** and **ProRes (written as 4444)** for
+a master with no 4:2:0 colour loss; those play here through a small H.264 proxy.
+
+**It rates the joins.** After the run it plays the result with the regenerated span marked and
+rates three things: the join **into the new frames**, the join **back to the footage**, and the
+worst step **inside the new frames** — each as the picture change across it over the typical
+(75th-percentile) change in the 24 frames around it: under 1.8 *seamless*, under 3.0 *soft bump*,
+else *hard cut*. The same measure on the original range is shown as *before*. On the real test
+clips ordinary motion peaks at 1.27–1.66; a hard cut reads 6.5. It rates motion continuity, not
+picture quality — a plain crossfade reads seamless.
+
+**Player.** A seconds ruler; scrub/jog like the Timeline. **▶ seam 1 / seam 2 / worst inside**
+loop a second either side of that join. **📷 save frame** writes the exact frame under the playhead
+as a PNG to `output/seamstitch_frames`, colour-converted from the saved video — use it as a
+first/last-frame reference instead of a screen grab. **use as timeline** puts the result on the
 Timeline as its only clip, so the next splice starts from it.
 
 ## Recommended wiring
+
+The current path — Timeline, your generator, Recombine, Result Preview:
+
+```
+SeamStitchTimeline ──images / first_frame / last_frame (or start/end_context → Guides)──► (generator)
+                   ──source_video_path / start_frame / end_frame / frame_rate ─────────► SeamStitchRecombine
+                   ──full_clip_audio──► SeamStitchRecombine.original_audio_override (optional)
+                   ──context_frames / insert ──────────────────────────────────────────► SeamStitchRecombine
+                   ──source_video_path / start_frame / end_frame / frame_rate ─────────► SeamStitchResultPreview
+                   ──end_seconds / picture_timing ─► (MiniMax reference prompt, optional)
+
+(generator output) ─► SeamStitchRecombine.regenerated_images   [skip_encode = on]
+SeamStitchRecombine ──combined_images / audio──► SeamStitchResultPreview.images / audio
+```
+
+The original path — a Loader in place of the Timeline, with Combine optionally in front — still
+works unchanged:
 
 ```
 SeamStitchLoader    ──images──────────────────────► (your regeneration pipeline)
@@ -377,7 +480,7 @@ already-concatenated clips before regenerating the segment between them:
 SeamStitchCombine ──images/audio──► SeamStitchLoader.input_video/input_audio
 ```
 
-See [docs/images/wiring_overview.svg](docs/images/wiring_overview.svg) for the same thing as a
+See [docs/images/wiring_overview.svg](docs/images/wiring_overview.svg) for the original path as a
 diagram.
 
 ## Credits / forked from
@@ -391,17 +494,28 @@ scratch:
   full-clip-audio outputs added.
 - **[ComfyUI-VideoHelperSuite](https://github.com/kosinkadink/ComfyUI-VideoHelperSuite)** by
   [Kosinkadink](https://github.com/kosinkadink) (GPL-3.0) — `SeamStitchRecombine` is a fork of
-  its `VHS_VideoCombine` node's encode pipeline, and is also a runtime dependency for that one
-  node (see above).
+  its `VHS_VideoCombine` node's encode pipeline, and it and `SeamStitchResultPreview` are runtime
+  dependents of VHS (see above).
+- **[comfyui-obvpm-timeline](https://github.com/chanon/comfyui-obvpm-timeline)** by
+  [chanon](https://github.com/chanon) (GPL-3.0) — the idea and control set behind the Timeline and
+  Result Preview (strip with trim grips, cut at the playhead, seam pills, next-run bar, quick/full
+  preview). The code here was written independently for SeamStitch's splice model; the JS headers
+  say so.
 
-If you use SeamStitch, consider starring/crediting those two projects as well.
+If you use SeamStitch, consider starring/crediting those projects as well.
 
 ## Status
 
-Prototype-stage nodes. `SeamStitchLoader` and `SeamStitchCombine` have been used in the
-author's own workflows on real footage; `SeamStitchRecombine` has likewise been used in the
-author's own workflows on real footage, though it's the newest of the three. None are yet
-published to the Comfy Registry. Issues and PRs welcome.
+Early-stage. `SeamStitchLoader`, `SeamStitchCombine`, `SeamStitchRecombine`, the Timeline and the
+Result Preview have been used in the author's own workflows on real footage. The LTX and MiniMax
+guide nodes are newer and have had less real-render testing. None are yet published to the Comfy
+Registry. Issues and PRs welcome.
+
+**Upgrading from v0.1.0** — two breaking changes: `SeamStitchRecombine`'s `crop_x` / `crop_y` /
+`crop_w` / `crop_h` widgets are gone (a saved graph's Recombine widget values shift by position, so
+re-check `audio_mode`, `audio_crossfade_ms`, `audio_bridge_weight` and `insert`, or re-add the
+node), and `SeamStitchCombine`'s `video_path` output is gone (wire the Loader's `source_video_path`
+into `original_video_path` instead). See the [changelog](docs/CHANGELOG.md).
 
 ## License
 
