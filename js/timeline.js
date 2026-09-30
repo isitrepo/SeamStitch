@@ -369,10 +369,20 @@ function buildTimeline(node) {
         }
         if (tg.mode === "gap") {
             if (!gaps.length) return { err: "the mark is a gap bridge but there is no gap" };
-            const g = gaps[0], join = cutBefore(g.i), trim = tg.trim | 0;
-            if (join - trim - 1 < 0 || join + trim > t.cut - 1) return { err: "a bridged gap needs real footage on both sides" };
-            if (ctxK()) return { err: "context_frames is for ranges only - set it to 0 for a gap bridge" };
-            return { mode: "gap", start: join - trim, end: join + trim - 1, join, trim, length: g.e.frames + 2 * trim + 2, gen: snapNearest(g.e.frames + 2 * trim + 2, grid()) };
+            const g = gaps[0], join = cutBefore(g.i), G = g.e.frames;
+            if (join < 1 || join > t.cut - 1) return { err: "a bridged gap needs real footage on both sides - move it between two clips" };
+            let s, e;
+            if ("start" in tg || "end" in tg) { s = tg.start ?? join; e = tg.end ?? join - 1; }
+            else { const tr = tg.trim | 0; s = join - tr; e = join + tr - 1; }        // older saves
+            if (s === join && e === join - 1) {
+                if (ctxK()) return { err: "context_frames needs frames marked around the gap (I / O) - a pure insert pins one kept frame each side" };
+                return { mode: "gap", pure: true, start: s, end: e, join, G, gx: g, length: G + 2, gen: snapNearest(G + 2, grid()), k: 0 };
+            }
+            if (!(s >= 1 && s < join && e >= join && e <= t.cut - 2))
+                return { err: `the I / O markers must straddle the gap: I before cut frame ${join}, O at or after it (now ${s}..${e}) - or press "pure insert"` };
+            const k = ctxK();
+            if (k && (s - k < 0 || e + k > t.cut - 1)) return { err: `context_frames ${k} needs ${k} real frames outside the markers` };
+            return { mode: "gap", pure: false, start: s, end: e, join, G, gx: g, k, gen: snapUp(e - s + 1 + 2 * k + extN() + G, grid()) };
         }
         return { none: true };
     }
@@ -461,11 +471,26 @@ function buildTimeline(node) {
             g.fillStyle = "#fff"; g.font = font(10);
             g.fillText(`regenerate ${p.end - p.start + 1}f`, f2x(s0) + 3, BAND_Y + BAND_H / 2);
         } else if (p.mode === "gap") {
-            const gx = t.L.find(x => x.e.kind === "gap");
+            const gx = p.gx;
+            const [s0, s1] = markSpan(p);
+            if (!p.pure) {
+                if (p.k) {
+                    g.fillStyle = C.ctx;
+                    g.fillRect(f2x(cutToStrip(p.start - p.k)), TRACK_Y, f2x(s0) - f2x(cutToStrip(p.start - p.k)), TRACK_H);
+                    g.fillRect(f2x(s1), TRACK_Y, f2x(cutToStrip(p.end + p.k) + 1) - f2x(s1), TRACK_H);
+                }
+                g.fillStyle = C.target; g.fillRect(f2x(s0), TRACK_Y, f2x(s1) - f2x(s0), TRACK_H);
+            }
             g.strokeStyle = C.targetEdge; g.lineWidth = 2;
             g.strokeRect(f2x(gx.strip) + 1, TRACK_Y + 1, f2x(gx.strip + gx.len) - f2x(gx.strip) - 2, TRACK_H - 2); g.lineWidth = 1;
-            g.fillStyle = C.targetEdge; g.fillRect(f2x(gx.strip), BAND_Y + 2, f2x(gx.strip + gx.len) - f2x(gx.strip), BAND_H - 4);
-            g.fillStyle = "#fff"; g.fillText(`bridge ${p.gen}f`, f2x(gx.strip) + 3, BAND_Y + BAND_H / 2);
+            g.fillStyle = C.targetEdge; g.fillRect(f2x(s0), BAND_Y + 2, f2x(s1) - f2x(s0), BAND_H - 4);
+            // I / O marker flags at the band's ends
+            g.fillStyle = "#fff"; g.font = font(9, true);
+            g.fillRect(f2x(s0), BAND_Y, 2 * U, BAND_H); g.fillRect(f2x(s1) - 2 * U, BAND_Y, 2 * U, BAND_H);
+            g.fillText("I", f2x(s0) + 4 * U, BAND_Y + BAND_H / 2);
+            g.textAlign = "right"; g.fillText("O", f2x(s1) - 4 * U, BAND_Y + BAND_H / 2); g.textAlign = "left";
+            g.font = font(10);
+            g.fillText(p.pure ? `insert ${p.gen - 2}f` : `regenerate ${p.end - p.start + 1}f + ${p.G}f new`, f2x(s0) + 14 * U, BAND_Y + BAND_H / 2);
         } else if (S.drag && S.drag.kind === "band") {
             // nothing yet
         } else {
@@ -496,7 +521,7 @@ function buildTimeline(node) {
             selBar.append(el("span", { fontWeight: "bold" }, `gap · ${x.len} frames (${(x.len / S.fr).toFixed(2)}s)`),
                 button("−8", "Shorter", () => { x.e.frames = Math.max(1, x.e.frames - 8); save(false); }),
                 button("+8", "Longer", () => { x.e.frames += 8; save(false); }),
-                button("bridge this gap", "Generate new frames to fill the gap (insert mode)", () => setTarget({ mode: "gap", trim: 0 })),
+                button("bridge this gap", "Regenerate the frames marked I / O either side and add the gap's frames (the Loader's extend_bridge)", () => setTarget(defaultGapMarks(gapInfo()))),
                 button("remove gap", "Close the gap", () => { S.entries.splice(x.i, 1); S.sel = -1; save(true); }));
             return;
         }
@@ -526,17 +551,20 @@ function buildTimeline(node) {
                 el("span", { color: C.dim }, "→"),
                 el("span", { fontWeight: "bold" }, `generator ${p.gen}f`),
                 el("span", { color: C.dim }, `(${grid()}${p.k ? `, ${p.k} context each side` : ""}${grew > 0 ? `, +${grew}f longer` : ""})`));
-        } else {
-            nextBar.append(lead, el("span", {}, `bridges the gap at cut frame ${p.join}${p.trim ? `, trimming ${p.trim}f each side` : ""}`),
+        } else if (p.pure) {
+            nextBar.append(lead, el("span", {}, `inserts new frames at cut frame ${p.join}, nothing replaced`),
                 el("span", { color: C.dim }, "→"),
                 el("span", { fontWeight: "bold" }, `generator ${p.gen}f`),
-                el("span", { color: C.dim }, `(${grid()}; its first and last frame are the two kept frames either side, so ${p.gen - 2} new frames go in for ${p.length - 2}f of gap${p.trim ? " + trim" : ""}${p.gen !== p.length ? ", rounded to the grid" : ""})`));
-            const trimIn = el("input", { width: "3.5em", background: "#111", color: C.text, border: "1px solid #444", fontSize: "1em" });
-            trimIn.type = "number"; trimIn.min = "0"; trimIn.value = String(p.trim);
-            trimIn.title = "trim_each_side: frames removed either side of the gap";
-            trimIn.onchange = () => setTarget({ mode: "gap", trim: Math.max(0, trimIn.value | 0) });
-            trimIn.onpointerdown = (e) => e.stopPropagation();
-            nextBar.append(el("span", { color: C.dim, marginLeft: "8px" }, "trim each side"), trimIn);
+                el("span", { color: C.dim }, `(${grid()}; its first and last are the kept frames either side, so ${p.gen - 2} new frames go in for the ${p.G}f gap)`),
+                button("mark around it", "Also regenerate some footage either side (I / O) - smoother over a hard cut", () => setTarget(defaultGapMarks(gapInfo()))));
+        } else {
+            const n = p.end - p.start + 1;
+            const longer = p.gen - n - 2 * p.k;
+            nextBar.append(lead, el("span", {}, `regenerates cut frames ${p.start}-${p.end} (${n}f, I/O) + ${p.G}f for the gap`),
+                el("span", { color: C.dim }, "→"),
+                el("span", { fontWeight: "bold" }, `generator ${p.gen}f`),
+                el("span", { color: C.dim }, `(${grid()}${p.k ? `, ${p.k} context each side` : ""}; the video gets ${longer}f / ${sec(longer)} longer)`),
+                button("pure insert", "Replace nothing: only new frames go into the gap", () => { const gi = gapInfo(); setTarget({ mode: "gap", start: gi.join, end: gi.join - 1 }); }));
         }
         nextBar.append(button("go to", "Move the playhead to the mark", () => seekStrip(cutToStrip(Math.max(0, p.start - 12)))));
     }
@@ -549,13 +577,46 @@ function buildTimeline(node) {
         gapCover.style.display = x && x.e.kind === "gap" && S.mode === "quick" ? "flex" : "none";
     }
 
+    // Strip span of the marked frames: a gap target's span always includes the gap.
+    function markSpan(p) {
+        if (p.mode === "gap" && p.pure) return [p.gx.strip, p.gx.strip + p.gx.len];
+        return [cutToStrip(p.start), cutToStrip(p.end) + 1];
+    }
+    function gapInfo() {
+        const x = layout().find(y => y.e.kind === "gap");
+        return x ? { x, join: cutBefore(x.i) } : null;
+    }
+    // Cut frame for a marker at strip frame f: inside the gap, I sits on the gap's far
+    // edge (nothing marked before it) and O on its near edge (nothing marked after it).
+    function markerCut(f, side, gi) {
+        const inGap = f >= gi.x.strip && f < gi.x.strip + gi.x.len;
+        if (inGap) return side === "start" ? gi.join : gi.join - 1;
+        const c = stripToCut(f);
+        return side === "start" ? Math.min(c, gi.join) : Math.max(c, gi.join - 1);
+    }
+    function gapMarks() {
+        const gi = gapInfo();
+        const p = plan();
+        if (p.mode === "gap") return { s: p.start, e: p.end, gi };
+        return { s: gi.join, e: gi.join - 1, gi };
+    }
+    function defaultGapMarks(gi) {
+        const each = Math.max(4, Math.round(S.fr / 4));
+        const cut = totals().cut;
+        return { mode: "gap", start: Math.max(1, gi.join - each), end: Math.min(cut - 2, gi.join + each - 1) };
+    }
+
     // ------------------------------------------------------------ editing
     function markIn() {
+        const gi = gapInfo();
+        if (gi) { const m = gapMarks(); setTarget({ mode: "gap", start: markerCut(S.playhead, "start", gi), end: m.e }); return; }
         const c = stripToCut(S.playhead);
         const t = S.target.mode === "replace" ? S.target : { mode: "replace", start: c, end: c + 11 };
         setTarget({ mode: "replace", start: c, end: Math.max(c, t.end >= c ? t.end : c + 11) });
     }
     function markOut() {
+        const gi = gapInfo();
+        if (gi) { const m = gapMarks(); setTarget({ mode: "gap", start: m.s, end: markerCut(S.playhead, "end", gi) }); return; }
         const c = stripToCut(S.playhead);
         const t = S.target.mode === "replace" ? S.target : { mode: "replace", start: Math.max(1, c - 11), end: c };
         setTarget({ mode: "replace", start: Math.min(t.start <= c ? t.start : c - 11, c), end: c });
@@ -575,7 +636,8 @@ function buildTimeline(node) {
         S.entries.splice(i, 0, { kind: "gap", frames: Math.max(9, Math.round(S.fr)) });
         S.sel = i;
         save(true);
-        setTarget({ mode: "gap", trim: 0 });
+        setTarget(defaultGapMarks(gapInfo()));
+        toast("gap opened - I / O mark the footage either side to regenerate with it; drag them on the purple row", "ok");
     }
     function bridgeSeam(i, each) {
         const x = layout()[i];
@@ -814,8 +876,9 @@ function buildTimeline(node) {
         if (p.y < RULER_H) return { kind: "ruler" };
         if (p.y >= BAND_Y) {
             const pl = plan();
-            if (pl.mode === "replace") {
-                const x0 = f2x(cutToStrip(pl.start)), x1 = f2x(cutToStrip(pl.end) + 1);
+            if (pl.mode === "replace" || pl.mode === "gap") {
+                const [a, b] = markSpan(pl);
+                const x0 = f2x(a), x1 = f2x(b);
                 if (Math.abs(p.x - x0) < EDGE_PX) return { kind: "bandEdge", side: "start" };
                 if (Math.abs(p.x - x1) < EDGE_PX) return { kind: "bandEdge", side: "end" };
                 if (p.x > x0 && p.x < x1) return { kind: "bandBody" };
@@ -881,8 +944,14 @@ function buildTimeline(node) {
         }
         if (h.kind === "bandEdge") { S.drag = { kind: "bandEdge", side: h.side }; return; }
         if (h.kind === "band" || h.kind === "bandBody") {
-            const t = totals();
-            if (t.L.some(x => x.e.kind === "gap")) { toast("close the gap first - a range and a gap bridge are two different splices", "warn"); return; }
+            const gi = gapInfo();
+            if (gi) {       // with a gap, a click on the row sets the nearer marker
+                const f = x2f(p.x), m = gapMarks();
+                if (f < gi.x.strip) setTarget({ mode: "gap", start: markerCut(f, "start", gi), end: m.e });
+                else if (f >= gi.x.strip + gi.x.len) setTarget({ mode: "gap", start: m.s, end: markerCut(f, "end", gi) });
+                S.drag = { kind: "bandEdge", side: f < gi.x.strip ? "start" : "end" };
+                return;
+            }
             const c = stripToCut(x2f(p.x));
             S.drag = { kind: "band", anchor: c };
             setTarget({ mode: "replace", start: c, end: c });
@@ -921,6 +990,13 @@ function buildTimeline(node) {
             const g = canvas.getContext("2d");
             const ix = to < L.length ? f2x(L[to].strip) : f2x(totals().strip);
             g.fillStyle = C.play; g.fillRect(ix - 1.5 * U, TRACK_Y - 2, 3 * U, TRACK_H + 4);
+            return;
+        }
+        if (d.kind === "bandEdge" && gapInfo()) {
+            const gi = gapInfo(), m = gapMarks();
+            if (d.side === "start") setTarget({ mode: "gap", start: Math.max(1, markerCut(f, "start", gi)), end: m.e });
+            else setTarget({ mode: "gap", start: m.s, end: Math.min(totals().cut - 2, markerCut(f, "end", gi)) });
+            seekStrip(Math.max(0, Math.min(totals().strip - 1, Math.round(f))));
             return;
         }
         if (d.kind === "band" || d.kind === "bandEdge") {

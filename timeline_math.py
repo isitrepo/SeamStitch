@@ -20,9 +20,13 @@ what Loader/Recombine see as start_frame/end_frame.
 The splice target is one small JSON object (one splice at a time):
 
     {"mode": "replace", "start": S, "end": E}    regenerate cut frames S..E
-    {"mode": "gap", "trim": N}                   bridge the timeline's one gap
-                                                 (insert mode, N frames trimmed
-                                                 either side of it)
+    {"mode": "gap", "start": S, "end": E}        bridge the timeline's one gap: regenerate
+                                                 cut frames S..E around it (S before the
+                                                 gap, E after) and add the gap's frames -
+                                                 the Loader's extend_bridge, across a join.
+                                                 S = gap, E = gap - 1 marks nothing: a pure
+                                                 insert. (Older saves: {"trim": N} = N
+                                                 frames either side.)
     {}                                           nothing marked
 """
 
@@ -137,9 +141,10 @@ def resolve_target(target, cut):
     """Splice target -> the Loader arguments that express it on the cut.
 
     Returns {"mode": "replace range"|"insert at join", "start": S, "end": E,
-    "join": J, "trim": N, "length": L} - start/end inclusive cut frames of the
-    range that is replaced (insert: removed, end = start - 1 when nothing is), join
-    and length only meaningful in insert mode."""
+    "join": J, "trim": N, "length": L, "extra": X} - start/end inclusive cut frames of
+    the range that is replaced (insert: end = start - 1, nothing removed); join/trim/
+    length drive insert mode; extra is how many frames longer than the range the
+    generator is asked for (a bridged gap's frames), on top of extend_frames."""
     mode = target.get("mode")
     n_frames = cut["frames"]
     if len(cut["gaps"]) > 1:
@@ -157,22 +162,38 @@ def resolve_target(target, cut):
             raise SequenceError(
                 f"replace range {s}..{e} touches the end of the cut (0..{n_frames - 1}); a bridge "
                 f"needs a real frame either side to land on")
-        return {"mode": "replace range", "start": s, "end": e, "join": 0, "trim": 0, "length": e - s + 1}
+        return {"mode": "replace range", "start": s, "end": e, "join": 0, "trim": 0, "length": e - s + 1,
+                "extra": 0}
     if mode == "gap":
         if not cut["gaps"]:
             raise SequenceError("the target is a gap bridge but the timeline has no gap - open one "
                                 "with a seam's menu or ctrl+drag on the strip")
         g = cut["gaps"][0]
-        join, trim = g["cut_pos"], max(0, int(target.get("trim", 0)))
-        if join - trim - 1 < 0 or join + trim > n_frames - 1:
+        join, n_gap = g["cut_pos"], g["frames"]
+        if "start" in target or "end" in target:
+            s, e = int(target.get("start", join)), int(target.get("end", join - 1))
+        else:                                   # older saves: symmetric trim
+            t = max(0, int(target.get("trim", 0)))
+            s, e = join - t, join + t - 1
+        if join < 1 or join > n_frames - 1:
+            raise SequenceError("a bridged gap needs real footage on both sides - move it between two clips")
+        if (s, e) == (join, join - 1):
+            # Nothing marked around the gap: a pure insert. The gap is the number of NEW
+            # frames; the generator also renders the two kept frames either side
+            # (Recombine drops them again), so it is asked for gap + 2.
+            return {"mode": "insert at join", "start": join, "end": join - 1, "join": join, "trim": 0,
+                    "length": n_gap + 2, "extra": 0}
+        if not (1 <= s < join <= e < n_frames - 1):
             raise SequenceError(
-                "a bridged gap needs real footage on both sides (and trim_each_side frames more "
-                "on each) - move it between two clips")
-        # The gap on the strip is the number of NEW frames. The generator also renders
-        # the two kept frames either side (Recombine drops them again) and re-renders
-        # the trimmed ones, so it is asked for gap + 2*trim + 2.
-        return {"mode": "insert at join", "start": join - trim, "end": join + trim - 1,
-                "join": join, "trim": trim, "length": g["frames"] + 2 * trim + 2}
+                f"the markers around the gap must straddle it: I before cut frame {join}, O at or "
+                f"after it, each leaving a real frame at the cut's ends (got {s}..{e}) - or pull "
+                f"both onto the gap's edges for a pure insert")
+        # Replace S..E across the join and give the generator the gap's frames on top:
+        # the Loader's extend_bridge. The video comes out n_gap frames longer (plus any
+        # grid rounding), and the join itself is regenerated - the S5-proven way over a
+        # hard cut, where a pure insert idled on one side and then cut.
+        return {"mode": "replace range", "start": s, "end": e, "join": join, "trim": 0,
+                "length": e - s + 1, "extra": n_gap}
     raise SequenceError("nothing is marked to regenerate - mark a range (I / O), click a seam and "
                         "pick 'bridge this cut', or open a gap")
 
@@ -214,7 +235,7 @@ def generator_frames(plan, grid, context_frames=0, extend_frames=0):
     if plan["mode"] == "insert at join":
         return snap_nearest(plan["length"], grid)
     gap = plan["end"] - plan["start"] + 1
-    return snap_up(gap + 2 * k + int(extend_frames or 0), grid)
+    return snap_up(gap + 2 * k + int(extend_frames or 0) + int(plan.get("extra", 0)), grid)
 
 
 def validate_context(plan, cut, context_frames):
@@ -222,8 +243,8 @@ def validate_context(plan, cut, context_frames):
     if k <= 0:
         return
     if plan["mode"] != "replace range":
-        raise SequenceError("context_frames is replace mode only - a gap bridge already pins one "
-                            "kept frame either side")
+        raise SequenceError("context_frames needs frames marked around the gap (I / O) - a pure "
+                            "insert already pins one kept frame either side")
     if plan["start"] - k < 0 or plan["end"] + k > cut["frames"] - 1:
         raise SequenceError(
             f"context_frames {k} needs {k} real frames either side of {plan['start']}..{plan['end']} "
