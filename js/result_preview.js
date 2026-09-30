@@ -97,11 +97,12 @@ function build(node) {
 
     // Same sizing as the Timeline: fill the node's height below its widgets (the player
     // grows with it) and scale text/bar with its width (x1 at 600 px, up to x2.5).
-    let U = 1, BAR_H = 22;
+    // The bar is a seconds ruler (as on the Timeline's strip) over the track.
+    let U = 1, BAR_H = 36, RULER_H = 14;
     function fitToNode() {
         const u = Math.max(1, Math.min(2.5, node.size[0] / 600));
         if (Math.abs(u - U) > 0.01 || !root.style.fontSize) {
-            U = u; BAR_H = Math.round(22 * U);
+            U = u; RULER_H = Math.round(14 * U); BAR_H = RULER_H + Math.round(22 * U);
             root.style.fontSize = `${Math.round(11 * U)}px`;
             bar.style.height = `${BAR_H}px`;
             drawBar();
@@ -128,14 +129,29 @@ function build(node) {
         const g = bar.getContext("2d");
         g.setTransform(k, 0, 0, k, 0, 0);
         g.fillStyle = "#20242c"; g.fillRect(0, 0, W, BAR_H);
+        g.fillStyle = "#171a20"; g.fillRect(0, 0, W, RULER_H);
         if (!D) return;
         const x = (f) => f / Math.max(1, D.frames) * W;
+        // seconds ruler: the Timeline's tick steps, at least ~50 px apart at this scale
+        const secPx = D.frame_rate * W / Math.max(1, D.frames);
+        const step = [0.25, 0.5, 1, 2, 5, 10, 15, 30, 60, 120].find(t => t * secPx >= 50 * U) || 300;
+        g.strokeStyle = "#6b7280"; g.fillStyle = "#9ca3af"; g.font = `${Math.round(10 * U)}px sans-serif`;
+        g.textBaseline = "top"; g.lineWidth = 1;
+        for (let t = 0; t * D.frame_rate <= D.frames; t += step) {
+            const tx = Math.round(x(t * D.frame_rate)) + 0.5;
+            g.beginPath(); g.moveTo(tx, RULER_H - 5 * U); g.lineTo(tx, RULER_H); g.stroke();
+            g.fillText(step < 1 ? `${t.toFixed(2)}s` : `${t}s`, tx + 2, 1.5 * U);
+        }
+        const T0 = RULER_H, TH = BAR_H - RULER_H;          // the track under the ruler
         const j0 = D.joins[0].frame, j1 = D.joins[1].frame;
-        g.fillStyle = "rgba(168,85,247,0.6)"; g.fillRect(x(j0), 3 * U, Math.max(2, x(j1) - x(j0)), BAR_H - 6 * U);
-        for (const j of D.joins.slice(0, 2)) { g.fillStyle = COL[j.verdict]; g.fillRect(x(j.frame) - 1.5 * U, 0, 3 * U, BAR_H); }
+        g.fillStyle = "rgba(168,85,247,0.6)"; g.fillRect(x(j0), T0 + 3 * U, Math.max(2, x(j1) - x(j0)), TH - 6 * U);
+        for (const j of D.joins.slice(0, 2)) { g.fillStyle = COL[j.verdict]; g.fillRect(x(j.frame) - 1.5 * U, T0, 3 * U, TH); }
         const inner = D.joins[2];
-        if (inner && inner.ratio != null) { g.fillStyle = COL[inner.verdict]; g.fillRect(x(inner.frame) - U, 6 * U, 2 * U, BAR_H - 12 * U); }
-        g.fillStyle = "#f59e0b"; g.fillRect(x(video.currentTime * D.frame_rate) - U, 0, 2 * U, BAR_H);
+        if (inner && inner.ratio != null) { g.fillStyle = COL[inner.verdict]; g.fillRect(x(inner.frame) - U, T0 + 6 * U, 2 * U, TH - 12 * U); }
+        // playhead through ruler and track, with the Timeline's little flag
+        const px = x(video.currentTime * D.frame_rate);
+        g.fillStyle = "#f59e0b"; g.fillRect(px - U, 0, 2 * U, BAR_H);
+        g.beginPath(); g.moveTo(px - 5 * U, 0); g.lineTo(px + 5 * U, 0); g.lineTo(px, 6 * U); g.fill();
         counter.textContent = `frame ${curFrame()} / ${D.frames - 1} · ${video.currentTime.toFixed(2)}s`;
     }
 
