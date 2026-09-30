@@ -477,6 +477,18 @@ async def _build_route(request):
 # the node
 # ---------------------------------------------------------------------------
 
+def picture_end_seconds(frame_count, frame_rate):
+    """Time of the generator's last frame - where the pinned end frame (Picture 2) sits."""
+    return round(max(0, int(frame_count) - 1) / float(frame_rate or 24), 2)
+
+
+def picture_timing(end_seconds):
+    """MiniMax H3's reference-alignment line, in the form its prompt builders write."""
+    return ("How the reference pictures align with the target video \u2014 Picture 1 (from Shot 1) "
+            "aligns with the 0.00-second mark of the target video; Picture 2 (from Shot 1) aligns "
+            f"with the {end_seconds:.2f}-second mark of the target video.")
+
+
 class SeamStitchTimeline:
     """One-track timeline: arrange clips, mark one splice, feed the generator.
 
@@ -528,8 +540,18 @@ class SeamStitchTimeline:
             },
         }
 
-    RETURN_TYPES = SeamStitchLoader.RETURN_TYPES
-    RETURN_NAMES = SeamStitchLoader.RETURN_NAMES
+    # The Loader's 18 outputs in the Loader's order (so the node drops in where the Loader
+    # was), then two of its own, appended so no existing wire moves:
+    #   end_seconds     time of the generator's LAST frame, (frame_count - 1) / frame_rate:
+    #                   where the pinned end frame sits, i.e. when "Picture 2" (the last
+    #                   frame, fed to MiniMaxH3ReferenceToVideo) must appear.
+    #   picture_timing  the MiniMax prompt's alignment line with those numbers filled in -
+    #                   concatenate it in front of the scene description. A hand-typed time
+    #                   goes stale whenever the markers, gap, extension or grid change the
+    #                   length (a 3.04 s left over from another seam put Picture 2 mid-clip
+    #                   while the pins held it at 5.83 s, and the model cut at the end).
+    RETURN_TYPES = SeamStitchLoader.RETURN_TYPES + ("FLOAT", "STRING")
+    RETURN_NAMES = SeamStitchLoader.RETURN_NAMES + ("end_seconds", "picture_timing")
     FUNCTION = "run"
     CATEGORY = "SeamStitch"
     DESCRIPTION = ("A one-track mini video editor for SeamStitch: arrange and trim clips, mark one "
@@ -579,4 +601,6 @@ class SeamStitchTimeline:
                                f"Loader {res[8]}..{res[9]} on {path}")
         print(f"[SeamStitch] Timeline: {plan['mode']} on the cut ({cut['frames']} frames at {fr} fps), "
               f"frames {plan['start']}..{plan['end']}, generator gets {res[3]} frames.")
-        return res
+        end_s = picture_end_seconds(int(res[3]), fr)
+        print(f"[SeamStitch] Timeline: Picture 2 (the last frame) is at {end_s:.2f}s.")
+        return tuple(res) + (end_s, picture_timing(end_s))

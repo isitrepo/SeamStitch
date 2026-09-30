@@ -568,7 +568,9 @@ function buildTimeline(node) {
                 el("span", { color: C.dim }, `(${grid()}${p.k ? `, ${p.k} context each side` : ""}; the video gets ${longer}f / ${sec(longer)} longer)`),
                 button("pure insert", "Replace nothing: only new frames go into the gap", () => { const gi = gapInfo(); setTarget({ mode: "gap", start: gi.join, end: gi.join - 1 }); }));
         }
-        nextBar.append(button("go to", "Move the playhead to the mark", () => seekStrip(cutToStrip(Math.max(0, p.start - 12)))));
+        const pic2 = el("span", { color: C.ok, marginLeft: "6px" }, `Picture 2 at ${((p.gen - 1) / S.fr).toFixed(2)}s`);
+        pic2.title = "When the last frame (Picture 2 in a MiniMax reference prompt) appears - the node's end_seconds / picture_timing outputs carry it";
+        nextBar.append(pic2, button("go to", "Move the playhead to the mark", () => seekStrip(cutToStrip(Math.max(0, p.start - 12)))));
     }
 
     function updateOverlay() {
