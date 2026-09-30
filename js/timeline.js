@@ -306,7 +306,9 @@ function buildTimeline(node) {
     }
     function totals() { const L = layout(); const last = L[L.length - 1]; return { L, strip: last ? last.strip + last.len : 0, cut: L.filter(x => x.e.kind === "clip").reduce((a, x) => a + x.len, 0) }; }
     function entryAtStrip(f) { const L = layout(); for (const x of L) if (f >= x.strip && f < x.strip + x.len) return x; return L[L.length - 1] || null; }
-    function stripToCut(f) { const x = entryAtStrip(f); if (!x) return 0; return x.e.kind === "clip" ? x.cut + (f - x.strip) : (x.cut ?? cutBefore(x.i)); }
+    // Whole frames only: callers pass pointer positions, and a fractional frame saved into
+    // the target (281.83) displayed oddly and was truncated by the Python side.
+    function stripToCut(f) { f = Math.floor(f); const x = entryAtStrip(f); if (!x) return 0; return x.e.kind === "clip" ? x.cut + (f - x.strip) : (x.cut ?? cutBefore(x.i)); }
     function cutBefore(i) { return layout().filter(x => x.i < i && x.e.kind === "clip").reduce((a, x) => a + x.len, 0); }
     function cutToStrip(c) { for (const x of layout()) if (x.e.kind === "clip" && c >= x.cut && c < x.cut + x.len) return x.strip + (c - x.cut); return totals().strip; }
 
@@ -589,6 +591,7 @@ function buildTimeline(node) {
     // Cut frame for a marker at strip frame f: inside the gap, I sits on the gap's far
     // edge (nothing marked before it) and O on its near edge (nothing marked after it).
     function markerCut(f, side, gi) {
+        f = Math.floor(f);
         const inGap = f >= gi.x.strip && f < gi.x.strip + gi.x.len;
         if (inGap) return side === "start" ? gi.join : gi.join - 1;
         const c = stripToCut(f);
