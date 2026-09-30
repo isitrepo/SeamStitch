@@ -921,7 +921,7 @@ function buildTimeline(node) {
         ev.preventDefault();
         root.focus();
         const p = local(ev), h = hit(p);
-        canvas.setPointerCapture(ev.pointerId);
+        try { canvas.setPointerCapture(ev.pointerId); } catch { }   // pen/touch/synthetic pointers may refuse
         const L = layout();
         if (h.kind === "ruler") { S.drag = { kind: "scrub" }; seekStrip(x2f(p.x)); return; }
         if (h.kind === "seam") { seamMenu(ev, h.i); return; }
