@@ -4,7 +4,7 @@ Insert mode puts a generated bridge *between* two kept frames instead of replaci
 range that was scrubbed out. Nothing is removed (at trim_each_side = 0), the bridge's
 first and last frame are always dropped because they are the kept frames either side of
 the join, and the audio has to be cut at exactly the same frames or the picture drifts
-against its own sound for the rest of the file (Defect 4, REAL_FOOTAGE_FINDINGS.md).
+against its own sound for the rest of the file (Defect 4).
 
 The fixture is synthetic and exact: every source frame carries a numeric fingerprint, so
 "which source frame is this" is answered by equality rather than by eyeball, and the

@@ -29,7 +29,7 @@ references, instead of a screen grab through the browser's player.
 
 "Typical" is the 75th percentile of the frame-to-frame changes in the 24 frames
 either side, not the median: footage whose frames repeat in pairs (24 fps content
-in a 48 fps file - Test vids/1.mp4 is) has every other change near zero, so a
+in a 48 fps file - test clip 1.mp4 is) has every other change near zero, so a
 median baseline called ordinary motion a 40x cut. With the 75th percentile the
 natural worst step of all four real test clips is 1.27-1.66x, and the 4.mp4 ->
 2.mp4 hard cut reads 6.5x. Thresholds (pixel domain): < 1.8 seamless, < 3.0 soft
@@ -194,7 +194,7 @@ def format_settings(fmt, crf, pix_fmt, save_metadata, widgets=None):
     reach FFV1 (its default rgba64le is 16-bit RGB - no YUV conversion, truly lossless)
     and ProRes is written as 4444 (4:4:4 10-bit) rather than VHS's default hq (4:2:2):
     4:2:0/4:2:2 chroma is what costs ~1-2 levels of colour on re-encode (measured
-    -1.2 mean on Test vids/4.mp4 even at crf 0, -0.1 at 4:4:4)."""
+    -1.2 mean on test clip 4.mp4 even at crf 0, -0.1 at 4:4:4)."""
     if widgets is None:
         try:
             try:
