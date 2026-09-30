@@ -241,7 +241,10 @@ def test_timeline_node_outputs_match_loader(dirs):
     args = dict(frame_rate=0, bridge_frame_grid=tm.GRID_LTX, context_frames=0, extend_frames=0,
                 snap_to_multiple=0, mismatch_fit="crop", assemble_crf=0)
     res = node.run(seq, json.dumps({"mode": "replace", "start": 26, "end": 33}), **args)
-    assert len(res) == len(SeamStitchLoader.RETURN_NAMES)
+    assert len(res) == len(SeamStitchLoader.RETURN_NAMES) + 2
+    assert tl.SeamStitchTimeline.RETURN_NAMES[-2:] == ("end_seconds", "picture_timing")
+    assert res[-2] == round((res[3] - 1) / 24, 2)                    # 9 frames at 24 fps -> 0.33 s
+    assert "Picture 2 (from Shot 1) aligns with the 0.33-second mark" in res[-1]
     names = dict(zip(SeamStitchLoader.RETURN_NAMES, res))
     assert (names["start_frame"], names["end_frame"]) == (26, 33)
     assert names["frame_count"] == 9                       # 8 frames -> 8k+1 rounds up
