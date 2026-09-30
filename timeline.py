@@ -329,7 +329,7 @@ def build_cut(cut, fr, crf=12, fit="crop", codec=CODEC_LOSSLESS):
 
     Lossless (default): FFV1, RGB planes, FLAC - the frames Recombine reads back are
     exactly the decoded sources (measured: an h264 4:2:0 cut at crf 12 shifted the
-    picture -1.2 levels on Test vids/4.mp4, and that loss stacked with the final encode).
+    picture -1.2 levels on test clip 4.mp4, and that loss stacked with the final encode).
     h264: much smaller, one lossy generation."""
     same = passthrough_path(cut, fr)
     if same:

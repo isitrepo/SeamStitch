@@ -57,7 +57,7 @@ its final frame (`20..29` came back `20..28`, `end_frame` one short). The target
 the frame count with a thousandth-of-a-frame tolerance — `recombine._decode_range`'s rule.
 Regression test `test_loader_replace_decode_is_index_exact`.
 
-**Verified** (test ComfyUI on port 8199, CPU, `Test vids/4.mp4` + `2.mp4`): identity bridge through
+**Verified** (test ComfyUI on port 8199, CPU, test clip `4.mp4` + `2.mp4`): identity bridge through
 Timeline → Recombine gives the cut back frame for frame (also a unit test); a crossfade stand-in
 bridge over cut frames 236–259 took *before 6.9x hard cut* to 0.44 / 0.36 / 0.41 seamless; a gap
 of 24 inserted exactly 24 frames (520 total); a bridge built from the wrong frames was flagged hard
@@ -136,7 +136,7 @@ Migration: the removed widgets sat between `bridge_audio` and `audio_mode`. A sa
 matches widget values by position, so a Recombine saved before this change reloads with its
 `audio_mode` / `audio_crossfade_ms` / `audio_bridge_weight` / `insert` values shifted. Re-check
 those four widgets, or re-add the node. `/prompt` API payloads are keyed by name and unaffected
-beyond dropping the four keys. The six LTX templates in the working repo have had them removed.
+beyond dropping the four keys. The six LTX templates in the development repo have had them removed.
 
 **Fix — insert mode ignored `bridge_frame_grid`.** The Loader's insert-mode bridge length always
 snapped to LTX's 8n+1, so a MiniMax H3 user got a length Motion Context cannot use. It now snaps to
@@ -271,7 +271,7 @@ listings) plus one "graph accessed before initialization" from the test harness 
 early — the same set S5 recorded. `node --check js/loader.js` passes.
 
 **Supersedes** the "pre-existing caveat" under "S5 — insert mode on real footage", section 1, in
-the Stitch 2.0 working repo's `REAL_FOOTAGE_FINDINGS.md`: the reset is fixed, and it never applied
+the author's real-footage notes: the reset is fixed, and it never applied
 to a plain canvas save whose two pairs agreed.
 
 ## 0.2.0 — insert mode proven on real footage; one off-by-one fixed
@@ -282,8 +282,7 @@ sample — and it is the right tool for **extending a shot**. It is the wrong to
 clips**: on the same hard cut, same seed and same morph prompt, `insert at join` measured max
 per-frame change **60.09** (std 10.36) against `replace range`'s **14.93** (std 3.19). Given two
 adjacent frames across a hard cut, the model idles on clip A for ~29 frames then cuts to clip B in
-two — the cut back again. Use `replace range` for a Combine seam. Full numbers, strips and method:
-`REAL_FOOTAGE_FINDINGS.md`, "S5 — insert mode on real footage" (in the Stitch 2.0 working repo).
+two — the cut back again. Use `replace range` for a Combine seam. Full numbers, strips and method are in the author's real-footage notes.
 
 **Fix — `loader.py`, `_load_insert`: the insert anchors were off by one on a Combine output.**
 `SeamStitchCombine` measures `seam_frame` in decode order and `SeamStitchRecombine` cuts on the
@@ -309,10 +308,10 @@ OK, and the addition is a proven no-op for the render, not just for validation: 
 6.78, std 3.19, and its decoded video stream is bit-identical to the earlier replace-mode render
 (md5 `b2549d4f83c50ec2dcbb9fa2ff78c660`).
 
-Measured 2026-09-19 on Kay's live instance (ComfyUI 0.36.0, RTX 5090) and with `python_embeded`:
+Measured 2026-09-19 on the author's instance (ComfyUI 0.36.0, RTX 5090):
 
 - `tests/` 33 passed. New `test_insert_anchors_are_decode_order_on_an_offset_stream` remuxes
-  `Test vids/4.mp4` with the same +381-tick start offset Combine produces and compares the anchors
+  test clip `4.mp4` with the same +381-tick start offset Combine produces and compares the anchors
   against a plain decode-order walk; it **fails on the pre-fix loader** (max per-pixel difference
   0.863) and passes on the fixed one. The existing anchor test could not catch this: it decoded its
   reference with the same absolute-time rule the loader used, on a clip starting at t = 0.
@@ -376,7 +375,7 @@ wired the marker is locked (drag ignored, `not-allowed` cursor), recoloured purp
 starts the marker at the clip middle.
 
 Measured 2026-09-19 in a sandbox ComfyUI (port 8291, `--cpu`, only SeamStitch whitelisted) on
-`Test vids/4.mp4` (124 frames, 24 fps), driving the real page:
+test clip `4.mp4` (124 frames, 24 fps), driving the real page:
 
 - Replace mode: start/end handles and fill shown, join marker/shade/label/hint hidden; widget list
   as before plus `join_frame`/`trim_each_side` hidden.
@@ -410,13 +409,13 @@ identical crop/resize/snap. A wired `seam_frame` wins over `join_frame` (logged 
 A join with no room for both anchors raises, naming the clip length. Works for `input_video` too.
 The JS timeline is not touched here (S4).
 
-Measured 2026-09-19 (`python_embeded`, torch 2.13 / av 17.0.1):
+Measured 2026-09-19 (torch 2.13 / av 17.0.1):
 
 - `tests/test_loader_insert.py`: 15 passed (N=0, N>0, both boundaries, out-of-range errors, 8n+1
-  snapping at 24/25/30 fps, wired-vs-typed precedence, and `Test vids/4.mp4` anchors at join 40
+  snapping at 24/25/30 fps, wired-vs-typed precedence, and test clip `4.mp4` anchors at join 40
   against an independent `av` decode: max per-pixel difference < 3/255).
 - **Replace mode regression:** the first 14 outputs, sha256 of every tensor/audio buffer plus all
-  scalars, on `Test vids/4.mp4` (seconds range; frames range with `extend_bridge`; pad-resized) and
+  scalars, on test clip `4.mp4` (seconds range; frames range with `extend_bridge`; pad-resized) and
   on a seeded `input_video`/`input_audio` tensor, are byte-identical between `HEAD` before S3
   (`b3587d1`) and after. Combined comparison files hash to the same sha256 `baba03a1...53c1ea`.
 - Sandbox `/object_info` (port 8297): `SeamStitchLoader` outputs are the previous 14 in order plus
@@ -459,7 +458,7 @@ one unambiguous correlation peak):
   the held strip.
 - **Audio**: **162000 samples = 81 frames** exactly, for both the bridge-audio and the silence
   case; drift at both joins **0 samples** (normalised cross-correlation, 250 ms windows,
-  corr **1.0000** each side) — the Defect 4 method from `REAL_FOOTAGE_FINDINGS.md`. Outside the
+  corr **1.0000** each side) — the method from the author's real-footage notes. Outside the
   20 ms crossfades the output is sample-identical to the source either side of the insertion, and
   the stretch under the inserted frames is exactly zero in the silence case and exactly the
   bridge's samples in the bridge case. A bridge audio 1000 samples short is padded with silence.
@@ -495,7 +494,7 @@ ComfyUI-only modules so pytest can import the pack.
 Uncommitted edits had accumulated in the dev copy and the live install. Each hunk, and what it was:
 
 - **Loader "Load Video" refresh button and `/seamstitch/loader/list_files` route removed** - an
-  intentional removal (confirmed by Kay), present identically in both copies; the button had been
+  intentional removal (confirmed by the author), present identically in both copies; the button had been
   in the pack since the initial flatten commit.
 - **Loader `extend_bridge` / `extend_amount` / `extend_unit` / `bridge_frame_grid`** - live install
   only; described by the first "Unreleased" entry below.
@@ -582,7 +581,7 @@ against its own sound — 20.8 ms per frame at 48 fps, silently.
 ## 2026-09-16 — Licence correction, attribution headers, dependency cleanup, generated diagrams
 
 Findings 2, 3, 5-9, and 12 from the pre-release review
-(`REVIEW_seamstitch_prerelease_2026-09-16.md`).
+(the pre-release review).
 
 - **Licence** (finding 2): `GPL-3.0-or-later` → `GPL-3.0-only` in `README.md` and
   `pyproject.toml` — both upstream projects (WhatDreamsCost-ComfyUI, ComfyUI-VideoHelperSuite)
