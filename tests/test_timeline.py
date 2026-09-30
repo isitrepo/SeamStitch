@@ -92,8 +92,21 @@ def test_targets():
         with pytest.raises(tm.SequenceError):
             tm.resolve_target(bad, cut)
     gcut = tm.resolve_cut(tm.parse_sequence("a\n~ 20\nb"), {"a": 30, "b": 30}.get)
+    # older saves: trim N = markers N frames either side -> replace across the join + the gap
     g = tm.resolve_target({"mode": "gap", "trim": 2}, gcut)
-    assert g == {"mode": "insert at join", "start": 28, "end": 31, "join": 30, "trim": 2, "length": 26}
+    assert g == {"mode": "replace range", "start": 28, "end": 31, "join": 30, "trim": 0, "length": 4, "extra": 20}
+    # markers around the gap, asymmetric
+    g = tm.resolve_target({"mode": "gap", "start": 22, "end": 33}, gcut)
+    assert (g["mode"], g["start"], g["end"], g["extra"]) == ("replace range", 22, 33, 20)
+    assert tm.generator_frames(g, tm.GRID_LTX) == 33            # 12 + 20 = 32 -> 8k+1
+    # nothing marked: pure insert, the gap is the number of new frames
+    g = tm.resolve_target({"mode": "gap", "start": 30, "end": 29}, gcut)
+    assert (g["mode"], g["length"]) == ("insert at join", 22)
+    assert tm.resolve_target({"mode": "gap"}, gcut)["mode"] == "insert at join"
+    for bad in ({"mode": "gap", "start": 31, "end": 35}, {"mode": "gap", "start": 25, "end": 28},
+                {"mode": "gap", "start": 0, "end": 33}):
+        with pytest.raises(tm.SequenceError):
+            tm.resolve_target(bad, gcut)
     with pytest.raises(tm.SequenceError):
         tm.resolve_target({"mode": "replace", "start": 5, "end": 9}, gcut)
     two = tm.resolve_cut(tm.parse_sequence("a\n~ 3\nb\n~ 4\na"), {"a": 30, "b": 30}.get)
@@ -340,3 +353,27 @@ def test_rgb_mkv_decodes_exactly(dirs, recombine):
                                        duration_frames=0, snap_to_multiple=0)[0].numpy() * 255).round()
     for got in (a, b, c):
         assert np.abs(got.astype(int) - frames[5:30].astype(int)).max() <= 1
+
+
+
+def test_gap_with_markers_is_an_extended_replace(dirs, recombine):
+    """I/O around a gap: the marked frames are replaced and the generator gets the gap's
+    frames on top (Loader extend_bridge); Recombine makes the video that much longer."""
+    import timeline as tl
+    from loader import SeamStitchLoader
+    inp, _ = dirs
+    make_clip(str(inp / "a.mp4"), 30, 24, offset=0)
+    make_clip(str(inp / "b.mp4"), 30, 24, offset=30)
+    res = dict(zip(SeamStitchLoader.RETURN_NAMES, tl.SeamStitchTimeline().run(
+        "a.mp4\n~ 12\nb.mp4", json.dumps({"mode": "gap", "start": 26, "end": 33}),
+        0, tm.GRID_NONE, 2, 0, 0, "crop", 0)))
+    assert res["insert"] is False
+    assert (res["start_frame"], res["end_frame"]) == (26, 33)
+    assert res["frame_count"] == 8 + 12 + 2 * 2                  # range + gap + context
+    assert codes(res["start_context"].numpy() * 255) == [24, 25]
+    import torch
+    gen = torch.cat([res["start_context"]] + [res["images"][:1]] * (res["frame_count"] - 4) + [res["end_context"]])
+    out = recombine.SeamStitchRecombine().recombine(
+        gen, res["source_video_path"], 26, 33, 24, 0.0, 0, "t", "video/h264-mp4", save_output=False,
+        context_frames=2, skip_encode=True)
+    assert out["result"][1].shape[0] == 60 + 12                   # 12 frames longer

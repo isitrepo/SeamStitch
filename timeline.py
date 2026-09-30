@@ -565,9 +565,10 @@ class SeamStitchTimeline:
                                     mode=plan["mode"], join_frame=plan["join"],
                                     trim_each_side=plan["trim"], **common)
         else:
+            extra = int(extend_frames) + int(plan.get("extra", 0))
             res = loader.load_video(start_frame=plan["start"], end_frame=plan["end"] + 1,
                                     duration_frames=0, extend_bridge=bridge_frame_grid != tm.GRID_NONE
-                                    or int(extend_frames) > 0, extend_amount=float(extend_frames),
+                                    or extra > 0, extend_amount=float(extra),
                                     extend_unit="frames", mode=plan["mode"], **common)
         expect = tm.generator_frames(plan, bridge_frame_grid, context_frames, extend_frames)
         if int(res[3]) != expect:
