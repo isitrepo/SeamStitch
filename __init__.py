@@ -43,8 +43,8 @@ try:
 except ImportError as e:
     logging.getLogger(__name__).warning(f"[SeamStitch] SeamStitchMiniMaxGuides not loaded: {e}")
 
-# Prototype: the one-track timeline (Combine + Loader in one node) and the result
-# preview. Guarded so a problem here never takes the established nodes down.
+# The one-track timeline (Combine + Loader in one node) and the result preview.
+# Guarded so a problem here never takes the other nodes down.
 try:
     from .timeline import SeamStitchTimeline
     from .result_preview import SeamStitchResultPreview
@@ -53,7 +53,7 @@ try:
     NODE_CLASS_MAPPINGS["SeamStitchResultPreview"] = SeamStitchResultPreview
     NODE_DISPLAY_NAME_MAPPINGS["SeamStitchResultPreview"] = "SeamStitch Result Preview"
 except Exception as e:
-    logging.getLogger(__name__).warning(f"[SeamStitch] Timeline prototype not loaded: {e}")
+    logging.getLogger(__name__).warning(f"[SeamStitch] Timeline / Result Preview not loaded: {e}")
 
 WEB_DIRECTORY = "js"
 

@@ -1,13 +1,54 @@
 # Changelog
 
-Everything headed `0.2.0` or `0.3.0` below is committed but **not published** — no push, no tag,
-no GitHub release. `v0.1.0` is the latest public release.
+## v0.3.0 — 2026-09-30
 
-## prototype/timeline — SeamStitch Timeline + Result Preview (branch, not merged)
+First release since v0.1.0. Everything headed `0.2.0` or `0.3.0` further down was never published
+separately; it all ships here, so this is the entry to read when upgrading.
 
-**Why.** Kay asked for obvpm-timeline-style editor controls on the SeamStitch splice. One node now
-does Combine + Loader: a strip to arrange/trim/cut clips and one marked splice (range, cut, or gap).
-See README "SeamStitch Timeline (prototype)".
+### Breaking changes since v0.1.0
+
+- **`SeamStitchRecombine`: the `crop_x` / `crop_y` / `crop_w` / `crop_h` widgets are removed.** They
+  sat between `bridge_audio` and `audio_mode`, and a saved UI graph matches widget values by
+  position, so a Recombine saved with v0.1.0 reloads with `audio_mode`, `audio_crossfade_ms`,
+  `audio_bridge_weight` and `insert` shifted. Re-check those four widgets, or re-add the node.
+  (`/prompt` API payloads are keyed by name and unaffected beyond dropping the four keys.) Recombine
+  now always outputs at the source's own resolution.
+- **`SeamStitchCombine.video_path` output removed.** Wire the Loader's `source_video_path` into
+  `SeamStitchRecombine.original_video_path` instead. It was the last of Combine's outputs at
+  v0.1.0, so nothing else shifts, but a link from it is lost.
+
+### New
+
+- **`SeamStitchTimeline`** — a one-track editor (drag clips in, trim, reorder, cut left/right,
+  split, gaps) and one marked splice (range, bridged cut or gap, with I/O markers); outputs the
+  Loader's 18 in the Loader's order plus `end_seconds` and `picture_timing` (for MiniMax reference
+  prompts); lossless (FFV1) cut by default with an h264 option; a single untouched clip passes
+  through with no re-encode; the UI scales with the node and scrubs by dragging.
+- **`SeamStitchResultPreview`** — saves the final video through VHS's encode path (pixel-identical
+  to VHS Video Combine; formats incl. FFV1 and ProRes 4444 with an H.264 proxy for the player), rates
+  the joins, loops the seams, saves exact frames as PNGs, can put the result back on the Timeline;
+  has the Timeline's seconds ruler.
+- **`SeamStitchLTXGuides` and `SeamStitchMiniMaxGuides`**, and the Loader's `context_frames`.
+- **Loader insert mode**, `extend_bridge`, `bridge_frame_grid`, `snap_to_multiple`; Recombine
+  `insert`, `context_frames`, `audio_mode` (`original` / `bridge` / `combined`) and audio spliced
+  with the picture; Combine `seam_frame`, `resize_to` / `resize_fit`.
+- **Recombine `skip_encode`** (appended last) for when Result Preview saves the video.
+
+### Fixed
+
+- **Recombine ignored `crf` / `pix_fmt`**: it passed an empty format dict to the encoder, so every
+  encode was the format default (crf 19). It now honours them.
+- **Loader frame drift** in replace mode (skipped/doubled frames, a range's last frame dropped) —
+  below.
+- **Decode of RGB-coded (FFV1) and millisecond-timestamp (MKV) files**, in the Loader, Recombine and
+  the Timeline.
+- The Timeline's saved widget values no longer include UI panels, and invalid restored values are
+  repaired on load; marker and range drags snap to whole frames; a refused pointer capture no longer
+  aborts a strip drag.
+- Loader insert anchors, restored trim ranges, insert-mode grid snapping, Combine's open file handle
+  and blocking upload route — see the entries below.
+
+### Timeline, Result Preview — what was built and measured
 
 **Loader fix (applies to every graph, not just the timeline).** The replace-mode frame sampler
 accumulated `frame_interval` and drifted: an exactly-equal frame time was skipped and the next one
@@ -22,7 +63,7 @@ bridge over cut frames 236–259 took *before 6.9x hard cut* to 0.44 / 0.36 / 0.
 of 24 inserted exactly 24 frames (520 total); a bridge built from the wrong frames was flagged hard
 cut at both joins. No GPU generation was run through it yet.
 
-## 0.3.0 — motion guides (`context_frames`, `SeamStitchLTXGuides`) — in testing
+## Motion guides (`context_frames`, `SeamStitchLTXGuides`, `SeamStitchMiniMaxGuides`)
 
 **Why.** On real footage (`None_00006.mp4`, range 113–137, LTX-2.5, 2026-09-25) the bridge
 reached its pinned last frame nearly still — steps of 0.3–3 over its last 12 frames — and then
