@@ -22,6 +22,26 @@ function button(label, title, onclick) {
     b.onpointerdown = (e) => e.stopPropagation();
     return b;
 }
+// ComfyUI restores widget values by POSITION. A value saved for a slot that has since
+// changed meaning (a new widget, or the blank this node's own UI panel used to save)
+// lands in the wrong widget, e.g. '' in a dropdown, and the queue is refused
+// ("Value not in list"). Reset any dropdown holding a value it does not offer, and any
+// number that is not a number, to the widget's default.
+function repairWidgetValues(node) {
+    for (const w of node.widgets || []) {
+        if (w.type === "combo") {
+            const vals = w.options?.values;
+            const list = typeof vals === "function" ? vals() : vals;
+            if (Array.isArray(list) && list.length && !list.includes(w.value)) {
+                const def = w.options?.default;
+                w.value = list.includes(def) ? def : list[0];
+            }
+        } else if (w.type === "number" && !(typeof w.value === "number" && Number.isFinite(w.value))) {
+            w.value = w.options?.default ?? w.options?.min ?? 0;
+        }
+    }
+}
+
 const fmt = (r) => r == null ? "n/a" : `${r.toFixed(2)}x`;
 const viewURL = (v, path) => v
     ? api.apiURL(`/view?filename=${encodeURIComponent(v.filename)}&subfolder=${encodeURIComponent(v.subfolder)}&type=${v.type}&t=${Date.now()}`)
@@ -35,6 +55,12 @@ app.registerExtension({
         nodeType.prototype.onNodeCreated = function () {
             const r = onNodeCreated ? onNodeCreated.apply(this, arguments) : undefined;
             build(this);
+            return r;
+        };
+        const onConfigure = nodeType.prototype.onConfigure;
+        nodeType.prototype.onConfigure = function () {
+            const r = onConfigure ? onConfigure.apply(this, arguments) : undefined;
+            repairWidgetValues(this);
             return r;
         };
         const onExecuted = nodeType.prototype.onExecuted;
@@ -64,6 +90,7 @@ function build(node) {
         "Run the graph: the spliced result is saved and shows here with its joins rated.");
     root.append(videoBox, bar, verdicts, actions, note);
     const w = node.addDOMWidget("result_ui", "div", root, { serialize: false });
+    w.serialize = false;   // keep the panel out of widgets_values (see repairWidgetValues)
     w.computeSize = (width) => [Math.max(300, (width || node.size[0]) - 20), 380];
     if (node.size[0] < 560) node.size[0] = 560;
     if (node.size[1] < 700) node.size[1] = 700;

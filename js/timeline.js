@@ -103,6 +103,26 @@ function button(label, title, onclick) {
     return b;
 }
 
+// ComfyUI restores widget values by POSITION. A value saved for a slot that has since
+// changed meaning (a new widget, or the blank this node's own UI panel used to save)
+// lands in the wrong widget, e.g. '' in a dropdown, and the queue is refused
+// ("Value not in list"). Reset any dropdown holding a value it does not offer, and any
+// number that is not a number, to the widget's default.
+function repairWidgetValues(node) {
+    for (const w of node.widgets || []) {
+        if (w.type === "combo") {
+            const vals = w.options?.values;
+            const list = typeof vals === "function" ? vals() : vals;
+            if (Array.isArray(list) && list.length && !list.includes(w.value)) {
+                const def = w.options?.default;
+                w.value = list.includes(def) ? def : list[0];
+            }
+        } else if (w.type === "number" && !(typeof w.value === "number" && Number.isFinite(w.value))) {
+            w.value = w.options?.default ?? w.options?.min ?? 0;
+        }
+    }
+}
+
 const viewURL = (path) => api.apiURL(`/seamstitch/loader/view?filename=${encodeURIComponent(path)}`);
 
 async function uploadFile(file) {
@@ -138,6 +158,7 @@ app.registerExtension({
         const onConfigure = nodeType.prototype.onConfigure;
         nodeType.prototype.onConfigure = function () {
             const r = onConfigure ? onConfigure.apply(this, arguments) : undefined;
+            repairWidgetValues(this);
             if (this.ssTimeline) setTimeout(() => this.ssTimeline.reload(), 0);
             return r;
         };
@@ -230,6 +251,9 @@ function buildTimeline(node) {
     root.append(videoBox, bar1, canvas, selBar, nextBar, fileInput);
 
     const widget = node.addDOMWidget("timeline_ui", "div", root, { serialize: false, hideOnZoom: false });
+    // Keep the panel out of widgets_values: the option alone did not, so a blank was saved
+    // after the last real widget and shifted onto the next widget ever appended.
+    widget.serialize = false;
     widget.computeSize = (width) => [Math.max(400, (width || node.size[0]) - 20), 460];
     if (node.size[0] < 760) node.size[0] = 760;
     if (node.size[1] < 820) node.size[1] = 820;
