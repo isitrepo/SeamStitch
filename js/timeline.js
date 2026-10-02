@@ -324,6 +324,10 @@ function buildTimeline(node) {
         if (S.mode === "full") setMode("quick");
         app.graph?.setDirtyCanvas(true, true);
         refresh();
+        // A different first clip (reordered, removed, replaced) sets the auto rate and the
+        // frame_rate label: re-probe, as adding a clip does.
+        const first = S.entries.find(e => e.kind === "clip");
+        if ((first ? first.path : null) !== S.probedFirst) probeAll();
     }
     function setTarget(t, silent) {
         S.target = t || {};
@@ -337,6 +341,7 @@ function buildTimeline(node) {
         const first = S.entries.find(e => e.kind === "clip");
         let fr = frW && frW.value > 0 ? frW.value : 0;
         S.nativeFr = 0;
+        S.probedFirst = first ? first.path : null;
         if (first) {
             const inf = await probeOne(first.path, 0);
             S.nativeFr = inf ? inf.native_fps || 0 : 0;
