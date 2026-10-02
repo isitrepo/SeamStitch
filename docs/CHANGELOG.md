@@ -1,5 +1,26 @@
 # Changelog
 
+## Unreleased
+
+### New
+
+- **24 fps conform for MiniMax H3.** H3 has no frame-rate input and times reference audio and
+  Picture timings on a fixed 24 fps clock, so on 25 fps footage the lips drifted ~4% ahead of the
+  speech.
+  - `SeamStitchTimeline.conform_to_24fps` (widget, appended last, default off) cuts a non-24 fps
+    strip frame for frame, labelled 24 fps. A single untouched clip is re-labelled by stream copy.
+    The audio is slowed by 24/fps with the pitch kept, exactly `frames / 24` s long. Frame numbers
+    don't change; `frame_rate`, `duration`, `end_seconds` and `picture_timing` come out on H3's clock.
+  - Two Timeline outputs, appended after `picture_timing`: `source_frame_rate` and `original_audio`
+    (the cut's unstretched sound).
+  - `SeamStitchResultPreview` gets optional inputs `source_frame_rate` and `original_audio`, and the
+    widget `restore_source_frame_rate` (appended last, default on, used only when the rates differ).
+    The saved video comes back at the source frame rate and length. It keeps the original audio
+    outside the regenerated span and the span's own audio, sped back up, under it. A `filenames`
+    video is re-labelled by stream copy.
+  - Saved graphs load unchanged: every new widget and socket is appended. Recombine needs no change.
+    Tested on 25 fps; 30 fps (a 20% stretch) is untested.
+
 ## v0.3.0 — 2026-09-30
 
 First release since v0.1.0. Everything headed `0.2.0` or `0.3.0` further down was never published
