@@ -168,7 +168,11 @@ app.registerExtension({
 function buildTimeline(node) {
     const W = (n) => node.widgets.find(w => w.name === n);
     const seqW = W("sequence"), targetW = W("target"), frW = W("frame_rate"), gridW = W("bridge_frame_grid");
-    const ctxW = W("context_frames"), extW = W("extend_frames");
+    const ctxW = W("context_frames"), extW = W("extend_frames"), conformW = W("conform_to_24fps");
+    // conform_to_24fps: the cut plays on MiniMax H3's 24 fps clock (frames unchanged).
+    const h3Clock = () => (conformW && conformW.value && Math.round(S.fr) !== 24) ? 24 : S.fr;
+    // Seconds <-> cut frames in the FULL preview use the built cut's own rate (24 when conformed).
+    const fullFr = () => (S.full && S.full.frame_rate) || S.fr;
     hideWidget(seqW);
     hideWidget(targetW);
 
@@ -568,7 +572,7 @@ function buildTimeline(node) {
                 el("span", { color: C.dim }, `(${grid()}${p.k ? `, ${p.k} context each side` : ""}; the video gets ${longer}f / ${sec(longer)} longer)`),
                 button("pure insert", "Replace nothing: only new frames go into the gap", () => { const gi = gapInfo(); setTarget({ mode: "gap", start: gi.join, end: gi.join - 1 }); }));
         }
-        const pic2 = el("span", { color: C.ok, marginLeft: "6px" }, `Picture 2 at ${((p.gen - 1) / S.fr).toFixed(2)}s`);
+        const pic2 = el("span", { color: C.ok, marginLeft: "6px" }, `Picture 2 at ${((p.gen - 1) / h3Clock()).toFixed(2)}s${h3Clock() !== S.fr ? " (H3 24 fps clock)" : ""}`);
         pic2.title = "When the last frame (Picture 2 in a MiniMax reference prompt) appears - the node's end_seconds / picture_timing outputs carry it";
         nextBar.append(pic2, button("go to", "Move the playhead to the mark", () => seekStrip(cutToStrip(Math.max(0, p.start - 12)))));
     }
@@ -770,7 +774,7 @@ function buildTimeline(node) {
             const c = stripToCut(S.playhead);
             const fp = S.full.play_path || S.full.path;
             if (!video.src.includes(encodeURIComponent(fp))) video.src = viewURL(fp);
-            video.currentTime = (c + 0.5) / S.fr;
+            video.currentTime = (c + 0.5) / fullFr();
         } else if (x && x.e.kind === "clip") {
             const inf = S.info[x.e.path];
             if (inf) {
@@ -797,7 +801,8 @@ function buildTimeline(node) {
             try {
                 const r = await api.fetchApi("/seamstitch/timeline/build", { method: "POST", body: JSON.stringify({
                     sequence: seqW.value, frame_rate: frW ? frW.value : 0, crf: (W("assemble_crf") || {}).value ?? 12,
-                    fit: (W("mismatch_fit") || {}).value || "crop", codec: (W("cut_codec") || {}).value || "lossless (ffv1)" }) });
+                    fit: (W("mismatch_fit") || {}).value || "crop", codec: (W("cut_codec") || {}).value || "lossless (ffv1)",
+                    conform: !!(conformW && conformW.value) }) });
                 const j = await r.json();
                 if (!r.ok) throw new Error(j.error);
                 S.full = j;
@@ -805,7 +810,8 @@ function buildTimeline(node) {
                 video.dataset.src = "";
                 video.src = viewURL(j.play_path || j.path);
                 video.addEventListener("loadedmetadata", () => seekStrip(p0), { once: true });
-                toast(j.passthrough ? "full: the source itself (one untouched clip - no re-encode)" : `full: built the cut, ${j.frames} frames - this is the file Recombine splices`, "ok");
+                toast(j.passthrough ? "full: the source itself (one untouched clip - no re-encode)"
+                    : `full: built the cut, ${j.frames} frames${j.frame_rate !== j.source_frame_rate ? ` conformed to ${j.frame_rate} fps (audio slowed)` : ""} - this is the file Recombine splices`, "ok");
             } catch (e) { toast(`build failed: ${e.message || e}`, "err"); S.mode = "quick"; }
             bMode.disabled = false;
         } else {
@@ -841,7 +847,7 @@ function buildTimeline(node) {
     function tick() {
         if (!switching && S.playing && !video.paused) {
             if (S.mode === "full" && S.full) {
-                const c = Math.floor(video.currentTime * S.fr);
+                const c = Math.floor(video.currentTime * fullFr());
                 S.playhead = cutToStrip(Math.min(c, totals().cut - 1));
             } else {
                 const x = entryAtStrip(S.playhead);
@@ -1081,10 +1087,16 @@ function buildTimeline(node) {
         await addFiles(files, at);
     });
 
-    for (const w of [frW, gridW, ctxW, extW]) {
+    for (const w of [frW, gridW, ctxW, extW, conformW]) {
         if (!w) continue;
         const cb = w.callback;
-        w.callback = function () { const r = cb ? cb.apply(this, arguments) : undefined; if (w === frW) { probeAll(); S.full = null; if (S.mode === "full") setMode("quick"); } else refresh(); return r; };
+        w.callback = function () {
+            const r = cb ? cb.apply(this, arguments) : undefined;
+            if (w === frW) { probeAll(); S.full = null; if (S.mode === "full") setMode("quick"); }
+            else if (w === conformW) { S.full = null; if (S.mode === "full") setMode("quick"); else refresh(); }
+            else refresh();
+            return r;
+        };
     }
 
     new ResizeObserver(() => {

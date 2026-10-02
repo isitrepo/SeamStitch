@@ -102,6 +102,7 @@ splice *is* the trim. Controls follow [comfyui-obvpm-timeline](https://github.co
 | `mismatch_fit` | When clips differ in size each is fitted onto the **first** clip's: `crop` fills and trims, `pad` letterboxes. |
 | `cut_codec` | How a multi-clip strip is assembled. `lossless` (FFV1, default): exactly the decoded clips, no colour shift, but big (~1.6 GB/min at 832×1280). `h264`: small, one lossy generation. The browser always plays a small H.264 copy. |
 | `assemble_crf` | Quality of the `h264` cut (default 12; lower = better). |
+| `conform_to_24fps` | Off by default. MiniMax H3 runs on a fixed 24 fps clock, so a 25 fps cut drifts its lips ~4% ahead of the speech. On: every frame kept and labelled 24 fps, audio slowed to match (pitch kept). Pair it with Result Preview's restore. See [24 fps conform](#24-fps-conform-minimax-h3). |
 | *(hidden)* `sequence`, `target` | The strip and the marked splice — edited by the UI, not typed. |
 
 The cut goes to `input/seamstitch_timeline/`, cached by content. A strip that is **one untouched clip at
@@ -110,7 +111,7 @@ its own frame rate** is passed through as the file itself, with no re-encode.
 ### Outputs
 
 The Timeline's outputs are the Loader's 18, in the Loader's order (so it drops in where the Loader was),
-computed on the assembled cut, plus two appended at the end.
+computed on the assembled cut, plus four appended at the end.
 
 | Output | What it is for |
 | --- | --- |
@@ -127,6 +128,31 @@ computed on the assembled cut, plus two appended at the end.
 | `start_context` / `end_context` / `context_frames` | The real frames either side of the range, and K — see [Motion guides](#motion-guides). |
 | **`end_seconds`** | Time of the generator's last frame, `(frame_count − 1) / frame_rate`: when "Picture 2" must appear in a MiniMax reference prompt. |
 | **`picture_timing`** | A ready-made prompt alignment line with that number filled in; put it in front of your scene text so the time never goes stale when markers, gap, extension or grid change. |
+| **`source_frame_rate`** | The strip's own frame rate before any conform (`frame_rate` is the cut's: 24 when conformed). Wire into Result Preview's `source_frame_rate`. |
+| **`original_audio`** | The cut's audio at the source rate, unstretched. Wire into Result Preview's `original_audio` so the restored video keeps the real sound. |
+
+### 24 fps conform (MiniMax H3)
+
+MiniMax H3 has no frame-rate input. It takes frames 1:1 but times the reference audio and the
+prompt's Picture timings on a fixed 24 fps clock. On 25 fps footage the lips ran ahead of the speech,
+by about 6 frames over an 8 s chunk.
+
+With `conform_to_24fps` on, a non-24 fps strip is cut **frame for frame** and labelled 24 fps:
+- a single untouched clip is re-labelled by stream copy (no re-encode at all);
+- a multi-clip strip is encoded at 24 with the same frames;
+- the audio is slowed by 24/fps (25 fps: 4%) with the pitch kept, exactly `frames / 24` s long.
+
+Frame numbers don't change, so markers, ranges, `context_frames` and grid rounding are the same as
+without the conform. `frame_rate`, `duration`, `end_seconds` and `picture_timing` come out on H3's
+clock: `(frame_count − 1) / 24`.
+
+Then wire `source_frame_rate` and `original_audio` into Result Preview and leave its
+`restore_source_frame_rate` on. The saved video comes back at the source frame rate and length, with
+the original audio outside the regenerated span. Under the new frames it keeps the span's own audio
+(the bridge's, or the source's), sped back up.
+
+Tested on 25 fps. 30 fps is a 20% stretch and untested. Don't use `frame_rate = 24` for this: that
+**resamples** (drops one frame in 25).
 
 ### Motion guides
 
@@ -215,6 +241,9 @@ Saves the final video, plays it with the regenerated span marked, and rates the 
 | `pix_fmt` | `yuv420p` (plays everywhere) or `yuv420p10le` (10-bit gradients; h264/h265 only). |
 | `save_metadata` | Embed the workflow in the video, as VHS does. |
 | `save_output` | On: save to the output folder. Off: temp only. |
+| `source_frame_rate` *(opt.)* | The Timeline's `source_frame_rate`. When it differs from `frame_rate` (the cut was conformed to 24 fps for MiniMax H3), the restore below applies. |
+| `original_audio` *(opt.)* | The Timeline's `original_audio`: the unstretched sound the restored video keeps outside the new frames. |
+| `restore_source_frame_rate` | Default on; only used when the rates differ. Saves the same frames at the source frame rate (the source cut's exact length for a length-keeping splice) with the original audio, and the new span's own audio sped back up under it. Given `filenames`, the picture is re-labelled by stream copy into `<name>_<fps>fps` beside it, with no re-encode. The verdicts and the player use the restored file. Off: saved as it comes, at 24 fps with the slowed audio. |
 
 ### Outputs
 
