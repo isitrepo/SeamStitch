@@ -606,7 +606,11 @@ function buildTimeline(node) {
         const t = totals();
         const x = entryAtStrip(S.playhead);
         const cutF = stripToCut(S.playhead);
-        overlay.textContent = t.L.length ? `${(S.playhead / S.fr).toFixed(2)}s · strip ${S.playhead} · cut ${cutF}${x && x.e.kind === "clip" ? ` · ${x.e.path.split(/[\\/]/).pop()} #${x.e.enter + (S.playhead - x.strip)}` : ""}${S.mode === "full" ? " · full" : ""}` : "";
+        // The clip's own frame rate, read from its file (not the strip's frame_rate).
+        const inf = x && x.e.kind === "clip" ? S.info[x.e.path] : null;
+        const nat = inf && inf.native_fps ? (Math.abs(inf.native_fps - Math.round(inf.native_fps)) < 0.01
+            ? `${Math.round(inf.native_fps)}` : inf.native_fps.toFixed(3)) : "";
+        overlay.textContent = t.L.length ? `${(S.playhead / S.fr).toFixed(2)}s · strip ${S.playhead} · cut ${cutF}${x && x.e.kind === "clip" ? ` · ${x.e.path.split(/[\\/]/).pop()} #${x.e.enter + (S.playhead - x.strip)}${nat ? ` · ${nat} fps` : ""}` : ""}${S.mode === "full" ? " · full" : ""}` : "";
         gapCover.style.display = x && x.e.kind === "gap" && S.mode === "quick" ? "flex" : "none";
     }
 
