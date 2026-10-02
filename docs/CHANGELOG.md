@@ -20,6 +20,22 @@
     video is re-labelled by stream copy.
   - Saved graphs load unchanged: every new widget and socket is appended. Recombine needs no change.
     Tested on 25 fps; 30 fps (a 20% stretch) is untested.
+- The Timeline's `frame_rate` label shows the rate in use (`auto: 25 fps → 24 for H3`), and the
+  viewer line shows each clip's own frame rate.
+
+### Fixed
+
+- **Formats from other packs that save without colour tags.** ComfyUI-tbox adds its own copies of
+  VHS's h264/h265/nvenc/webm formats, listed as `video/<name>.json`, so each showed twice in Result
+  Preview's and Recombine's `format` list. tbox's `h264-mp4.json` writes no BT.709 conversion or
+  tags; a save with it decoded ~1.6 levels brighter in the pack than in ffmpeg. Both lists now
+  show VHS's own formats only. A graph saved with a `.json` format needs it picked again.
+- **Loader frames on a clip whose video starts late.** On a file that doesn't start at 0 (Combine's
+  output starts +31 ms), the Loader's replace mode took frame *i* at `i / fps`, where Recombine and
+  the Timeline take it at `start + i / fps`. Read below the source's rate (48 → 24), the range and
+  its anchors came out up to a frame early against what Recombine cut: 1-3 frames off at the joins.
+  It was off at the source's own rate too. The Timeline was unaffected: it rebuilds such files to
+  start at 0.
 
 ## v0.3.0 — 2026-09-30
 
