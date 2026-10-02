@@ -320,13 +320,16 @@ def _mask_frames(path, offset, a, b):
 
 def assemble(plan_file, hand_back=12, fmt="video/h264-mp4", crf=12, pix_fmt="yuv420p", filename_prefix=DEFAULT_PREFIX,
              pending_chunks=PENDING_PREVIEW, require_reviewed=False, lock_options=None, measure=True,
-             write_plan=True, progress=None, window=None, out_file=None, plan=None):
+             write_plan=True, progress=None, window=None, out_file=None, plan=None, lock_regions=True):
     """Build the assembly. Returns the report (also written beside the video and into plan.json).
 
     window=(lo, hi): only source frames lo..hi (inclusive), with the source's audio under them,
     into out_file (the Take's review clip: the same joins, typed and repaired the same way, on
     a stretch of the video). plan: a plan dict to use instead of the file's (e.g. with a take
-    marked chosen, "as if this take were chosen"); plan_file still locates the job."""
+    marked chosen, "as if this take were chosen"); plan_file still locates the job.
+    lock_regions: the regional lock (character and background each locked, through the right
+    take's feathered SAM3 mask) wherever both takes have their masks; a split's repair
+    {"regions": false} turns it off there. The lock is always cut-aware (swap_join)."""
     t_start = time.time()
     plan_file = resolve_plan(plan_file)
     job = os.path.dirname(plan_file)
@@ -415,16 +418,51 @@ def assemble(plan_file, hand_back=12, fmt="video/h264-mp4", crf=12, pix_fmt="yuv
         return FrameReader(t["_path"], fr, int(t["render"][0]), (w, h))
 
     # repairs, measured on the takes' own frames before the stream
+    cut_frames = sp.confirmed_cuts(plan.get("cuts"))
     for k, j in enumerate(joins):
         a, b = eff[k][0], eff[k + 1][0]
         s, H = j["splice"], j["hand_back"]
         j["gains"] = None
         j["decay"] = None
+        j["soft"] = None
         if j["repair"] == sp.REPAIR_LOCK:
-            lt = read_range(a["_path"], fr, a["render"][0], s - sj.FIT, s - 1, (w, h))
+            lt = read_range(a["_path"], fr, a["render"][0], max(s - sj.FIT, int(a["render"][0])), s - 1, (w, h))
             rh_end = min(s + H - 1, ends[k + 1], int(b["render"][1]))
             rh = read_range(b["_path"], fr, b["render"][0], s, rh_end, (w, h))
-            j["gains"] = sj.lock_gains(sj.means(lt), sj.means(rh), H, **j["lock_options"])
+            lm, rm = sj.means(lt), sj.means(rh)
+            n = sj.opening_frames(rm, s, H, cut_frames)
+            nl = sj.heading_frames(lm, s, cut_frames)
+            j["lock_fit"] = {"left": nl, "right": n, "hand_back": H}
+            if n == 0:
+                j["repair"] = sp.REPAIR_NONE
+                j["lock_mode"] = "none: the splice is a cut"
+                continue
+            lt, rh, lm, rm = lt[-nl:], rh[:n], lm[-nl:], rm[:n]
+            split = splits.get(chunks[k + 1].get("left")) or {}
+            ma, mb = _mask_path(job, a), _mask_path(job, b)
+            if lock_regions and (split.get("repair") or {}).get("regions", True) and ma and mb:
+                try:
+                    ml = _mask_frames(ma, int(a["render"][0]), s - nl, s - 1)
+                    mr = _mask_frames(mb, int(b["render"][0]), s, s + n - 1)
+                    lc, lb = sj.region_means(lt, [ml[f] for f in range(s - nl, s)])
+                    rc, rb = sj.region_means(rh, [mr[f] for f in range(s, s + n)])
+                    if np.isfinite(lc).all() and np.isfinite(lb).all() and np.isfinite(rc).all() and np.isfinite(rb).all():
+                        gch = sj.lock_gains(lc, rc, n, **j["lock_options"])
+                        gbg = sj.lock_gains(lb, rb, n, **j["lock_options"])
+                        soft = [sj.soft_mask(mr[f], (w, h)) for f in range(s, s + n)]
+                        # each region's mean lands exactly where its own lock puts it, feather included
+                        solved = [sj.solve_field_gains(rh[i], mr[s + i], soft[i], rc[i] * gch[i], rb[i] * gbg[i])
+                                  for i in range(n)]
+                        j["gains_char"] = [x[0] for x in solved]
+                        j["gains_bg"] = [x[1] for x in solved]
+                        j["soft"] = soft
+                        j["gains"] = gch
+                        j["lock_mode"] = "regional"
+                except Exception as e:              # masks unreadable: the global lock
+                    j["lock_mode_note"] = f"regional lock skipped: {e}"
+            if j["soft"] is None:
+                j["gains"] = sj.lock_gains(lm, rm, n, **j["lock_options"])
+                j["lock_mode"] = "global"
         elif j["repair"] == sp.REPAIR_FADE:
             f0, f1 = j["fade"]
             lm = sj.means(read_range(a["_path"], fr, a["render"][0], f0, f1, (w, h)))
@@ -468,7 +506,9 @@ def assemble(plan_file, hand_back=12, fmt="video/h264-mp4", crf=12, pix_fmt="yuv
                 frame = rd.read(f)
                 if left is not None:
                     i = f - left["splice"]
-                    if left["gains"] is not None and i < len(left["gains"]):
+                    if left.get("soft") is not None and i < len(left["soft"]):
+                        frame = sj.apply_gain_field(frame, left["gains_char"][i], left["gains_bg"][i], left["soft"][i])
+                    elif left["gains"] is not None and i < len(left["gains"]):
                         frame = sj.apply_gain(frame, left["gains"][i])
                     elif left["decay"] is not None:
                         g = sj.decay_gain(left["decay"], i, left["hand_back"])
@@ -547,6 +587,11 @@ def assemble(plan_file, hand_back=12, fmt="video/h264-mp4", crf=12, pix_fmt="yuv
                                        "lock_options")}
         if j["gains"] is not None:
             row["lock_gain_first"] = [round(float(x), 5) for x in j["gains"][0]]
+        for key in ("lock_mode", "lock_fit", "lock_mode_note"):
+            if j.get(key) is not None:
+                row[key] = j[key]
+        if j.get("gains_bg") is not None:
+            row["lock_gain_first_bg"] = [round(float(x), 5) for x in j["gains_bg"][0]]
         if j.get("ratios") is not None:
             row["fade_ratio_last"] = [round(float(x), 5) for x in j["ratios"][-1]]
         if measure:
@@ -559,8 +604,11 @@ def assemble(plan_file, hand_back=12, fmt="video/h264-mp4", crf=12, pix_fmt="yuv
             mb = _mask_path(job, b) if b else None
             if ma and mb:
                 lo_c, hi_c = max(lo, lo_t), min(hi, hi_t + 1)
-                masks = _mask_frames(ma, int(a["render"][0]), lo_c, j["splice"] - 1)
-                masks.update(_mask_frames(mb, int(b["render"][0]), j["splice"], hi_c - 1))
+                # one track across the splice where it can (r16's method: one SAM3 track over the
+                # joined file): the right take's mask over its own overlap, the left take's before it
+                b0 = max(lo_c, int(b["render"][0]))
+                masks = _mask_frames(ma, int(a["render"][0]), lo_c, b0 - 1) if b0 > lo_c else {}
+                masks.update(_mask_frames(mb, int(b["render"][0]), b0, hi_c - 1))
                 fr_out = FrameReader(final, fr, f_lo, (w, h))
                 cl = [sj.luma(fr_out.read(f), masks.get(f)) for f in range(lo_c, hi_c)]
                 row["char_luma"] = sj.jumps(cl, lo_c, j["splice"], lo_c, hi_c)

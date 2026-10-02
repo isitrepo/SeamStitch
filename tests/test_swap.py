@@ -534,3 +534,30 @@ def test_assemble_16bit_master_holds_the_8bit_frames_exactly(job):
         out = np.stack([f.to_ndarray(format="rgb48le") for f in c.decode(video=0)])
     src = _frames(sp.load_plan(job["plan"])["source"]["path"])
     assert out.shape[0] == job["N"] and np.array_equal(out, src.astype(np.uint16) * 257)
+
+
+# ---------------------------------------------------------------- B1b: the cut-aware, regional lock
+
+def test_lock_fits_stop_at_a_cut():
+    m = np.array([[60.0] * 3, [60.2] * 3, [45.0] * 3, [44.8] * 3, [44.5] * 3])       # the take cuts at frame 2
+    assert sj.opening_frames(m, 412, 12) == 2                                          # its own step
+    assert sj.opening_frames(m, 412, 12, cuts=[413]) == 1                             # the confirmed cut, earlier
+    assert sj.opening_frames(m, 412, 12, cuts=[412]) == 0                             # the splice is a cut
+    left = np.array([[90.0] * 3] * 4 + [[60.0] * 3] * 8)                               # the left take cut 8 frames ago
+    assert sj.heading_frames(left, 609) == 8
+    assert sj.heading_frames(left, 609, cuts=[605]) == 4
+    assert sj.line_fit(np.array([[5.0, 6.0, 7.0]]))[1].tolist() == [0.0, 0.0, 0.0]
+
+
+def test_solved_field_gains_land_each_region_on_its_target():
+    rng = np.random.default_rng(0)
+    f = rng.integers(30, 200, (40, 60, 3)).astype(np.uint8)
+    mask = np.zeros((40, 60), bool)
+    mask[10:30, 20:40] = True
+    wgt = sj.soft_mask(mask, (60, 40), feather=0.05)
+    cm, bm = sj.region_means([f], [mask])
+    tc, tb = cm[0] * 1.02, bm[0] * 1.06
+    gc, gb = sj.solve_field_gains(f, mask, wgt, tc, tb)
+    g = wgt[..., None] * gc + (1 - wgt[..., None]) * gb
+    out = f.astype(np.float64) * g
+    assert np.allclose(out[mask].mean(0), tc, atol=1e-6) and np.allclose(out[~mask].mean(0), tb, atol=1e-6)
