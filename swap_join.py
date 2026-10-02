@@ -1,0 +1,314 @@
+"""SeamStitch Swap: the join repairs and the join measurements, on decoded frames.
+
+numpy + OpenCV, no torch and no comfy imports. The maths is a port, not a rewrite, of the
+measured CR test scripts, so a number here compares with r11-r16's:
+  * the level lock (`lock_gains`) and the level-matched fade: the measured seam_repair script,
+    itself a port of obvpm-timeline's levellock.py and crossfade.py (GPL-3.0, credit chanon);
+  * the luma jumps: seam_repair.py / bridge_join.py;
+  * the seam score: handover.py / bridge_join.py `join`, on seamweave.flow's motion measures
+    (ported below, the same functions);
+  * the motion verdict: result_preview.join_ratio, imported by the Assemble node.
+
+Frames are uint8 HxWx3 RGB. Every repair does its arithmetic in float32 and truncates back
+to uint8 exactly as seam_repair.py does, so the node's frames equal the CLI's bit for bit
+on the same decoded input.
+
+LOCK (default for forward, re-roll exit and stale joins). Per RGB channel:
+  1. predict where the left take was heading: a line through its last FIT frames' means,
+     extrapolated one frame past its end;
+  2. fit the right take's first `frames` (the hand-back) frames' means to a line;
+  3. delta = prediction - that line's start, ramped to 0 by frame `frames`;
+  4. gain = (line + delta) / line, multiplicative, identity from frame `frames` on.
+
+FADE (default for a re-roll entry). Over the right take's overlap, each right frame is
+level-matched to the left one (gain = mean left / mean right, per frame and channel) and
+crossfaded in with equal-power weights (sin^2). After the overlap the last match gain decays
+to 1 over `frames` frames.
+
+obvpm's lock extras, all OFF by default (T-JOIN measures them):
+  gate   leave the join alone unless its step beats max(0.6, 3 x the left tail's local noise)
+  clamp  clip gains to [1/1.06, 1.06] (MAX_GAIN)
+  swing  straighten an oscillating opening onto its fitted line (divide by the actual
+         per-frame means instead of the line) when its swing beats max(1.5, 3 x local noise)
+"""
+
+import threading
+
+import cv2
+import numpy as np
+
+FIT = 12            # levellock.FIT: left frames used to predict the heading
+HAND_BACK = 12      # levellock.FRAMES: the default hand-back
+
+# obvpm-timeline levellock constants (the T-JOIN options)
+STEP_OVER_NOISE, STEP_FLOOR = 3.0, 0.6
+SWING_OVER_NOISE, SWING_FLOOR = 3.0, 1.5
+MAX_GAIN = 1.06
+
+LUMA_BT709 = np.array([0.2126, 0.7152, 0.0722])
+
+
+# ---------------------------------------------------------------------------
+# the repairs (seam_repair.py)
+# ---------------------------------------------------------------------------
+
+def frame_means(frame):
+    """Per-channel mean of one frame, float64 (seam_repair.means, one row)."""
+    return frame.reshape(-1, 3).mean(0)
+
+
+def means(frames):
+    return np.array([frame_means(f) for f in frames], np.float64).reshape(-1, 3)
+
+
+def line_fit(y):
+    """Least-squares line through y[0..n-1] per channel; (intercept at 0, slope)."""
+    t = np.arange(len(y))
+    A = np.vstack([np.ones_like(t), t]).T
+    coef, *_ = np.linalg.lstsq(A, y, rcond=None)
+    return coef[0], coef[1]
+
+
+def lock_report(left_means, right_means, frames=HAND_BACK):
+    """obvpm's measure() on channel means: step, local noise, swing (all in luma levels)."""
+    lt = np.asarray(left_means, np.float64)[-FIT:] @ LUMA_BT709
+    rh = np.asarray(right_means, np.float64)[:frames] @ LUMA_BT709
+    s1, i1 = np.polyfit(np.arange(float(len(lt))), lt, 1)
+    pred = float(s1 * len(lt) + i1)
+    local = float(np.abs(np.diff(lt)).mean()) if len(lt) > 1 else 0.0
+    s2, i2 = np.polyfit(np.arange(float(len(rh))), rh, 1)
+    resid = rh - (s2 * np.arange(float(len(rh))) + i2)
+    return {"step": float(rh[:3].mean() - pred), "local": local, "swing": float(resid.max() - resid.min()),
+            "step_bar": max(STEP_FLOOR, STEP_OVER_NOISE * local), "swing_bar": max(SWING_FLOOR, SWING_OVER_NOISE * local)}
+
+
+def lock_gains(left_means, right_means, frames=HAND_BACK, gate=False, clamp=False, swing=False):
+    """Per-frame, per-channel gains (n, 3) for the right take's opening `frames` frames.
+
+    left_means: channel means of the left take's frames up to the splice (its last FIT are
+    used); right_means: of the right take's frames from the splice (its first `frames`).
+    With every option off this is seam_repair.lock_gains exactly. Returns all-ones when the
+    gate says the join has nothing to fix."""
+    mx = np.asarray(left_means, np.float64)[-FIT:]
+    b, s = line_fit(mx)
+    pred = b + s * len(mx)                       # the left take's heading, one frame past its end
+    my = np.asarray(right_means, np.float64)[:frames]
+    yb, ys = line_fit(my)
+    t = np.arange(len(my))[:, None]
+    yline = yb + ys * t
+    delta = (pred - yb) * (1 - t / frames)       # ramp to 0 by frame `frames`
+    rep = lock_report(left_means, right_means, frames) if (gate or swing) else None
+    do_step = not gate or abs(rep["step"]) > rep["step_bar"]
+    do_swing = swing and rep["swing"] > rep["swing_bar"]
+    if not do_step and not do_swing:
+        return np.ones_like(yline)
+    desired = yline + (delta if do_step else 0.0)
+    actual = my if do_swing else yline          # swing: straighten the opening onto its line
+    g = desired / np.maximum(actual, 1e-3)
+    if clamp:
+        g = np.clip(g, 1.0 / MAX_GAIN, MAX_GAIN)
+    return g
+
+
+def apply_gain(frame, g):
+    """seam_repair.apply_gain: float32 multiply, clip, truncate to uint8."""
+    return np.clip(frame.astype(np.float32) * np.asarray(g).astype(np.float32), 0, 255).astype(np.uint8)
+
+
+def fade_weights(n):
+    """Equal-power weights for the incoming side, 0 -> 1 over n frames (sin^2)."""
+    return np.sin(np.linspace(0, 1, n) * np.pi / 2) ** 2
+
+
+def fade_ratios(left_means, right_means):
+    """Per-frame, per-channel level match over the overlap: mean left / mean right."""
+    gx, gy = np.asarray(left_means, np.float64), np.asarray(right_means, np.float64)
+    return gx / np.maximum(gy, 1e-3)
+
+
+def fade_frame(left, right, ratio, w):
+    """One overlap frame: the right take level-matched by `ratio`, crossfaded in at weight w."""
+    ym = right.astype(np.float32) * np.asarray(ratio).astype(np.float32)
+    return np.clip((1 - w) * left.astype(np.float32) + w * ym, 0, 255).astype(np.uint8)
+
+
+def decay_gain(last_ratio, k, frames=HAND_BACK):
+    """Gain for the k-th right frame after the overlap (k = 0 is the splice frame): the last
+    match ratio decaying to 1 by frame `frames`. None once it is identity."""
+    f = max(0.0, 1 - (k + 1) / frames)
+    return 1 + (np.asarray(last_ratio) - 1) * f if f > 0 else None
+
+
+def tone_compensate(left_tail, right, mode, overlap):
+    """MiniMax H3 Tone Compensate (ComfyUI-MiniMaxH3-ToneCompensate) on uint8 frames, for
+    T-TONE only: `left_tail` = the source (its last `overlap` frames are used), `right` = the
+    whole right take from its overlap start. frame_shift: per-frame per-channel mean shift on
+    the overlap, the last one held over the rest; gain_bias: one per-channel affine fit.
+    Returns float32 0..1 frames, as the node does (no uint8 truncation)."""
+    src = np.stack(left_tail).astype(np.float32) / 255.0
+    tgt = np.stack(right).astype(np.float32) / 255.0
+    n = min(int(overlap), src.shape[0], tgt.shape[0])
+    fit_src, fit_tgt = src[-n:], tgt[:n]
+    if mode == "frame_shift":
+        drift = fit_tgt.mean(axis=(1, 2), keepdims=True) - fit_src.mean(axis=(1, 2), keepdims=True)
+        out = tgt.copy()
+        out[:n] -= drift
+        out[n:] -= drift[-1]
+    elif mode == "gain_bias":
+        out = np.empty_like(tgt)
+        for c in range(3):
+            s = fit_src[..., c].reshape(-1).astype(np.float64)
+            g = fit_tgt[..., c].reshape(-1).astype(np.float64)
+            dg = g - g.mean()
+            den = (dg * dg).sum()
+            A = 1.0 if den < 1e-12 else float((dg * (s - s.mean())).sum() / den)
+            if abs(A) < 1e-6:
+                A = 1.0
+            C = float(s.mean() - A * g.mean())
+            out[..., c] = A * tgt[..., c] + C
+    else:
+        raise ValueError(f"tone_compensate mode {mode!r}")
+    return np.clip(out, 0.0, 1.0)
+
+
+# ---------------------------------------------------------------------------
+# measurement (seam_repair.py / bridge_join.py luma tracks)
+# ---------------------------------------------------------------------------
+
+def luma(frame, mask=None):
+    """Mean luma (OpenCV's RGB->GRAY, as the CLI scripts) of a frame, or of the masked part."""
+    g = cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)
+    if mask is not None:
+        if mask.shape != g.shape:
+            mask = cv2.resize(mask.astype(np.uint8), (g.shape[1], g.shape[0]), interpolation=cv2.INTER_NEAREST) > 0
+        if not mask.any():
+            return float("nan")
+        return float(g[mask].mean())
+    return float(g.mean())
+
+
+def measure_window(right_render_start, splice, hand_back=HAND_BACK):
+    """seam_repair.py's measuring window around a join, in source frames [lo, hi): from 15
+    before the right take's first frame to max(30, hand_back + 20) after the splice."""
+    return right_render_start - 15, splice + max(30, hand_back + 20)
+
+
+def jumps(track, first, splice, lo, hi):
+    """Luma-jump stats of a track (track[i] = frame first + i) around a splice:
+    at_splice = |t[splice] - t[splice - 1]|; max over [lo, hi) and where (the frame jumped
+    INTO); median of |diff| over the whole track (the natural median)."""
+    t = np.asarray(track, np.float64)
+    lo_i, hi_i = max(0, lo - first), min(len(t), hi - first)
+    d = np.abs(np.diff(t[lo_i:hi_i]))
+    s = splice - first
+    out = {"at_splice": round(float(abs(t[s] - t[s - 1])), 3) if 0 < s < len(t) else None,
+           "max": round(float(np.nanmax(d)), 3) if d.size else None,
+           "max_at": int(first + lo_i + 1 + int(np.nanargmax(d))) if d.size else None,
+           "median": round(float(np.nanmedian(np.abs(np.diff(t)))), 3) if len(t) > 1 else None}
+    return out
+
+
+# ---------------------------------------------------------------------------
+# the seam score (handover.py / bridge_join.py `join`, on seamweave.flow)
+# ---------------------------------------------------------------------------
+
+SEAM_THUMB_W, SEAM_THUMB_H = 960, 540   # the CLI scripts' analysis size (ffmpeg scale, flags=area)
+FLOW_W = 480                            # seamweave flow width
+
+
+def gray(rgb):
+    return cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
+
+
+def resize_to_width(img, width):
+    if img.shape[1] == width:
+        return img
+    h = max(2, int(round(img.shape[0] * width / img.shape[1])))
+    interp = cv2.INTER_AREA if width < img.shape[1] else cv2.INTER_LINEAR
+    return cv2.resize(img, (width, h), interpolation=interp)
+
+
+def thumb(rgb):
+    """A frame at the CLI's analysis size (960x540, area)."""
+    if rgb.shape[1] == SEAM_THUMB_W and rgb.shape[0] == SEAM_THUMB_H:
+        return rgb
+    return cv2.resize(rgb, (SEAM_THUMB_W, SEAM_THUMB_H), interpolation=cv2.INTER_AREA)
+
+
+_LOCAL = threading.local()
+
+
+def _dis():
+    dis = getattr(_LOCAL, "dis", None)
+    if dis is None:
+        dis = cv2.DISOpticalFlow_create(cv2.DISOPTICAL_FLOW_PRESET_MEDIUM)
+        dis.setUseSpatialPropagation(True)
+        _LOCAL.dis = dis
+    return dis
+
+
+def prep(g):
+    """High-pass a grey frame before flow (two generations differ in level, not in edges)."""
+    f = g.astype(np.float32)
+    hp = f - cv2.GaussianBlur(f, (0, 0), 8.0)
+    return np.clip(hp * 1.6 + 128.0, 0, 255).astype(np.uint8)
+
+
+def _moving_pixels(pa, pb):
+    diff = cv2.GaussianBlur(np.abs(pa.astype(np.float32) - pb.astype(np.float32)), (0, 0), 1.5)
+    energy = cv2.GaussianBlur(np.abs(cv2.Laplacian(pa, cv2.CV_32F)), (0, 0), 1.5)
+    score = diff * np.sqrt(energy + 1e-3)
+    thr = float(np.percentile(score, 98.0))
+    if thr <= 1e-3:
+        return None
+    return score >= thr
+
+
+def _speed_and_vector(f, pa, pb):
+    sel = _moving_pixels(pa, pb)
+    if sel is None:
+        return 0.0, np.array([0.0, 0.0])
+    sf = cv2.GaussianBlur(f, (0, 0), 2.0)
+    mag = np.sqrt(sf[..., 0] ** 2 + sf[..., 1] ** 2)
+    return float(np.median(mag[sel])), np.array([float(np.median(sf[..., 0][sel])), float(np.median(sf[..., 1][sel]))])
+
+
+class Motion:
+    """Cached motion between two grey frames (handover.Motion)."""
+
+    def __init__(self):
+        self.prep = {}
+
+    def _p(self, key, g):
+        if key not in self.prep:
+            self.prep[key] = prep(resize_to_width(g, FLOW_W))
+        return self.prep[key]
+
+    def pair(self, ka, a, kb, b):
+        pa, pb = self._p(ka, a), self._p(kb, b)
+        f = _dis().calc(pa, pb, None)
+        sp, v = _speed_and_vector(f, pa, pb)
+        return sp, v, float(np.abs(a.astype(np.float32) - b.astype(np.float32)).mean())
+
+
+def vec_err(v, ref):
+    return float(np.linalg.norm(v - ref) / max(np.linalg.norm(ref), 0.3))
+
+
+def seam_score(grays_before, grays_after):
+    """bridge_join.join: the join between grays_before[-1] and grays_after[0], against the
+    natural pairs either side. grays_*: grey frames at the analysis size, 5 each side.
+    seam = vec_err + |1 - diff_ratio| + |1 - speed_ratio|; ~0.8-1.1 for r16's joins."""
+    m = Motion()
+    before, after = list(grays_before), list(grays_after)
+    sp, v, d = m.pair(("s", -1), before[-1], ("s", 0), after[0])
+    nb = [m.pair(("pb", i), before[i], ("pb", i + 1), before[i + 1]) for i in range(len(before) - 1)]
+    na = [m.pair(("pa", i), after[i], ("pa", i + 1), after[i + 1]) for i in range(len(after) - 1)]
+    neigh = nb + na
+    d_nat = float(np.median([n[2] for n in neigh]))
+    s_nat = max(float(np.median([n[0] for n in neigh])), 0.15)
+    v_nat = (nb[-1][1] + na[0][1]) / 2
+    r = {"diff_ratio": round(d / max(d_nat, 1e-6), 3), "speed_ratio": round(sp / s_nat, 3),
+         "vec_err": round(vec_err(v, v_nat), 3)}
+    r["seam"] = round(r["vec_err"] + abs(1 - r["diff_ratio"]) + abs(1 - r["speed_ratio"]), 3)
+    return r
