@@ -196,12 +196,14 @@ def _expand_date(prefix):
 
 
 def _formats():
+    """VHS's own video formats (recombine.pack_video_formats: no other pack's `.json` copies,
+    which can save without BT.709 tags), image sequences left out."""
     try:
         try:
-            from .recombine import get_video_formats
+            from .recombine import pack_video_formats
         except ImportError:
-            from recombine import get_video_formats
-        names = [f for f in get_video_formats()[0] if "png" not in f]
+            from recombine import pack_video_formats
+        names = [f for f in pack_video_formats()[0] if "png" not in f]
     except Exception:
         names = []
     return names or ["video/h264-mp4"]

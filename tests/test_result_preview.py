@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from test_timeline import make_clip, dirs  # noqa: E402,F401  (fixture re-export)
+from test_timeline import make_clip, dirs, recombine  # noqa: E402,F401  (fixture re-export)
 
 
 def test_hard_cut_reads_hard_and_smooth_motion_reads_seamless(dirs):
@@ -102,3 +102,25 @@ def test_format_settings_only_reach_formats_that_have_them():
         {"save_metadata": True, "trim_to_audio": False, "has_alpha": False, "crf": 12, "pix_fmt": "yuv420p10le"}
     assert "pix_fmt" not in rp.format_settings("video/ffv1-mkv", 12, "yuv420p", True, ffv1)
     assert rp.format_settings("video/ProRes", 12, "yuv420p", True, prores)["profile"] == "4444"
+
+
+def test_format_lists_drop_other_packs_json_formats(recombine, monkeypatch):
+    """ComfyUI-tbox adds its own copies of VHS formats, listed with `.json` on the name; its
+    h264-mp4.json saves without BT.709 tags (~1.6 levels off in the pack's decoder). Result
+    Preview and Recombine list VHS's own formats only, and keep video/h264-mp4."""
+    import sys
+    import result_preview as rp
+    tbox = ["video/h264-mp4.json", "video/h265-mp4.json", "video/nvenc_h264-mp4.json",
+            "video/nvenc_h265-mp4.json", "video/webm.json"]
+    vhs = ["video/16bit-png", "video/8bit-png", "video/av1-webm", "video/ffv1-mkv", "video/h264-mp4",
+           "video/h265-mp4", "video/nvenc_h264-mp4", "video/ProRes", "video/webm"]
+    widgets = {f: [["crf", "INT", {}]] for f in tbox + vhs if "png" not in f}
+    monkeypatch.setattr(recombine, "get_video_formats", lambda: (tbox + vhs, widgets))
+    names, w = recombine.pack_video_formats()
+    assert names == vhs and not any(k.endswith(".json") for k in w)
+    fmt = recombine.SeamStitchRecombine.INPUT_TYPES()["required"]["format"]
+    assert fmt[0] == vhs and fmt[1]["default"] == "video/h264-mp4"
+    assert not any(k.endswith(".json") for k in fmt[1]["formats"])
+    monkeypatch.setitem(sys.modules, "recombine", recombine)     # what result_preview imports outside ComfyUI
+    assert rp._formats() == [f for f in vhs if "png" not in f]
+    assert rp.SeamStitchResultPreview.INPUT_TYPES()["required"]["format"][1]["default"] == "video/h264-mp4"
