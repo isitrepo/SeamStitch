@@ -539,10 +539,20 @@ class SeamStitchLoader:
                 scale_w, scale_h = target_w, target_h
 
         # Determine exact bounds based on frontend mode
+        # Frame numbers are decode order, counted from the stream's own first frame, which
+        # is not always at t = 0: SeamStitchCombine's output starts +31 ms late. Recombine
+        # (_decode_range) and the Timeline time frame i as start + i/fr; this path used a
+        # bare i/fr, so on such a file at a rate below the source's (48 -> 24) the range
+        # sampled up to a frame earlier than the frames Recombine cut out - 1-3 frames off
+        # at the joins (found 2026-09-29). _load_insert and _with_context already add it.
+        index_base = 0.0
         if display_mode == "frames":
             fr = float(frame_rate) if frame_rate > 0 else 24.0
-            actual_start_time = float(start_frame) / fr
-            actual_end_time = float(end_frame) / fr if (end_frame > 0 and end_frame > start_frame) else video_duration
+            if video_stream is not None and video_stream.start_time is not None and video_stream.time_base:
+                index_base = float(video_stream.start_time * video_stream.time_base)
+            actual_start_time = index_base + float(start_frame) / fr
+            actual_end_time = index_base + float(end_frame) / fr if (end_frame > 0 and end_frame > start_frame) \
+                else (index_base + video_duration if video_duration > 0 else video_duration)   # 0: to EOF
         else:
             actual_start_time = start_time
             actual_end_time = end_time if (end_time > 0 and end_time > start_time) else video_duration
@@ -827,7 +837,7 @@ class SeamStitchLoader:
         # this same forced frame_rate — lets a downstream node re-decode source_video_path
         # at the identical rate and know exactly which frames this selection replaces.
         effective_fr = float(frame_rate) if frame_rate > 0 else 24.0
-        start_frame_idx = int(round(actual_start_time * effective_fr))
+        start_frame_idx = int(round((actual_start_time - index_base) * effective_fr))
         end_frame_idx = start_frame_idx + frame_count - 1 if frame_count > 0 else start_frame_idx
 
         # Read width/height directly off the actual output tensor (post-crop/resize/pad)

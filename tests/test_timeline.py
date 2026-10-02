@@ -384,3 +384,42 @@ def test_gap_with_markers_is_an_extended_replace(dirs, recombine):
         gen, res["source_video_path"], 26, 33, 24, 0.0, 0, "t", "video/h264-mp4", save_output=False,
         context_frames=2, skip_encode=True)
     assert out["result"][1].shape[0] == 60 + 12                   # 12 frames longer
+
+
+@pytest.mark.parametrize("fr", [24, 48, 16])
+def test_loader_matches_recombine_on_a_late_starting_clip(dirs, recombine, fr):
+    """Regression (found 2026-09-29 on seamstitch_combined_00005 / None_00005, 48 fps, video
+    starting +31 ms, read at 24): the Loader timed frame i as i/fr, Recombine and the
+    Timeline as start + i/fr, so the Loader's range and anchors were up to a frame early
+    against the frames Recombine cut out. Same file, same rate: same frames, same indices."""
+    from loader import SeamStitchLoader
+    inp, _ = dirs
+    n = 60
+    frames = np.stack([np.full((48, 64, 3), 16 + i * LEVEL_STEP, np.uint8) for i in range(n)])
+    path = str(inp / "late.mp4")
+    subprocess.run([_ffmpeg(), "-v", "error", "-y", "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", "64x48",
+                    "-r", "48", "-i", "-", "-c:v", "libx264", "-qp", "0", "-pix_fmt", "yuv444p",
+                    "-output_ts_offset", "0.031", path], input=frames.tobytes(), check=True)
+    import av
+    with av.open(path) as c:
+        v = c.streams.video[0]
+        assert float(v.start_time * v.time_base) == pytest.approx(0.031, abs=1e-3)   # the real files' offset
+    k = 2
+    for s, e in ((5, 12), (10, 20), (3, 9)):
+        if e + k > 60 * fr // 48:
+            continue
+        r = SeamStitchLoader().load_video(video=path, frame_rate=fr, display_mode="frames", start_time=0,
+                                          end_time=0, duration=0, start_frame=s, end_frame=e,
+                                          duration_frames=0, snap_to_multiple=0, context_frames=k)
+        want = codes(recombine._decode_range(path, fr, s, e).numpy())
+        assert codes(r[0].numpy() * 255) == want, (fr, s, e)
+        assert codes(tl_frames(path, fr, s, e)) == want
+        assert (r[8], r[9]) == (s, e - 1)
+        assert codes(r[5].numpy() * 255) == want[:1] and codes(r[6].numpy() * 255) == want[-1:]
+        assert codes(r[15].numpy() * 255) == codes(recombine._decode_range(path, fr, s - k, s).numpy())
+        assert codes(r[16].numpy() * 255) == codes(recombine._decode_range(path, fr, e, e + k).numpy())
+
+
+def tl_frames(path, fr, s, e):
+    import timeline as tl
+    return list(tl._iter_frames(path, fr, s, e))
