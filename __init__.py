@@ -63,6 +63,17 @@ try:
     NODE_DISPLAY_NAME_MAPPINGS["SeamStitchSwapAssemble"] = "SeamStitch Swap Assemble"
 except Exception as e:
     logging.getLogger(__name__).warning(f"[SeamStitch] Swap Assemble not loaded: {e}")
+try:
+    from .swap_planner import SeamStitchSwapPlanner, SeamStitchSwapOption
+    from .swap_take import SeamStitchSwapTake
+    NODE_CLASS_MAPPINGS["SeamStitchSwapPlanner"] = SeamStitchSwapPlanner
+    NODE_DISPLAY_NAME_MAPPINGS["SeamStitchSwapPlanner"] = "SeamStitch Swap Planner"
+    NODE_CLASS_MAPPINGS["SeamStitchSwapOption"] = SeamStitchSwapOption
+    NODE_DISPLAY_NAME_MAPPINGS["SeamStitchSwapOption"] = "SeamStitch Swap Option"
+    NODE_CLASS_MAPPINGS["SeamStitchSwapTake"] = SeamStitchSwapTake
+    NODE_DISPLAY_NAME_MAPPINGS["SeamStitchSwapTake"] = "SeamStitch Swap Take"
+except Exception as e:
+    logging.getLogger(__name__).warning(f"[SeamStitch] Swap Planner / Option / Take not loaded: {e}")
 
 WEB_DIRECTORY = "js"
 

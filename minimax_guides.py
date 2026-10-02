@@ -38,15 +38,21 @@ ANCHOR_CLIP = "clip"
 
 def plan_anchors(k_start, k_end, anchor_mode):
     """[(side, first_index, count, frame_idx)] for the anchors to add, in order.
-    side is "start" or "end"; the slice is context[first_index:first_index + count]."""
+    side is "start" or "end"; the slice is context[first_index:first_index + count].
+    A side with 0 frames (an empty batch, e.g. the Swap Planner's pins on a side with no
+    rendered neighbour) is skipped."""
     if anchor_mode == ANCHOR_CLIP:
-        for side, k in (("start", k_start), ("end", k_end)):
+        plan = []
+        for side, k, idx in (("start", k_start, 0), ("end", k_end, -k_end)):
+            if k == 0:
+                continue
             if k != 1 and (k < 5 or k % 17 != 5):
                 raise ValueError(
                     f"SeamStitchMiniMaxGuides: clip anchors need 1 or 5, 22, 39... (17k+5) context "
                     f"frames per side; {side}_context has {k}. Set the Loader's context_frames to 5 "
                     f"(or 22), or use anchor_mode 'per frame'.")
-        return [("start", 0, k_start, 0), ("end", 0, k_end, -k_end)]
+            plan.append((side, 0, k, idx))
+        return plan
     plan = [("start", i, 1, i) for i in range(k_start)]
     plan += [("end", j, 1, -(k_end - j)) for j in range(k_end)]
     return plan

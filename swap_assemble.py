@@ -248,6 +248,57 @@ def _mux_audio(video, source, out, spec):
     return " ".join(spec.get("audio_pass", ["-c:a", "aac"]))
 
 
+def _mux_audio_window(video, source, out, spec, t0, dur):
+    """The source's audio from t0 for dur seconds beside the picture, re-encoded with the format's
+    own audio codec (a stream copy can only cut on packet boundaries)."""
+    ff = _ffmpeg_path()
+    flags = ["-movflags", "+faststart"] if out.lower().endswith((".mp4", ".mov", ".m4v")) else []
+    a_pass = list(spec.get("audio_pass", ["-c:a", "aac"]))
+    p = subprocess.run([ff, "-v", "error", "-y", "-i", video, "-ss", f"{max(0.0, t0):.6f}", "-t", f"{dur:.6f}",
+                        "-i", source, "-map", "0:v:0", "-map", "1:a:0", "-c:v", "copy"] + a_pass
+                       + ["-af", f"apad=whole_dur={dur:.6f}", "-t", f"{dur:.6f}"] + flags + [out], capture_output=True)
+    if p.returncode != 0:
+        raise AssembleError(f"ffmpeg failed muxing the source audio: {p.stderr.decode(errors='replace')[-600:]}")
+    return " ".join(a_pass)
+
+
+FOLLOW_SIDE = 25                 # frames either side of a splice for the join's following (pose IoU)
+
+
+def _src_mask_path(job, take):
+    for name in ("mask_src.mkv", "mask_src.mp4"):
+        p = os.path.join(job, os.path.dirname(take["file"]), name)
+        if os.path.isfile(p):
+            return p
+    return None
+
+
+def _join_follow(job, a, b, splice, lo, hi):
+    """Pose IoU (the SAM3 person masks, source vs output: r10's measure) over source frames
+    lo..hi around a splice: the left take's frames before it, the right take's from it.
+    None when either take lacks its masks."""
+    if a is None or b is None:
+        return None
+    paths = [(_mask_path(job, t), _src_mask_path(job, t)) for t in (a, b)]
+    if not all(p for pair in paths for p in pair):
+        return None
+    vals = []
+    for (mo, ms), t, f0, f1 in ((paths[0], a, lo, splice - 1), (paths[1], b, splice, hi)):
+        if f1 < f0:
+            continue
+        out = _mask_frames(mo, int(t["render"][0]), f0, f1)
+        src = _mask_frames(ms, int(t["render"][0]), f0, f1)
+        for f in range(f0, f1 + 1):
+            if f in out and f in src:
+                v = sj.iou(src[f], out[f])
+                if v is not None:
+                    vals.append(v)
+    if not vals:
+        return None
+    return {"pose_iou": round(float(np.mean(vals)), 4), "pose_iou_p10": round(float(np.percentile(vals, 10)), 4),
+            "frames": len(vals), "range": [lo, hi]}
+
+
 def _mask_path(job, take):
     for name in ("mask_out.mkv", "mask_out.mp4"):
         p = os.path.join(job, os.path.dirname(take["file"]), name)
@@ -269,12 +320,17 @@ def _mask_frames(path, offset, a, b):
 
 def assemble(plan_file, hand_back=12, fmt="video/h264-mp4", crf=12, pix_fmt="yuv420p", filename_prefix=DEFAULT_PREFIX,
              pending_chunks=PENDING_PREVIEW, require_reviewed=False, lock_options=None, measure=True,
-             write_plan=True, progress=None):
-    """Build the assembly. Returns the report (also written beside the video and into plan.json)."""
+             write_plan=True, progress=None, window=None, out_file=None, plan=None):
+    """Build the assembly. Returns the report (also written beside the video and into plan.json).
+
+    window=(lo, hi): only source frames lo..hi (inclusive), with the source's audio under them,
+    into out_file (the Take's review clip: the same joins, typed and repaired the same way, on
+    a stretch of the video). plan: a plan dict to use instead of the file's (e.g. with a take
+    marked chosen, "as if this take were chosen"); plan_file still locates the job."""
     t_start = time.time()
     plan_file = resolve_plan(plan_file)
     job = os.path.dirname(plan_file)
-    plan = sp.load_plan(plan_file)
+    plan = plan if plan is not None else sp.load_plan(plan_file)
     src = plan["source"]
     source = src["path"]
     if not os.path.isfile(source):
@@ -347,6 +403,11 @@ def assemble(plan_file, hand_back=12, fmt="video/h264-mp4", crf=12, pix_fmt="yuv
         if t is not None and not sp.take_covers(t, a, b):
             raise AssembleError(f"chunk {chunks[k]['id']}: take {t['id']} {t['render']} doesn't cover its output {a}..{b}")
 
+    f_lo, f_hi = (0, N - 1) if window is None else (max(0, int(window[0])), min(N - 1, int(window[1])))
+    if f_hi < f_lo:
+        raise AssembleError(f"window {window} holds no frames of the {N}-frame source")
+    n_out = f_hi - f_lo + 1
+
     def reader(k, f0=None):
         t = eff[k][0]
         if t is None:
@@ -376,10 +437,15 @@ def assemble(plan_file, hand_back=12, fmt="video/h264-mp4", crf=12, pix_fmt="yuv
         spec = _format_spec(fmt, crf, pix_fmt)
     except Exception as e:
         raise AssembleError(f"format {fmt}: {e}")
-    out_dir = os.path.join(job, "assembled")
-    os.makedirs(out_dir, exist_ok=True)
-    stem = rp._expand_date(filename_prefix or DEFAULT_PREFIX)
-    final = _unique(os.path.join(out_dir, f"{stem}.{spec['extension']}"))
+    if out_file:
+        out_dir = os.path.dirname(os.path.abspath(out_file))
+        os.makedirs(out_dir, exist_ok=True)
+        final = os.path.abspath(out_file)
+    else:
+        out_dir = os.path.join(job, "assembled")
+        os.makedirs(out_dir, exist_ok=True)
+        stem = rp._expand_date(filename_prefix or DEFAULT_PREFIX)
+        final = _unique(os.path.join(out_dir, f"{stem}.{spec['extension']}"))
     stem = os.path.splitext(os.path.basename(final))[0]
     video_only = os.path.join(out_dir, f"{stem}.video.part.{spec['extension']}")
     enc = StreamEncoder(video_only, w, h, fr, spec)
@@ -393,8 +459,12 @@ def assemble(plan_file, hand_back=12, fmt="video/h264-mp4", crf=12, pix_fmt="yuv
         for k, c in enumerate(chunks):
             left = joins[k - 1] if k > 0 else None
             right = joins[k] if k < len(joins) else None
+            a_k, b_k = max(starts[k], f_lo), min(ends[k], f_hi)
+            if b_k < a_k:
+                readers.pop(k, None)
+                continue
             rd = readers.pop(k, None) or reader(k)
-            for f in range(starts[k], ends[k] + 1):
+            for f in range(a_k, b_k + 1):
                 frame = rd.read(f)
                 if left is not None:
                     i = f - left["splice"]
@@ -415,7 +485,7 @@ def assemble(plan_file, hand_back=12, fmt="video/h264-mp4", crf=12, pix_fmt="yuv
                 if f in seam_frames:
                     thumbs[f] = sj.gray(sj.thumb(frame))
                 if progress:
-                    progress(f + 1, N)
+                    progress(f - f_lo + 1, n_out)
             if rd.resized:
                 resized.add(c["id"])
         enc.close()
@@ -432,9 +502,11 @@ def assemble(plan_file, hand_back=12, fmt="video/h264-mp4", crf=12, pix_fmt="yuv
     for cid in sorted(resized):
         flags.append({"chunk": cid, "code": "resized", "text": f"chunk {cid}: take frames resized to {w}x{h}"})
 
-    # the original audio, whole
+    # the original audio, whole (or the window's stretch of it)
     try:
-        if info["has_audio"]:
+        if info["has_audio"] and window is not None:
+            audio_mode = _mux_audio_window(video_only, source, final, spec, f_lo / fr, n_out / fr)
+        elif info["has_audio"]:
             audio_mode = _mux_audio(video_only, source, final, spec)
         else:
             os.replace(video_only, final)
@@ -448,10 +520,13 @@ def assemble(plan_file, hand_back=12, fmt="video/h264-mp4", crf=12, pix_fmt="yuv
 
     # 1:1 and audio checks
     out_info = tl.probe(final, fr)
-    checks = {"frames": out_info["frames"], "source_frames": N, "frames_ok": out_info["frames"] == N == enc.frames,
+    checks = {"frames": out_info["frames"], "source_frames": N, "frames_ok": out_info["frames"] == n_out == enc.frames,
               "frame_rate": fr, "audio": audio_mode}
+    if window is not None:
+        checks["window"] = [f_lo, f_hi]
     if info["has_audio"]:
-        a_out, a_src = _audio_seconds(final), _audio_seconds(source)
+        a_out = _audio_seconds(final)
+        a_src = _audio_seconds(source) if window is None else n_out / fr
         checks.update(audio_seconds=round(a_out or 0, 4), source_audio_seconds=round(a_src or 0, 4),
                       audio_ok=a_out is not None and a_src is not None and abs(a_out - a_src) <= 1.0 / fr)
     else:
@@ -464,6 +539,8 @@ def assemble(plan_file, hand_back=12, fmt="video/h264-mp4", crf=12, pix_fmt="yuv
     # measurements
     rows = []
     for k, j in enumerate(joins):
+        if not f_lo < j["splice"] <= f_hi:
+            continue
         a, b = eff[k][0], eff[k + 1][0]
         row = {key: j[key] for key in ("split", "frame", "type", "splice", "repair", "override", "hand_back", "fade",
                                        "linked", "stale", "left_chunk", "right_chunk", "left_take", "right_take",
@@ -473,8 +550,8 @@ def assemble(plan_file, hand_back=12, fmt="video/h264-mp4", crf=12, pix_fmt="yuv
         if j.get("ratios") is not None:
             row["fade_ratio_last"] = [round(float(x), 5) for x in j["ratios"][-1]]
         if measure:
-            lo_t = int(a["render"][0]) if a else starts[k]
-            hi_t = int(b["render"][1]) if b else ends[k + 1]
+            lo_t = max(int(a["render"][0]) if a else starts[k], f_lo)
+            hi_t = min(int(b["render"][1]) if b else ends[k + 1], f_hi)
             r_start = int(b["render"][0]) if b else j["splice"]
             lo, hi = sj.measure_window(r_start, j["splice"], j["hand_back"])
             row["frame_luma"] = sj.jumps(lum[lo_t:hi_t + 1], lo_t, j["splice"], max(lo, lo_t), min(hi, hi_t + 1))
@@ -484,19 +561,22 @@ def assemble(plan_file, hand_back=12, fmt="video/h264-mp4", crf=12, pix_fmt="yuv
                 lo_c, hi_c = max(lo, lo_t), min(hi, hi_t + 1)
                 masks = _mask_frames(ma, int(a["render"][0]), lo_c, j["splice"] - 1)
                 masks.update(_mask_frames(mb, int(b["render"][0]), j["splice"], hi_c - 1))
-                fr_out = FrameReader(final, fr, 0, (w, h))
+                fr_out = FrameReader(final, fr, f_lo, (w, h))
                 cl = [sj.luma(fr_out.read(f), masks.get(f)) for f in range(lo_c, hi_c)]
                 row["char_luma"] = sj.jumps(cl, lo_c, j["splice"], lo_c, hi_c)
             s = j["splice"]
             if all(f in thumbs for f in range(s - SEAM_SIDE, s + SEAM_SIDE)):
                 row["seam"] = sj.seam_score([thumbs[f] for f in range(s - SEAM_SIDE, s)],
                                             [thumbs[f] for f in range(s, s + SEAM_SIDE)])
-            ratio, step = rp.join_ratio(final, fr, s)
+            ratio, step = rp.join_ratio(final, fr, s - f_lo)
             row["join_ratio"] = None if ratio is None else round(float(ratio), 3)
             row["join_verdict"] = rp.verdict(ratio)
+            follow = _join_follow(job, a, b, s, max(f_lo, s - FOLLOW_SIDE), min(f_hi, s + FOLLOW_SIDE - 1))
+            if follow is not None:
+                row["follow"] = follow
         rows.append(row)
 
-    report = {"file": final, "frames": out_info["frames"], "fps": fr, "size": [w, h], "format": fmt, "crf": int(crf),
+    report = {"file": final, "frames": out_info["frames"], "window": None if window is None else [f_lo, f_hi], "fps": fr, "size": [w, h], "format": fmt, "crf": int(crf),
               "pix_fmt": pix_fmt, "plan_rev": plan.get("rev"), "job": plan.get("job"),
               "takes": {c["id"]: {"take": t and t["id"], "state": st} for c, (t, st) in zip(chunks, eff)},
               "joins": rows, "flags": flags, "checks": checks, "seconds": round(time.time() - t_start, 1),
@@ -504,13 +584,13 @@ def assemble(plan_file, hand_back=12, fmt="video/h264-mp4", crf=12, pix_fmt="yuv
     with open(os.path.join(out_dir, f"{stem}.report.json"), "w", encoding="utf-8") as f:
         json.dump(report, f, indent=1)
 
-    if write_plan:
+    if write_plan and window is None:
         def upd(p):
             cache = p.setdefault("join_cache", {})
             for r in rows:
                 key = f"{r['split']}|{r['left_take']}|{r['right_take']}|{r['override'] or r['repair']}|{r['hand_back']}"
                 cache[key] = {kk: r.get(kk) for kk in ("type", "splice", "frame_luma", "char_luma", "seam", "join_ratio",
-                                                        "join_verdict", "lock_options") if r.get(kk) is not None}
+                                                        "join_verdict", "follow", "lock_options") if r.get(kk) is not None}
             p.setdefault("assembled", []).append({
                 "file": os.path.relpath(final, job).replace("\\", "/"), "frames": report["frames"],
                 "takes": {cid: v["take"] for cid, v in report["takes"].items()}, "created": report["created"],
