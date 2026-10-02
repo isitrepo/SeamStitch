@@ -25,6 +25,19 @@ level-matched to the left one (gain = mean left / mean right, per frame and chan
 crossfaded in with equal-power weights (sin^2). After the overlap the last match gain decays
 to 1 over `frames` frames.
 
+Two refinements from B1b's renders (Kay, 2026-10-03), on by default:
+  * CUT-AWARE: the lock's fits never cross a cut. The right take's opening (fit and hand-back)
+    ends before the first cut after the splice: a confirmed source cut, or the take's own luma
+    step >= CUT_STEP (H3 often renders a cut a frame or more late). The left take's heading is
+    fitted only on its frames after its last cut. (412 in B1b: a cut one frame after the split,
+    rendered at 414, dragged the fit and the lock landed 5.9 off.)
+  * REGIONAL: with both takes' SAM3 person masks, the character and the background each get
+    their own lock, blended through a feathered mask. A single gain trades one region's step
+    for the other's when only one of them differs (609 in B1b: the characters matched, the
+    background sat 2.7 under, and the frame-level gain stepped the character +3 to +4). On a
+    uniform offset the two gains agree and it equals the global lock. This is obvpm's "local"
+    option in its simplest, two-region form.
+
 obvpm's lock extras, all OFF by default (T-JOIN measures them):
   gate   leave the join alone unless its step beats max(0.6, 3 x the left tail's local noise)
   clamp  clip gains to [1/1.06, 1.06] (MAX_GAIN)
@@ -46,6 +59,8 @@ SWING_OVER_NOISE, SWING_FLOOR = 3.0, 1.5
 MAX_GAIN = 1.06
 
 LUMA_BT709 = np.array([0.2126, 0.7152, 0.0722])
+CUT_STEP = 6.0      # a frame-to-frame mean-luma step this big inside a take's opening is a cut
+FEATHER = 0.01      # the regional lock's mask feather: Gaussian sigma as a fraction of the width
 
 
 # ---------------------------------------------------------------------------
@@ -62,7 +77,10 @@ def means(frames):
 
 
 def line_fit(y):
-    """Least-squares line through y[0..n-1] per channel; (intercept at 0, slope)."""
+    """Least-squares line through y[0..n-1] per channel; (intercept at 0, slope). One point: flat."""
+    y = np.asarray(y, np.float64)
+    if len(y) == 1:
+        return y[0], np.zeros_like(y[0])
     t = np.arange(len(y))
     A = np.vstack([np.ones_like(t), t]).T
     coef, *_ = np.linalg.lstsq(A, y, rcond=None)
@@ -108,6 +126,94 @@ def lock_gains(left_means, right_means, frames=HAND_BACK, gate=False, clamp=Fals
     if clamp:
         g = np.clip(g, 1.0 / MAX_GAIN, MAX_GAIN)
     return g
+
+
+def _luma_steps(m):
+    lum = np.asarray(m, np.float64).reshape(-1, 3) @ LUMA_BT709
+    return np.abs(np.diff(lum))
+
+
+def opening_frames(right_means, splice, frames, cuts=()):
+    """How many of the right take's opening frames (from the splice) the lock may fit and hand
+    back over: up to `frames`, ending before the first confirmed cut after the splice or the
+    take's own first luma step >= CUT_STEP. 0 when the splice itself is a cut."""
+    n = min(int(frames), len(right_means))
+    for c in cuts:
+        if splice <= c < splice + n:
+            n = c - splice
+    steps = _luma_steps(right_means[:n])
+    hit = np.nonzero(steps >= CUT_STEP)[0]
+    if len(hit):
+        n = int(hit[0]) + 1
+    return n
+
+
+def heading_frames(left_means, splice, cuts=()):
+    """How many of the left take's last frames (up to FIT, ending at the splice) the heading is
+    fitted on: only those after its last cut (confirmed, or its own luma step >= CUT_STEP)."""
+    n = min(FIT, len(left_means))
+    for c in cuts:
+        if splice - n < c <= splice - 1:
+            n = splice - c
+    steps = _luma_steps(np.asarray(left_means)[-n:])
+    hit = np.nonzero(steps >= CUT_STEP)[0]
+    if len(hit):
+        n = n - (int(hit[-1]) + 1)
+    return max(1, n)
+
+
+def region_means(frames, masks):
+    """(character means, background means), each (n, 3), under bool masks (resized to the
+    frames as needed). NaN rows where a region is empty."""
+    ch, bg = [], []
+    for f, m in zip(frames, masks):
+        if m.shape != f.shape[:2]:
+            m = cv2.resize(m.astype(np.uint8), (f.shape[1], f.shape[0]), interpolation=cv2.INTER_NEAREST) > 0
+        px = f.reshape(-1, 3)
+        mm = m.reshape(-1)
+        ch.append(px[mm].mean(0) if mm.any() else np.full(3, np.nan))
+        bg.append(px[~mm].mean(0) if (~mm).any() else np.full(3, np.nan))
+    return np.array(ch, np.float64).reshape(-1, 3), np.array(bg, np.float64).reshape(-1, 3)
+
+
+def soft_mask(mask, size, feather=FEATHER):
+    """A bool mask as float32 weights at size (w, h), feathered (Gaussian, sigma feather x w)."""
+    w, h = size
+    m = cv2.resize(mask.astype(np.float32), (w, h), interpolation=cv2.INTER_LINEAR)
+    sig = max(1.0, feather * w)
+    return np.clip(cv2.GaussianBlur(m, (0, 0), sig), 0.0, 1.0)
+
+
+def solve_field_gains(frame, mask, weight, target_char, target_bg):
+    """The two gains (character, background; per channel) that put each region's mean exactly on
+    its target once blended through the feathered weight: per channel, for region R,
+    sum_R f (w gc + (1 - w) gb) = target_R |R|, a 2x2 system. Falls back to the plain ratios
+    when it is singular."""
+    m = mask if mask.shape == frame.shape[:2] else cv2.resize(mask.astype(np.uint8), (frame.shape[1], frame.shape[0]),
+                                                              interpolation=cv2.INTER_NEAREST) > 0
+    f = frame.reshape(-1, 3).astype(np.float64)
+    wv = weight.reshape(-1, 1).astype(np.float64)
+    mm = m.reshape(-1)
+    gc, gb = np.ones(3), np.ones(3)
+    for ch in range(3):
+        fc = f[:, ch]
+        a1, b1 = (fc[mm] * wv[mm, 0]).sum(), (fc[mm] * (1 - wv[mm, 0])).sum()
+        a2, b2 = (fc[~mm] * wv[~mm, 0]).sum(), (fc[~mm] * (1 - wv[~mm, 0])).sum()
+        t1, t2 = target_char[ch] * mm.sum(), target_bg[ch] * (~mm).sum()
+        det = a1 * b2 - a2 * b1
+        if abs(det) > 1e-9 * max(1.0, abs(a1 * b2)):
+            gc[ch], gb[ch] = (t1 * b2 - t2 * b1) / det, (a1 * t2 - a2 * t1) / det
+        else:
+            gc[ch] = t1 / max(fc[mm].sum(), 1e-6)
+            gb[ch] = t2 / max(fc[~mm].sum(), 1e-6)
+    return gc, gb
+
+
+def apply_gain_field(frame, g_char, g_bg, weight):
+    """apply_gain with a per-pixel gain: weight x the character's + (1 - weight) x the background's."""
+    wgt = weight[..., None]
+    g = wgt * np.asarray(g_char, np.float32) + (1.0 - wgt) * np.asarray(g_bg, np.float32)
+    return np.clip(frame.astype(np.float32) * g, 0, 255).astype(np.uint8)
 
 
 def apply_gain(frame, g):
