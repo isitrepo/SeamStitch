@@ -67,6 +67,19 @@ from videohelpersuite.nodes import (
 from .audio_splice import splice_audio, match_format, frame_sample
 
 
+def pack_video_formats():
+    """VHS's video formats, without the ones other packs add to its VHS_video_formats folder.
+
+    Such a format is listed under its file name, `.json` included (VHS strips `.json` only
+    from its own). ComfyUI-tbox adds h264-mp4.json, h265-mp4.json, nvenc_h264-mp4.json,
+    nvenc_h265-mp4.json and webm.json, so each of those showed twice. tbox's h264-mp4.json has
+    no BT.709 conversion or tags: a save with it came out untagged, and the pack's decoder
+    read it ~1.6 levels brighter than ffmpeg. VHS's own video/h264-mp4 is BT.709-tagged."""
+    formats, widgets = get_video_formats()
+    return ([f for f in formats if not f.endswith(".json")],
+            {k: v for k, v in widgets.items() if not k.endswith(".json")})
+
+
 # ---------------------------------------------------------------------------
 # Dedup: strip held/duplicate frames from the regenerated segment's own
 # leading/trailing edge (e.g. a keyframe-anchored generation holding its first
@@ -453,7 +466,7 @@ class SeamStitchRecombine:
 
     @classmethod
     def INPUT_TYPES(s):
-        ffmpeg_formats, format_widgets = get_video_formats()
+        ffmpeg_formats, format_widgets = pack_video_formats()
         return {
             "required": {
                 "regenerated_images": ("IMAGE",),
