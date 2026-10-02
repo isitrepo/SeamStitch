@@ -55,6 +55,15 @@ try:
 except Exception as e:
     logging.getLogger(__name__).warning(f"[SeamStitch] Timeline / Result Preview not loaded: {e}")
 
+# SeamStitch Swap (long-video chunk replacement): plan file, joins, assembly.
+# Guarded so a problem here never takes the other nodes down.
+try:
+    from .swap_assemble import SeamStitchSwapAssemble
+    NODE_CLASS_MAPPINGS["SeamStitchSwapAssemble"] = SeamStitchSwapAssemble
+    NODE_DISPLAY_NAME_MAPPINGS["SeamStitchSwapAssemble"] = "SeamStitch Swap Assemble"
+except Exception as e:
+    logging.getLogger(__name__).warning(f"[SeamStitch] Swap Assemble not loaded: {e}")
+
 WEB_DIRECTORY = "js"
 
 __all__ = ["NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS", "WEB_DIRECTORY"]
