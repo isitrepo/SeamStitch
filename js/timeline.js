@@ -336,9 +336,11 @@ function buildTimeline(node) {
         const paths = [...new Set(S.entries.filter(e => e.kind === "clip").map(e => e.path))];
         const first = S.entries.find(e => e.kind === "clip");
         let fr = frW && frW.value > 0 ? frW.value : 0;
-        if (!fr && first) {
+        S.nativeFr = 0;
+        if (first) {
             const inf = await probeOne(first.path, 0);
-            fr = inf ? Math.round(inf.native_fps) || 24 : 24;
+            S.nativeFr = inf ? inf.native_fps || 0 : 0;
+            if (!fr) fr = inf ? Math.round(inf.native_fps) || 24 : 24;
         }
         S.fr = fr || 24;
         const token = ++S.loadingProbe;
@@ -394,7 +396,25 @@ function buildTimeline(node) {
     }
 
     // ------------------------------------------------------------ drawing
+    // The frame_rate widget's label says what rate is in use: 0 is "auto" (the first clip's own
+    // rate), and with conform_to_24fps on, the cut plays at H3's 24. Label only - the value
+    // and what gets saved are untouched.
+    function updateRateLabel() {
+        if (!frW) return;
+        const nat = S.nativeFr ? (Math.abs(S.nativeFr - Math.round(S.nativeFr)) < 0.01 ? `${Math.round(S.nativeFr)}` : S.nativeFr.toFixed(3)) : "";
+        let label = "frame_rate";
+        if (!(frW.value > 0)) label += nat ? ` (auto: ${nat} fps` : " (auto";
+        else if (nat && Math.abs(S.nativeFr - frW.value) > 0.01) label += ` (clip is ${nat} fps`;
+        else label += nat ? ` (${nat} fps` : "";
+        if (label !== "frame_rate") {
+            if (conformW && conformW.value && Math.round(S.fr) !== 24) label += " → 24 for H3";
+            label += ")";
+        }
+        if (frW.label !== label) { frW.label = label; app.graph?.setDirtyCanvas(true, true); }
+    }
+
     function refresh() {
+        updateRateLabel();
         drawCanvas();
         drawSelBar();
         drawNextBar();
