@@ -44,3 +44,26 @@ def test_clip_mode_one_anchor_per_side(mg):
 def test_clip_mode_refuses_off_grid_k(mg, k):
     with pytest.raises(ValueError, match="17k\\+5"):
         mg.plan_anchors(k, k, mg.ANCHOR_CLIP)
+
+
+def test_an_empty_side_is_skipped(mg):
+    # the Swap Planner's pins: a side with no rendered neighbour is an empty batch
+    assert mg.plan_anchors(5, 0, mg.ANCHOR_CLIP) == [("start", 0, 5, 0)]
+    assert mg.plan_anchors(0, 5, mg.ANCHOR_CLIP) == [("end", 0, 5, -5)]
+    assert mg.plan_anchors(0, 0, mg.ANCHOR_CLIP) == []
+    assert mg.plan_anchors(0, 0, mg.ANCHOR_PER_FRAME) == []
+    assert mg.plan_anchors(0, 2, mg.ANCHOR_PER_FRAME) == [("end", 0, 1, -2), ("end", 1, 1, -1)]
+
+
+def test_clip_mode_still_refuses_an_off_grid_side_beside_an_empty_one(mg):
+    with pytest.raises(ValueError, match="start_context has 3"):
+        mg.plan_anchors(3, 0, mg.ANCHOR_CLIP)
+    with pytest.raises(ValueError, match="end_context has 4"):
+        mg.plan_anchors(0, 4, mg.ANCHOR_CLIP)
+
+
+def test_apply_with_two_empty_sides_returns_the_conditioning_unchanged(mg):
+    import torch
+    empty = torch.zeros((0, 8, 8, 3))
+    cond = [["c", {}]]
+    assert mg.SeamStitchMiniMaxGuides().apply(cond, None, None, empty, empty, mg.ANCHOR_CLIP) == (cond,)

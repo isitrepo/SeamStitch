@@ -187,6 +187,17 @@ def luma(frame, mask=None):
     return float(g.mean())
 
 
+def iou(a, b):
+    """Intersection over union of two bool masks (r10's pose IoU, one frame); b is resized to a's
+    size when they differ. None when both are empty."""
+    if a.shape != b.shape:
+        b = cv2.resize(b.astype(np.uint8), (a.shape[1], a.shape[0]), interpolation=cv2.INTER_NEAREST) > 0
+    union = np.logical_or(a, b).sum()
+    if not union:
+        return None
+    return float(np.logical_and(a, b).sum() / union)
+
+
 def measure_window(right_render_start, splice, hand_back=HAND_BACK):
     """seam_repair.py's measuring window around a join, in source frames [lo, hi): from 15
     before the right take's first frame to max(30, hand_back + 20) after the splice."""
