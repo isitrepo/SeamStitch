@@ -255,7 +255,21 @@ def apply_op(plan, body):
             raise sp.PlanError("seed_mode is \"new\" or {\"fixed\": N}")
         c["seed_mode"] = m
     elif op == "set_subject":
-        plan["subject"] = body.get("subject") or ""
+        # the subject is shared: an edit replaces the old subject text in every chunk's prompt and draft
+        old, plan["subject"] = (plan.get("subject") or "").strip(), (body.get("subject") or "").strip()
+        n = 0
+        if old and plan["subject"] and old != plan["subject"]:
+            for c in plan.get("chunks", []):
+                for k in ("prompt", "draft"):
+                    if old in (c.get(k) or ""):
+                        c[k] = c[k].replace(old, plan["subject"])
+                        n += 1
+        res["subject_replaced_in"] = n
+    elif op == "adopt_subject_draft":
+        if not (plan.get("subject_draft") or "").strip():
+            raise sp.PlanError("there's no subject draft to adopt")
+        res.update(apply_op(plan, {"op": "set_subject", "subject": plan["subject_draft"]}), op=op)
+        plan["subject_draft"] = None
     elif op == "choose_take":
         take = body.get("take")
         if take:
@@ -1157,7 +1171,9 @@ class SeamStitchSwapPlanner:
         elif action == ACTION_ASSEMBLE:
             out[OUT_ASSEMBLE] = pp
         elif action == ACTION_DRAFT:
-            out[OUT_DRAFT] = pp
+            # a redraft names its chunk(s): Draft Prompts drafts those, whatever its chunks widget says
+            named = [x for x in ([r["chunk"]] if r.get("chunk") else []) + list(r.get("chunks") or []) if x]
+            out[OUT_DRAFT] = json.dumps({"plan": pp, "chunks": named}) if named else pp
         for w_ in plan.get("warnings", []):
             _say(f"[SeamStitch] Swap Planner: warning: {w_['text']}")
         return {"ui": {"seamstitch_swap_plan": [{"job": plan["job"], "rev": plan["rev"], "text": plan_text(plan)}]},
