@@ -51,13 +51,17 @@ OMNI_CLASS = "OmniCaptionerTranscribe"
 DEFAULT_QWEN = "Qwen3-VL-8B-Unredacted-MAX (Captioner)"
 QUANTIZATIONS = ["None (FP16)", "8-bit (Balanced)", "4-bit (VRAM-friendly)"]
 CHUNK_MODES = ["empty only", "all (into the draft field)", "selected"]
-TEMPLATES = ["character replace (Ref2VA)"]
+TEMPLATES = ["character replace (Ref2VA)", "character replace (Ref2VA, per shot)"]
+# per shot: each shot described from its own frames (B4 workshop: the one-call form copied across shots and
+# chunks, or looped; per shot followed the foam, card, booklet and stickies of 400-608 shot by shot)
+DEFAULT_TEMPLATE = TEMPLATES[1]
+DEFAULT_FRAMES = 24             # spread over the shots (B4 workshop: 24 named the foam sheet and the booklet, 16 didn't)
 WHISPER_REPO = "mobiuslabsgmbh/faster-whisper-large-v3-turbo"
 SECTIONS = ("subject_definitions", "summary", "retention_analysis", "detailed_description",
             "overall_soundscape", "non_diegetic_music")
-# Qwen sampling: the QwenVL node's temperature / top_p, but a light repetition penalty: AILab_QwenVL's
-# process() fixes 1.2, which penalises the repeated labels a structured answer needs.
-QWEN_SAMPLING = {"temperature": 0.6, "top_p": 0.9, "num_beams": 1, "repetition_penalty": 1.05, "seed": 1}
+# Qwen sampling: the QwenVL node's temperature / top_p; repetition penalty 1.15 (its process() fixes 1.2). At 1.05
+# Qwen looped one sentence to the token limit (B4 workshop A1); the speech labels are the node's, not Qwen's.
+QWEN_SAMPLING = {"temperature": 0.6, "top_p": 0.9, "num_beams": 1, "repetition_penalty": 1.15, "seed": 1}
 QWEN_FRAME_MAX_SIDE = 1024     # pre-shrink only; QwenVL's own auto budget (16 frames, 8k ctx) takes them to ~530
 LANGS = {"en": "English", "de": "German", "fr": "French", "es": "Spanish", "it": "Italian", "pt": "Portuguese",
          "nl": "Dutch", "ja": "Japanese", "zh": "Chinese", "ko": "Korean", "ru": "Russian"}
@@ -108,9 +112,11 @@ def locate_qwen():
     d = _scan_custom_nodes(os.path.join("py", "AILab_QwenVL.py"), ("ComfyUI-QwenVL",))
     if d is None:
         return None
-    for p in (os.path.join(d, "py"), d):
-        if p not in sys.path:
-            sys.path.insert(0, p)
+    # py/ must come first: the pack's root can hold stale copies of its py/ modules (its __init__ does the same)
+    for p in (d, os.path.join(d, "py")):
+        if p in sys.path:
+            sys.path.remove(p)
+        sys.path.insert(0, p)
     try:
         return getattr(importlib.import_module("AILab_QwenVL"), QWEN_CLASS)
     except Exception as e:
@@ -271,11 +277,13 @@ def parse_omni(text):
     Tolerates the label-less form (the quoted words then)."""
     t = " ".join((text or "").split())
     m = re.search(r"transcript\s*:\s*(.*?)\s*(?:audio[_ ]events\s*:\s*(.*))?$", t, re.I)
+    structured = bool(m)
     if m:
         tr, ev = m.group(1).strip(), (m.group(2) or "").strip()
     else:
+        # free prose (Omni ignores the structured prompt now and then): only its quoted words, no events
         quotes = re.findall(r'["“]([^"”]+)["”]', t)
-        tr, ev = " ".join(quotes), t
+        tr, ev = " ".join(quotes), ""
     lang, notes = None, []
     for b in _BRACKET.findall(tr):
         if lang is None and b.strip().istitle() and len(b.split()) == 1:
@@ -284,7 +292,8 @@ def parse_omni(text):
             notes.append(b.strip())
     words = " ".join(_BRACKET.sub(" ", tr).replace('"', " ").replace("“", " ").replace("”", " ").split())
     speech = bool(words) and words.strip(" .").lower() not in ("none", "no speech", "n/a")
-    return {"language": lang, "words": words if speech else "", "notes": notes, "events": ev, "speech": speech}
+    return {"language": lang, "words": words if speech else "", "notes": notes, "events": ev, "speech": speech,
+            "structured": structured}
 
 
 def _norm_tok(w):
@@ -382,43 +391,53 @@ pronoun: she, he or they.
 
 Rules: describe only the character's own body, clothes and what is worn on the body. Never name an object held in the hands or lying near the character: no props. Concrete visual detail only (colour, material, shape, pattern), no mood, personality or story."""
 
-OBJECTS_INSTRUCTION = """These are {n} frames sampled evenly from one video clip. Write exactly two labelled lines and nothing else:
+OBJECTS_INSTRUCTION = """These are {n} frames sampled in order from one video clip. Write exactly two labelled lines and nothing else:
 
 person: yes if a person is visible in any frame, otherwise no.
-objects: a comma-separated list of every distinct object you can see in these frames (furniture, boxes, packaging, papers, devices, tools, anything held or handled), each as a short plain noun phrase with its colour (for example "open cardboard box, white foam tray, small black handheld light"). Include only what is clearly visible. Do not list the person, their clothes or body parts, the walls, floor or light."""
+objects: a comma-separated list of the distinct objects you can see (furniture, boxes, packaging, papers, devices, tools, anything held or handled), each ONCE, as a short plain noun phrase with its colour. Include only what is clearly visible. Do not list the person, their clothes or body parts, the walls, the floor or the light."""
 
-DRAFT_INSTRUCTION = """You are writing part of a prompt for a video-edit model. The video frames are {n} frames sampled evenly from one chunk of a source video: {N} frames, {secs:.2f} seconds at {fps} fps. The frames shown are chunk frames {frame_list}.
+# One call per chunk (the design's form): the shots listed with the pictures that show them and the words
+# spoken in them. B4's first run handed Qwen the previous chunk's shot blocks and a worked example: it
+# copied both, word for word, into every chunk. Neither is given now.
+DRAFT_INSTRUCTION = """You are writing part of a prompt for a video-edit model. You are shown {n} pictures, frames sampled in order from one clip of a source video ({secs:.1f} seconds). In the edit, the person in the clip is replaced by a character, called "{subj}" below, who does exactly what the person does.
 
-In the edit, the person in the video is replaced by a character ({pron_subj}). Everything the person does is kept exactly: every movement, lean, reach, hand position, head turn, mouth movement and its timing, and the camera framing.
-
-The chunk has {k} shot{k_s}, split at the source's cuts:
+The clip has {k} shot{k_s}. Shot by shot, the pictures that show it and the words spoken in it:
 {shot_lines}
+{objects_line}{prev_line}
+Write exactly three labelled parts and nothing else.
 
-{dialogue_block}
-{prev_block}
-Write exactly three labelled parts and nothing else:
+video_1: ONE sentence about the source clip as a whole: where the person is, the setting and background, the light, what the person is doing overall, and the camera's angle and framing. Don't describe the person's face, hair or clothes.
 
-video_1: ONE sentence describing this chunk of the source video: where the person is, the setting and background, the light, what the person is doing overall, and the camera (angle, framing, whether it moves, where the head sits in the frame). For example: "a person sitting on a dark floor behind a large open cardboard box, against a plain pale grey wall in hard side light, unpacking the box and talking to the camera, filmed from a fixed high angle with the head near the top edge of the frame." Do not describe the person's face, hair or clothes.
+shots: {k} block{k_s}, one per shot, in order, each on its own line starting with "[Shot n]". For each shot describe only what its own pictures show: how {subj} sits or stands and leans, where {subj} looks, what each hand does, which object {subj} picks up, holds, shows or puts down, and how that changes through the shot. Shots differ: never repeat a sentence from one shot in another. {dialogue_rule}Present tense, 1 to 4 sentences per shot.
 
-shots: exactly {k} block{k_s}, one per shot, each on its own line starting with "[Shot n]".{jump_rule} In each block describe, in order, what {pron_subj} does in that shot, as {pron_subj} replaces the person: body position and lean, where {pron_subj} looks, what each hand does, what {pron_subj} picks up, holds, turns or puts down, and how {pron_poss} head is framed (for example partly above the top edge of the frame). {dialogue_rule}Present tense, concrete, 1 to 5 sentences per shot.
-
-sounds: ONE sentence: the sounds heard through the chunk, in the order they happen{sounds_hint}.
+sounds: ONE sentence: the sounds through the clip, in order{sounds_hint}.
 
 Rules:
-- Describe only what these frames show. Name an object only in a shot where it is visible, and describe it by what it looks like (colour, shape, size). Don't guess brand names or what it is for unless printed text is clearly readable.
-- Never carry objects or actions over from the previous chunk unless you see them in these frames.
-- {pron_Subj} never moves to the centre of the frame and never poses for the camera: {pron_subj} stays exactly where the person is.
-- {pron_Poss} hands hold only what the person's hands hold. Never add an object the person doesn't hold.
-- Don't describe {pron_poss} appearance, costume or face: only {pron_poss} actions.
-- Don't write frame numbers, timestamps, the words "frame", "picture" or "person", or anything about the replacement itself.{extra}"""
+- Describe only what the pictures show. Name an object only in a shot whose pictures show it, by what it looks like (colour, shape, size). Never quote printed text, logos or brand names.
+- {Subj} never moves to the centre of the frame and never poses for the camera.
+- {Poss} hands hold only what the person's hands hold.
+- Don't describe {poss} appearance or costume, and don't mention pictures, frames, times, "the person" or the replacement.{extra}"""
+
+# One call per shot (template "per shot"): each shot described from its own frames only, then one call
+# over the whole chunk for video_1 and sounds.
+SHOT_INSTRUCTION = """You are shown {n} pictures, frames sampled in order from one continuous shot ({secs:.1f} seconds) of a video. In the edit, the person in it is replaced by a character, called "{subj}" below, who does exactly what the person does.
+{objects_line}{lines_block}
+Write 1 to 5 sentences, present tense, describing only what these pictures show {subj} doing, in the order it happens from the first picture to the last (the last pictures matter as much as the first): how {subj} sits or stands and leans, where {subj} looks, what each hand does, which object {subj} picks up, holds up, shows or puts down, and where {subj} holds it (for example close to the face). {dialogue_rule}
+
+Rules: name an object only if these pictures show it, by what it looks like (colour, shape, size); never quote printed text, logos or brand names; {subj} never moves to the centre of the frame and never poses for the camera; {poss} hands hold only what the person's hands hold; don't describe {poss} appearance or costume; don't mention pictures, frames, times, "the person" or the replacement.{extra} Output only the sentences."""
+
+CHUNK_INSTRUCTION = """You are shown {n} pictures, frames sampled in order from one clip of a source video ({secs:.1f} seconds). Write exactly two labelled lines and nothing else:
+
+video_1: ONE sentence about the clip as a whole: where the person is, the setting and background, the light, what the person is doing overall, and the camera's angle and framing. Don't describe the person's face, hair or clothes.
+sounds: ONE sentence: the sounds through the clip, in order{sounds_hint}."""
 
 
 PRONOUNS = {"she": {"subj": "she", "Subj": "She", "poss": "her", "Poss": "Her", "does": "does", "moves": "moves",
-                    "poses": "poses", "stays": "stays"},
+                    "poses": "poses", "stays": "stays", "handles": "handles"},
             "he": {"subj": "he", "Subj": "He", "poss": "his", "Poss": "His", "does": "does", "moves": "moves",
-                   "poses": "poses", "stays": "stays"},
+                   "poses": "poses", "stays": "stays", "handles": "handles"},
             "they": {"subj": "they", "Subj": "They", "poss": "their", "Poss": "Their", "does": "do", "moves": "move",
-                     "poses": "pose", "stays": "stay"}}
+                     "poses": "pose", "stays": "stay", "handles": "handle"}}
 
 
 def pronoun_of(plan_or_subject):
@@ -447,46 +466,109 @@ def fmt_frames(a, b, fps):
     return f"frames {a}-{b} ({a / fps:.2f}-{(b + 1) / fps:.2f} s)"
 
 
-def draft_instruction(*, n_frames, fps, sample_idx, shots_rel, lines, language, prev_shots, events, pronoun,
-                      extra=""):
+def neutral_events(events):
+    """Omni's audio events without the voice's gender (it hears the source person; the subject may differ)."""
+    t = re.sub(r"\b(?:an?\s+)?(?:[a-z]+\s+)?(?:male|female|man's|woman's|masculine|feminine)\s+voice", "a voice",
+               events or "", flags=re.I)
+    return re.sub(r"\b(?:a|the)\s+(?:man|woman)\s+(speaks|says|talks)", r"a voice \1", t, flags=re.I)
+
+
+def _sounds_hint(events, lines):
+    if events:
+        return f", taken only from this description of the audio: {neutral_events(events)}"
+    return " (room tone, the sounds of objects being handled" + (", and the speech" if lines else "") + ")"
+
+
+def _line_where(ln, fps, origin=0):
+    if "frames" not in ln:
+        return f'"{ln["text"]}"'
+    a, b = ln["frames"][0] - origin, ln["frames"][1] - origin
+    return f'"{ln["text"]}" ({a / fps:.1f}-{(b + 1) / fps:.1f} s)'
+
+
+def lines_in_shot(lines, shot_rel, k_shots, i):
+    """The lines whose start falls in shot i (untimed lines: all in shot 1, Qwen places them)."""
+    a, b = shot_rel
+    out = []
+    for ln in lines:
+        if "frames" not in ln:
+            if i == 0:
+                out.append(ln)
+        elif a <= ln["frames"][0] <= b or (i == k_shots - 1 and ln["frames"][0] > b):
+            out.append(ln)
+    return out
+
+
+def _dialogue_rule(any_lines, per="that shot's"):
+    if not any_lines:
+        return ""
+    return (f'Put each of {per} spoken lines at the action it goes with, written as SAYS "exact words" (copy the '
+            f'words and punctuation exactly; every line once). ')
+
+
+def _extra(extra):
+    return ("\n- " + extra.strip()) if (extra or "").strip() else ""
+
+
+def draft_instruction(*, n_frames, fps, sample_idx, shots_rel, lines, language, prev_names, events, pronoun,
+                      objects=(), extra=""):
+    """The one-call instruction: each shot with its pictures (1-based, of the ones shown) and its lines."""
     pr = PRONOUNS[pronoun]
     k = len(shots_rel)
-    shot_lines = "\n".join(f" Shot {i + 1}: {fmt_frames(a, b, fps)}" for i, (a, b) in enumerate(shots_rel))
-    if lines:
-        def where(ln):
-            if "frames" not in ln:
-                return ""
-            a = ln["frames"][0]
-            s = next((i for i, (x, y) in enumerate(shots_rel) if x <= a <= y), k - 1)
-            return f"{fmt_frames(*ln['frames'], fps)}, shot {s + 1}: "
-        dl = "\n".join(f' - {where(ln)}"{ln["text"]}"' for ln in lines)
-        timed = all("frames" in ln for ln in lines)
-        dialogue_block = (f"The person speaks these lines ({language}), in this order"
-                          + (", at these times" if timed else " (no timings: place each at the action it fits)")
-                          + f":\n{dl}\n")
-        dialogue_rule = ('Place each spoken line in the shot where it is spoken, at the action it goes with, written '
-                         'as SAYS "exact words" (copy the words and punctuation exactly as given, and use every line '
-                         'once). ')
-    else:
-        dialogue_block = "No one speaks in this chunk.\n"
-        dialogue_rule = ""
-    if prev_shots:
-        prev_block = ("The previous chunk's shot blocks (only so names stay consistent; never copy its objects or "
-                      "actions unless you see them in these frames):\n" + "\n".join(prev_shots) + "\n")
-    else:
-        prev_block = ""
-    if events:
-        sounds_hint = f", taken only from this description of the audio: {events}"
-    else:
-        sounds_hint = " (room tone, the sounds of objects being handled" + (", and the speech" if lines else "") + ")"
+    rows = []
+    for i, (a, b) in enumerate(shots_rel):
+        pics = [j + 1 for j, f in enumerate(sample_idx) if a <= f <= b]
+        pic = (f"pictures {pics[0]}-{pics[-1]}" if len(pics) > 1 else f"picture {pics[0]}") if pics else \
+            "no picture (a brief moment between pictures)"
+        said = lines_in_shot(lines, (a, b), k, i)
+        sp_ = ("spoken: " + ", ".join(_line_where(ln, fps) for ln in said)) if said else "nothing spoken"
+        rows.append(f"Shot {i + 1} ({pic}, {a / fps:.1f}-{(b + 1) / fps:.1f} s): {sp_}.")
+    if lines and not all("frames" in ln for ln in lines):
+        rows.append("(The spoken lines have no times: place each where it fits the action.)")
+    objs = ", ".join(objects)
     return DRAFT_INSTRUCTION.format(
-        n=len(sample_idx), N=n_frames, secs=n_frames / float(fps), fps=fps,
-        frame_list=", ".join(str(i) for i in sample_idx), pron_subj=pr["subj"], pron_Subj=pr["Subj"],
-        pron_poss=pr["poss"], pron_Poss=pr["Poss"], k=k, k_s="" if k == 1 else "s", shot_lines=shot_lines,
-        dialogue_block=dialogue_block, prev_block=prev_block,
-        jump_rule=' Every block after the first starts with "Jump cut."' if k > 1 else "",
-        dialogue_rule=dialogue_rule, sounds_hint=sounds_hint,
-        extra=("\n- " + extra.strip()) if (extra or "").strip() else "")
+        n=len(sample_idx), secs=n_frames / float(fps), subj=pr["subj"], Subj=pr["Subj"], poss=pr["poss"],
+        Poss=pr["Poss"], k=k, k_s="" if k == 1 else "s", shot_lines="\n".join(rows),
+        objects_line=f"Objects seen in the pictures: {objs}.\n" if objs else "",
+        prev_line=(f"Names used for objects in the previous clip (reuse a name only for the same object, and only "
+                   f"if you see it): {', '.join(prev_names)}.\n") if prev_names else "",
+        dialogue_rule=_dialogue_rule(bool(lines)), sounds_hint=_sounds_hint(events, lines), extra=_extra(extra))
+
+
+def shot_instruction(*, n, secs, lines_rel, fps, pronoun, objects=(), extra=""):
+    pr = PRONOUNS[pronoun]
+    objs = ", ".join(objects)
+    if lines_rel:
+        lb = "Words spoken in this shot, in order (times from the shot's start): " + ", ".join(
+            _line_where(ln, fps) for ln in lines_rel) + ".\n"
+    else:
+        lb = "Nothing is spoken in this shot.\n"
+    return SHOT_INSTRUCTION.format(n=n, secs=secs, subj=pr["subj"], poss=pr["poss"],
+                                   objects_line=f"Objects seen in this part of the video: {objs}.\n" if objs else "",
+                                   lines_block=lb, dialogue_rule=_dialogue_rule(bool(lines_rel), "the"),
+                                   extra=_extra(extra).replace("\n- ", " "))
+
+
+def shot_frames(shots_rel, n_frames, total=16, floor=4):
+    """Per-shot sample indices (chunk-relative) for the per-shot template: each shot gets frames in
+    proportion to its length, at least `floor` (or all its frames when shorter)."""
+    out = []
+    for a, b in shots_rel:
+        n = b - a + 1
+        k = min(n, max(floor, int(round(total * n / float(n_frames)))))
+        out.append([a + i for i in sample_indices(n, k)])
+    return out
+
+
+def tidy_shots(blocks):
+    """[Shot 1] never opens on a jump cut; later shots (each after a source cut) always do."""
+    out = []
+    for i, b in enumerate(blocks):
+        m = re.match(r"(\[Shot\s*\d+\])\s*(.*)", b, re.S)
+        head, body = (m.group(1), m.group(2)) if m else (f"[Shot {i + 1}]", b)
+        body = re.sub(r"^(?:Jump cut\.\s*)+", "", body.strip(), flags=re.I)
+        out.append(f"{head} " + ("Jump cut. " if i else "") + body)
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -526,8 +608,12 @@ def subject_sentence(name, appearance):
 def parse_objects(text):
     d = _labelled(text)
     person = (d.get("person") or "").strip().lower()
-    objs = [o.strip(" .") for o in re.split(r"[,;\n]", d.get("objects") or "") if o.strip(" .")]
-    return {"person": None if not person else person.startswith("y"), "objects": objs}
+    objs = []
+    for o in re.split(r"[,;\n]", d.get("objects") or ""):
+        o = o.strip(" .")
+        if o and o.lower() not in (x.lower() for x in objs):     # a light repetition penalty lets it loop
+            objs.append(o)
+    return {"person": None if not person else person.startswith("y"), "objects": objs[:40]}
 
 
 def _says_repl(language):
@@ -547,11 +633,73 @@ def convert_says(text, language="English"):
     return _SAYS.sub(_says_repl(language), text)
 
 
+# any quoted span, with the speech verb Qwen put before it ("saying", "stating", "remarks", ...)
+_QUOTED = re.compile(r"(?:,?\s*(?:and\s+)?(?:(?:she|he|they)\s+)?(?:says|saying|said|states|stating|remarks|remarking|"
+                     r"adds|adding|exclaims|exclaiming|asks|asking|announces|announcing|notes|noting|continues|"
+                     r"replies|finally remarks|then)\s*,?\s*)?[\"“]([^\"”]+)[\"”]", re.I)
+_DTAG = re.compile(r"\s*<Subject 1> \(S1\) says <d>\[[^\]]*\](.*?)</d>")
+
+
+def _match_line(words, lines, used):
+    """The index of the dialogue line these words are (ratio >= 0.6 on normalised tokens), or None."""
+    a = [_norm_tok(w) for w in words.split() if _norm_tok(w)]
+    best, bi = 0.0, None
+    for i, ln in enumerate(lines):
+        if i in used:
+            continue
+        b = [_norm_tok(w) for w in ln["text"].split() if _norm_tok(w)]
+        r = difflib.SequenceMatcher(None, a, b, autojunk=False).ratio() if a and b else 0.0
+        if r > best:
+            best, bi = r, i
+    return bi if best >= 0.6 else None
+
+
+def place_dialogue(block, lines, language="English"):
+    """One shot block with exactly its own dialogue lines, each once, in the transcription's words: a
+    tag or quote that matches one of them becomes its tag; a tag that matches none (a line Qwen put in
+    the wrong shot) goes; a line Qwen dropped is added at the end. Returns (block, added count)."""
+    used = set()
+
+    def tag(i):
+        used.add(i)
+        return f" <Subject 1> (S1) says <d>[{language}]{lines[i]['text']}</d>"
+
+    def from_tag(m):
+        i = _match_line(m.group(1), lines, used)
+        return tag(i) if i is not None else ""
+
+    def from_quote(m):
+        i = _match_line(m.group(1), lines, used)
+        return tag(i) if i is not None else m.group(0)
+
+    out = _DTAG.sub(from_tag, block)
+    out = _QUOTED.sub(from_quote, out)
+    missing = [i for i in range(len(lines)) if i not in used]
+    if missing:
+        out = out.rstrip() + "".join(tag(i) for i in missing)
+    out = re.sub(r"\s+([.,;])", r"\1", re.sub(r"[ \t]{2,}", " ", out)).strip()
+    return out, len(missing)
+
+
+def dedupe_sentences(text, cap=8):
+    """A shot block without repeated sentences: at most `cap` of them (a loop's tail cut off), plus any later
+    one that carries speech."""
+    out, seen = [], set()
+    for snt in re.split(r"(?<=[.!?])\s+(?=[A-Z<])", (text or "").strip()):
+        key = re.sub(r"[^a-z]", "", snt.lower())
+        if key and key not in seen:
+            seen.add(key)
+            if len(out) < cap or re.search(r'["“]|<d>', snt):
+                out.append(snt)
+    return " ".join(out)
+
+
 def parse_qwen(text, n_shots, language="English"):
     """Qwen's draft -> {video_1, shots [str], sounds, warnings}."""
     d = _labelled(text)
     warns = []
-    v1 = " ".join((d.get("video_1") or "").split()).strip().strip('"')
+    v1 = re.split(r"\[Shot\s*\d+\]", d.get("video_1") or "")[0]     # shots run on without their label
+    v1 = " ".join(v1.split()).strip().strip('"')
     if not v1:
         warns.append("Qwen gave no video_1 line")
     sounds = " ".join((d.get("sounds") or "").split()).strip().strip('"')
@@ -562,6 +710,7 @@ def parse_qwen(text, n_shots, language="English"):
         # no label: take whatever [Shot n] blocks the answer has
         m = re.search(r"\[Shot\s*\d+\]", text or "")
         body = (text or "")[m.start():] if m else ""
+        body = re.split(r"(?i)(?:^|\s)[*#]*sounds[*]*\s*:", body)[0]      # the sounds part after the shots
     parts = [p.strip() for p in re.split(r"(?=\[Shot\s*\d+\])", body) if p.strip()]
     blocks = []
     for p in parts:
@@ -574,7 +723,7 @@ def parse_qwen(text, n_shots, language="English"):
         warns.append("Qwen gave no [Shot n] blocks")
     elif len(blocks) != n_shots:
         warns.append(f"Qwen gave {len(blocks)} shot block(s) for {n_shots} shot(s)")
-    blocks = [f"[Shot {i + 1}] " + convert_says(b, language) for i, b in enumerate(blocks)]
+    blocks = [f"[Shot {i + 1}] " + convert_says(dedupe_sentences(b), language) for i, b in enumerate(blocks)]
     return {"video_1": v1.rstrip(".") + "." if v1 else "", "shots": blocks, "sounds": sounds, "warnings": warns}
 
 
@@ -597,7 +746,7 @@ def fill_ref2va(*, subject, video_1, shots, sounds, n_shots, dialogue, audio, pr
     summary = (f"{tag} The target video is an edited version of <Video 1> in which the person is replaced by "
                f"<Subject 1>, the {name} styled from <Picture 1>. Everything else in <Video 1> is kept exactly: every "
                f"movement, lean, reach, hand position, head turn, mouth movement and expression timing, {cp}the camera "
-               f"framing, the background, the lighting and shadows, and every object {pr['subj']} handles. The edit "
+               f"framing, the background, the lighting and shadows, and every object {pr['subj']} {pr['handles']}. The edit "
                f"runs continuously from the first frame to the last without deviation.")
     ret = [f"<Subject 1> (appears throughout): partially_preserved - {pr['poss']} face, hair, costume and accessories "
            f"from <Picture 1> are retained; {pr['poss']} body position, lean, pose, arm and hand actions, head "
@@ -689,6 +838,11 @@ def _sing(w):
     return w
 
 
+_AFTER = {"steady", "still", "upright", "open", "closed", "level", "flat", "tight", "up", "aside", "away", "forward",
+          "remains", "rests", "stays", "moves", "turns", "holds", "lifts", "reaches", "lowers", "raises", "shows",
+          "held", "without", "free", "aloft", "toward", "inside", "back"}
+
+
 def named_nouns(text):
     """Head nouns of the noun phrases a text names (a determiner, up to 4 words, a stop): a heuristic
     for the prop check, not a parser."""
@@ -701,9 +855,12 @@ def named_nouns(text):
             continue
         phrase = []
         for u in toks[i + 1:i + 6]:
-            if u in ".,;:!?" or u.lower() in _STOPS or u.lower() in _DETS:
+            lu = u.lower()
+            if u in ".,;:!?" or lu in _STOPS or lu in _DETS or lu.endswith("ly") or lu in _AFTER:
                 break
             phrase.append(u)
+            if _sing(u) in _NOT_PROPS:          # "her left hand remains": the phrase ends at the body word
+                break
         if phrase:
             head = _sing(phrase[-1])
             if head and head not in _NOT_PROPS and len(head) > 2:
@@ -718,10 +875,11 @@ def prop_check(shots, objects, prev_shots=()):
     for o in objects or []:
         for w in re.findall(r"[A-Za-z]+", o):
             seen.add(_sing(w))
+    stems = {w[:4] for w in seen if len(w) >= 4}          # "stickies" / "sticker", "foams" / "foam"
     prev = {h for h, _ in named_nouns(" ".join(prev_shots or []))}
     unseen, carried = {}, {}
     for h, phrase in named_nouns(" ".join(shots or [])):
-        if h in seen:
+        if h in seen or (len(h) >= 4 and h[:4] in stems):
             continue
         unseen.setdefault(h, phrase)
         if h in prev:
@@ -934,12 +1092,14 @@ def _write_json(path, obj):
 
 
 def run_draft(plan_file, *, sheet=None, mode=CHUNK_MODES[0], named=(), qwen_model=DEFAULT_QWEN,
-              quantization=QUANTIZATIONS[0], frames_per_chunk=16, transcribe=True, word_timings=True,
-              extra_instructions="", max_tokens=2048, qwen_cls=None, omni_cls=None, whisper=None, free_models=True,
+              quantization=QUANTIZATIONS[0], frames_per_chunk=DEFAULT_FRAMES, transcribe=True, word_timings=True,
+              extra_instructions="", max_tokens=2048, template=None, qwen_cls=None, omni_cls=None, whisper=None,
+              free_models=True,
               sample_vram=True):
     """The whole draft run (one queue item). qwen_cls / omni_cls / whisper: injected for tests;
     None = locate the installed nodes (False = treat as missing). Returns the report dict."""
     t_run = time.time()
+    template = template or DEFAULT_TEMPLATE
     plan = sp.load_plan(plan_file)
     jd = os.path.dirname(os.path.abspath(plan_file))
     src = plan["source"]
@@ -951,7 +1111,7 @@ def run_draft(plan_file, *, sheet=None, mode=CHUNK_MODES[0], named=(), qwen_mode
     warnings = []
     report = {"job": plan["job"], "mode": mode, "named": list(named), "chunks": {}, "warnings": warnings,
               "stages": {}, "vram": {"free_gb": []}, "qwen_model": qwen_model, "quantization": quantization,
-              "frames_per_chunk": int(frames_per_chunk), "sampling": dict(QWEN_SAMPLING)}
+              "frames_per_chunk": int(frames_per_chunk), "sampling": dict(QWEN_SAMPLING), "template": template}
     if named:
         kept = [x for x in named if sp.is_kept(next((c for c in plan["chunks"] if c["id"] == x), None))]
         if kept:
@@ -1037,16 +1197,29 @@ def run_draft(plan_file, *, sheet=None, mode=CHUNK_MODES[0], named=(), qwen_mode
                 if wav is None:
                     continue
                 t = time.time()
-                try:
-                    raw = omni.transcribe(wav, sr)
-                except Exception as e:
-                    raw = ""
-                    info[c["id"]]["warnings"].append(f"Omni failed: {e}")
+                raws = []
+                for attempt in range(2):          # one retry when it answers in free prose
+                    try:
+                        raws.append(omni.transcribe(wav, sr))
+                    except Exception as e:
+                        raws.append("")
+                        info[c["id"]]["warnings"].append(f"Omni failed: {e}")
+                    po = parse_omni(raws[-1])
+                    if not raws[-1] or po["structured"]:
+                        break
+                raw = raws[-1]
                 stages["omni_s"][c["id"]] = round(time.time() - t, 2)
                 if not raw:
                     info[c["id"]]["warnings"].append("Omni returned nothing (timed out or failed): words from Whisper")
-                po = parse_omni(raw)
-                omni_parsed[c["id"]] = po if raw else None
+                    po = None
+                elif not po["structured"]:
+                    # its quoted fragments drop words: Whisper's words, and no audio events
+                    info[c["id"]]["warnings"].append("Omni answered twice without its transcript / audio_events "
+                                                     "sections: words from Whisper, no audio events")
+                    po = None
+                raw = "\n\n---- retry ----\n".join(raws)
+                omni_parsed[c["id"]] = po
+                po = po or parse_omni("")
                 _write(os.path.join(info[c["id"]]["dir"], "omni.txt"),
                        raw + "\n\n---- parsed ----\n" + json.dumps(po, indent=1, ensure_ascii=False))
                 _say(f"[SeamStitch] Swap Draft: {c['id']} Omni {stages['omni_s'][c['id']]} s: {po['words'][:120]!r}")
@@ -1139,36 +1312,78 @@ def run_draft(plan_file, *, sheet=None, mode=CHUNK_MODES[0], named=(), qwen_mode
             subject = ("<Subject 1> (S1) is the character whose motion comes from <Video 1> and whose appearance "
                        "comes from <Picture 1>.")
         k_frames = max(1, int(frames_per_chunk))
+        per_shot = template == TEMPLATES[1]
         order = [c["id"] for c in plan["chunks"]]
-        drafted_shots = {}
+        drafted_shots, drafted_objects = {}, {}
         stages["qwen_s"] = {}
         for c in chunks:
             ci = info[c["id"]]
             r0, r1 = ci["render"]
             idx = sample_indices(ci["n"], k_frames)
             video = decode_sampled(path, fps, r0, idx)
-            # the previous chunk's shot blocks: drafted in this run, or from its prompt
+            # the previous chunk: its shot blocks only for the carry-over check, its object names for Qwen
             k = order.index(c["id"])
             prev = plan["chunks"][k - 1] if k > 0 else None
-            prev_shots = []
+            prev_shots, prev_names = [], []
             if prev is not None and not sp.is_kept(prev):
                 prev_shots = drafted_shots.get(prev["id"]) or shots_of(prev.get("prompt") or prev.get("draft") or "")
+                prev_names = drafted_objects.get(prev["id"]) or []
             t = time.time()
             oraw = qwen.ask(OBJECTS_INSTRUCTION.format(n=len(idx)), video=video, max_tokens=384, frame_count=len(idx))
             t_obj = round(time.time() - t, 2)
             objs = parse_objects(oraw)
-            instr = draft_instruction(n_frames=ci["n"], fps=fps, sample_idx=idx, shots_rel=ci["shots_rel"],
-                                      lines=ci["lines"], language=ci["language"], prev_shots=prev_shots,
-                                      events=ci["events"], pronoun=pronoun, extra=extra_instructions)
+            log = ["==== objects: instruction ====", OBJECTS_INSTRUCTION.format(n=len(idx)), "", "==== objects: Qwen ====",
+                   oraw, ""]
             t = time.time()
-            draw = qwen.ask(instr, video=video, max_tokens=int(max_tokens), frame_count=len(idx))
+            if not per_shot:
+                instr = draft_instruction(n_frames=ci["n"], fps=fps, sample_idx=idx, shots_rel=ci["shots_rel"],
+                                          lines=ci["lines"], language=ci["language"], prev_names=prev_names,
+                                          events=ci["events"], pronoun=pronoun, objects=objs["objects"],
+                                          extra=extra_instructions)
+                draw = qwen.ask(instr, video=video, max_tokens=int(max_tokens), frame_count=len(idx))
+                log += ["==== draft: instruction ====", instr, "", "==== draft: Qwen ====", draw, ""]
+                parts = parse_qwen(draw, len(ci["shots"]), ci["language"])
+            else:
+                # each shot from its own frames, then video_1 and sounds over the chunk
+                blocks = []
+                k_sh = len(ci["shots_rel"])
+                for i, (sh, fr_idx) in enumerate(zip(ci["shots_rel"], shot_frames(ci["shots_rel"], ci["n"], k_frames))):
+                    said = lines_in_shot(ci["lines"], sh, k_sh, i)
+                    rel = [dict(ln, frames=[ln["frames"][0] - sh[0], ln["frames"][1] - sh[0]]) if "frames" in ln else ln
+                           for ln in said]
+                    instr = shot_instruction(n=len(fr_idx), secs=(sh[1] - sh[0] + 1) / float(fps), lines_rel=rel,
+                                             fps=fps, pronoun=pronoun, objects=objs["objects"], extra=extra_instructions)
+                    sv = decode_sampled(path, fps, r0, fr_idx)
+                    sraw = qwen.ask(instr, video=sv, max_tokens=512, frame_count=len(fr_idx))
+                    log += [f"==== shot {i + 1}: instruction ====", instr, "", f"==== shot {i + 1}: Qwen ====", sraw, ""]
+                    body = " ".join(re.sub(r"^\s*(?:\[Shot\s*\d+\]|shot\s*\d+\s*:)\s*", "", sraw, flags=re.I).split())
+                    blocks.append(f"[Shot {i + 1}] {body}")
+                cinstr = CHUNK_INSTRUCTION.format(n=len(idx), secs=ci["n"] / float(fps),
+                                                  sounds_hint=_sounds_hint(ci["events"], ci["lines"]))
+                craw = qwen.ask(cinstr, video=video, max_tokens=384, frame_count=len(idx))
+                log += ["==== chunk: instruction ====", cinstr, "", "==== chunk: Qwen ====", craw, ""]
+                parts = parse_qwen(craw + "\nshots:\n" + "\n".join(blocks), len(ci["shots"]), ci["language"])
             t_draft = round(time.time() - t, 2)
             stages["qwen_s"][c["id"]] = {"objects": t_obj, "draft": t_draft}
-            _write(os.path.join(ci["dir"], "qwen.txt"),
-                   "==== objects: instruction ====\n" + OBJECTS_INSTRUCTION.format(n=len(idx))
-                   + "\n\n==== objects: Qwen ====\n" + oraw + "\n\n==== draft: instruction ====\n" + instr
-                   + "\n\n==== draft: Qwen ====\n" + draw + "\n")
-            parts = parse_qwen(draw, len(ci["shots"]), ci["language"])
+            _write(os.path.join(ci["dir"], "qwen.txt"), "\n".join(log))
+            parts["shots"] = tidy_shots(parts["shots"])
+            # each shot carries exactly its own lines, in the transcription's words
+            k_sh, added = len(ci["shots_rel"]), 0
+            for i in range(min(k_sh, len(parts["shots"]))):
+                said = lines_in_shot(ci["lines"], ci["shots_rel"][i], k_sh, i)
+                parts["shots"][i], n_add = place_dialogue(parts["shots"][i], said, ci["language"])
+                added += n_add
+            if added:
+                parts["warnings"].append(f"{added} spoken line(s) Qwen left out were added at the end of their shot")
+            if not ci["events"]:
+                # Qwen can't hear: without Omni's events it invents sounds (B4 workshop: "muffled voices")
+                parts["sounds"] = ("the room tone and the sounds of objects being handled"
+                                   + (f", and {PRONOUNS[pronoun]['poss']} speech." if ci["lines"] else "."))
+            elif not parts["sounds"]:
+                parts["sounds"] = neutral_events(ci["events"])
+                parts["warnings"] = [w for w in parts["warnings"] if "sounds" not in w] + [
+                    "Qwen gave no sounds line: Omni's audio events used"]
+            drafted_objects[c["id"]] = objs["objects"]
             ci["warnings"] += parts["warnings"]
             if objs["person"] is False:
                 ci["warnings"].append("Qwen saw no person in this chunk")
@@ -1239,13 +1454,16 @@ class SeamStitchSwapDraft:
                     "redraft always drafts its chunk, whatever this says)."}),
                 "qwen_model": (qwen_models(), {"default": DEFAULT_QWEN, "tooltip": "A QwenVL model on disk."}),
                 "quantization": (QUANTIZATIONS, {"default": QUANTIZATIONS[0]}),
-                "frames_per_chunk": ("INT", {"default": 16, "min": 2, "max": 32, "tooltip":
-                    "Frames Qwen sees, spread over the chunk's render range (16 = the QwenVL node's own count)."}),
+                "frames_per_chunk": ("INT", {"default": DEFAULT_FRAMES, "min": 2, "max": 48, "tooltip":
+                    "Frames Qwen sees, spread over the chunk's render range (per shot: shared out by shot length, "
+                    "at least 4 each). The QwenVL node itself uses 16."}),
                 "transcribe": ("BOOLEAN", {"default": True, "tooltip":
                     "Omni Captioner Transcribe on each chunk's audio: the words and the audio events."}),
                 "word_timings": ("BOOLEAN", {"default": True, "tooltip":
                     "faster-whisper large-v3-turbo: word timings, so each line lands in its shot and moment."}),
-                "template": (TEMPLATES, {"default": TEMPLATES[0]}),
+                "template": (TEMPLATES, {"default": DEFAULT_TEMPLATE, "tooltip":
+                    "per shot: each shot from its own frames, then video_1 and sounds over the chunk (the default). "
+                    "The other: one call for the whole chunk."}),
                 "extra_instructions": ("STRING", {"default": "", "multiline": True, "tooltip":
                     "Added to Qwen's rules for every chunk."}),
                 "max_tokens": ("INT", {"default": 2048, "min": 256, "max": 4096}),
@@ -1270,14 +1488,16 @@ class SeamStitchSwapDraft:
         return float("nan")          # a draft run always runs (the plan path alone never changes)
 
     def draft(self, draft_plan, chunks=CHUNK_MODES[0], qwen_model=DEFAULT_QWEN, quantization=QUANTIZATIONS[0],
-              frames_per_chunk=16, transcribe=True, word_timings=True, template=TEMPLATES[0], extra_instructions="",
+              frames_per_chunk=DEFAULT_FRAMES, transcribe=True, word_timings=True, template=DEFAULT_TEMPLATE,
+              extra_instructions="",
               max_tokens=2048, sheet=None):
         plan_file, named = parse_draft_plan(draft_plan)
         if not plan_file:
             raise DraftError("draft_plan is empty: queue a draft run from the Planner")
         rep = run_draft(plan_file, sheet=sheet, mode=chunks, named=named, qwen_model=qwen_model,
                         quantization=quantization, frames_per_chunk=frames_per_chunk, transcribe=transcribe,
-                        word_timings=word_timings, extra_instructions=extra_instructions, max_tokens=max_tokens)
+                        word_timings=word_timings, extra_instructions=extra_instructions, max_tokens=max_tokens,
+                        template=template)
         _say("[SeamStitch] Swap Draft: " + rep["text"].replace("\n", "\n[SeamStitch] Swap Draft: "))
         try:
             from server import PromptServer
