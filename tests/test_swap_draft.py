@@ -45,10 +45,9 @@ class FakeQwen:
         if prompt.startswith("These are"):
             return "person: yes\nobjects: open cardboard box, white card"
         if self.on_draft:
-            self.on_draft(len([c for c in self.calls if c["frames"] and "speaks" in c["prompt"] or
-                               c["frames"] and "No one speaks" in c["prompt"]]))
-        k = int(prompt.split("The chunk has ")[1].split(" shot")[0])
-        says = ' She says SAYS "Hello there." to the camera.' if "speaks these lines" in prompt else ""
+            self.on_draft(len([c for c in self.calls if c["frames"] and "The clip has" in c["prompt"]]))
+        k = int(prompt.split("The clip has ")[1].split(" shot")[0])
+        says = ' She says SAYS "Hello there." to the camera.' if 'spoken: "' in prompt else ""
         n = self.shots or k
         blocks = "\n".join(f"[Shot {i + 1}] {'Jump cut. ' if i else ''}She reaches into the open cardboard box and "
                            f"lifts a white card.{says if i == n - 1 else ''}" for i in range(n))
@@ -97,6 +96,7 @@ def _draft(job, **kw):
     kw.setdefault("omni_cls", FakeOmni())
     kw.setdefault("whisper", FakeWhisper())
     kw.setdefault("sample_vram", False)
+    kw.setdefault("template", sd.TEMPLATES[0])      # the fakes answer the one-call form; per shot has its own tests
     return sd.run_draft(job["plan"], **kw)
 
 
@@ -243,9 +243,12 @@ def test_no_speech_and_untimed_lines():
 def test_dialogue_reaches_qwen_with_frames_and_comes_back_as_d_lines(job):
     q = FakeQwen()
     rep = _draft(job, qwen_cls=q)
-    drafts = [c for c in q.calls if c["frames"] and "The chunk has" in c["prompt"]]
+    drafts = [c for c in q.calls if c["frames"] and "The clip has" in c["prompt"]]
     assert len(drafts) == 3 and all(c["frames"] == 16 for c in drafts) and q.loaded == 1 and q.closed == 1
-    assert '"Hello there."' in drafts[0]["prompt"] and "frames 5-22" in drafts[0]["prompt"]
+    assert 'spoken: "Hello there." (0.2-0.9 s)' in drafts[0]["prompt"]
+    assert "Objects seen in the pictures: open cardboard box, white card." in drafts[0]["prompt"]
+    # the next chunk gets the previous chunk's object names, never its shot blocks
+    assert "Names used for objects in the previous clip" in drafts[1]["prompt"] and "[Shot 1]" not in drafts[1]["prompt"]
     assert "low room hum, a soft thud" in drafts[0]["prompt"]          # Omni's events -> sounds
     p = sp.load_plan(job["plan"])
     assert "<Subject 1> (S1) says <d>[English]Hello there.</d>" in p["chunks"][0]["prompt"]
@@ -275,8 +278,8 @@ def test_a_missing_omni_takes_the_words_from_whisper(job):
 def test_a_missing_whisper_drafts_the_lines_without_timings(job):
     q = FakeQwen()
     rep = _draft(job, qwen_cls=q, whisper=False)
-    d = [c for c in q.calls if c["frames"] and "The chunk has" in c["prompt"]][0]
-    assert "no timings: place each at the action it fits" in d["prompt"] and '"Hello there."' in d["prompt"]
+    d = [c for c in q.calls if c["frames"] and "The clip has" in c["prompt"]][0]
+    assert "have no times: place each where it fits the action" in d["prompt"] and '"Hello there."' in d["prompt"]
     assert any("without timings" in w for w in rep["warnings"])
 
 
@@ -340,4 +343,78 @@ def test_the_node_widgets_keep_their_order():
     assert list(req) == ["draft_plan", "chunks", "qwen_model", "quantization", "frames_per_chunk", "transcribe",
                          "word_timings", "template", "extra_instructions", "max_tokens"]
     assert req["chunks"][1]["default"] == "empty only" and req["max_tokens"][1]["default"] == 2048
+    assert req["template"][1]["default"] == "character replace (Ref2VA, per shot)" and req["frames_per_chunk"][1]["default"] == 24
     assert sd.SeamStitchSwapDraft.OUTPUT_NODE and "sheet" in sd.SeamStitchSwapDraft.INPUT_TYPES()["optional"]
+
+
+# ---------------------------------------------------------------- the workshop's fixes (B4)
+
+def test_a_looping_answer_is_cut_and_video_1_never_swallows_the_shots():
+    loop = "She lifts a card. " + "She puts it down. She picks it up. " * 30
+    r = sd.parse_qwen("video_1: a room [Shot 1] " + loop + 'SAYS "Hi."\nsounds: hum', 1)
+    assert r["video_1"] == "a room." and r["shots"][0].count("She puts it down.") == 1
+    assert r["shots"][0].endswith("<Subject 1> (S1) says <d>[English]Hi.</d>")
+    assert sd.tidy_shots(["[Shot 1] Jump cut. She sits.", "[Shot 2] She stands."]) == \
+        ["[Shot 1] She sits.", "[Shot 2] Jump cut. She stands."]
+
+
+def test_omni_in_free_prose_gives_no_events_and_its_voice_loses_its_gender():
+    po = sd.parse_omni('A single Australian male speaks: "What have we got here?" A soft rustle.')
+    assert po["structured"] is False and po["events"] == "" and po["words"] == "What have we got here?"
+    assert sd.parse_omni("transcript: [English] Hi. audio_events: hum")["structured"] is True
+    assert sd.neutral_events("A clear male voice speaks in a quiet room.") == "a voice speaks in a quiet room."
+
+
+def test_omni_in_free_prose_twice_hands_the_words_to_whisper(job):
+    class Prose(FakeOmni):
+        def transcribe(self, wav, sr):
+            self.n += 1
+            return 'A man says "Hello there" and a box rustles.'
+    o = Prose()
+    rep = _draft(job, omni_cls=o)
+    cid = sp.load_plan(job["plan"])["chunks"][0]["id"]
+    assert o.n == 6                                            # one retry per chunk
+    assert any("without its transcript" in w for w in rep["chunks"][cid]["warnings"])
+    assert "<Subject 1> (S1) says <d>[English]Hello there.</d>" in sp.load_plan(job["plan"])["chunks"][0]["prompt"]
+
+
+def test_the_per_shot_template_describes_each_shot_from_its_own_frames():
+    p = _plan978()
+    shots = [(a - 400, b - 400) for a, b in sd.chunk_shots(p, 400, 608)]
+    fr = sd.shot_frames(shots, 209, 16)
+    assert [len(x) for x in fr] == [4, 4, 14] and all(a <= f <= b for (a, b), x in zip(shots, fr) for f in x)
+    lines = [{"text": "One.", "frames": [5, 9]}, {"text": "Two.", "frames": [40, 60]}, {"text": "Three.", "frames": [205, 208]}]
+    assert [x["text"] for x in sd.lines_in_shot(lines, shots[2], 3, 2)] == ["Two.", "Three."]
+    assert [x["text"] for x in sd.lines_in_shot(lines, shots[0], 3, 0)] == ["One."]
+
+
+def test_the_per_shot_template_end_to_end(job):
+    sp.update_plan(job["plan"], lambda p: p.setdefault("cuts", []).append({"frame": 20, "confirmed": True}))
+
+    class ShotQwen(FakeQwen):
+        def ask(self, prompt, image=None, video=None, max_tokens=2048, frame_count=16):
+            self.calls.append({"prompt": prompt, "frames": None if video is None else int(video.shape[0])})
+            if prompt.startswith("These are"):
+                return "person: yes\nobjects: white card"
+            if "continuous shot" in prompt:
+                return "She holds up a white card." + (' SAYS "Hello there."' if "Hello there" in prompt else "")
+            return "video_1: a room\nsounds: hum"
+    q = ShotQwen()
+    _draft(job, qwen_cls=q, template=sd.TEMPLATES[1])
+    c0 = sp.load_plan(job["plan"])["chunks"][0]
+    dd = sd.parse_sections(c0["prompt"])["detailed_description"]
+    assert "[Shot 1] She holds up a white card." in dd and "[Shot 2] Jump cut. She holds up a white card." in dd
+    assert dd.count("<d>[English]Hello there.</d>") == 1
+    shot_calls = [c for c in q.calls if "continuous shot" in c["prompt"]]
+    assert len(shot_calls) >= 4 and all(c["frames"] >= 4 for c in shot_calls)
+
+
+def test_each_shot_gets_exactly_its_own_lines_in_the_transcription_words():
+    lines = [{"text": "Link app,"}, {"text": "product manual,"}, {"text": "got some stickies,"}]
+    b = ('[Shot 3] Jump cut. She unfolds a paper, saying “Link app,” then “Product manual.” '
+         '<Subject 1> (S1) says <d>[English]Lovely bundled.</d> She lifts strips.')
+    out, added = sd.place_dialogue(b, lines)
+    assert out.count("<d>[English]Link app,</d>") == 1 and out.count("<d>[English]product manual,</d>") == 1
+    assert "Lovely bundled" not in out                       # another shot's line: moved there, not kept here
+    assert out.endswith("<Subject 1> (S1) says <d>[English]got some stickies,</d>") and added == 1
+    assert "saying" not in out and "“" not in out
