@@ -343,7 +343,7 @@ def test_the_node_widgets_keep_their_order():
     assert list(req) == ["draft_plan", "chunks", "qwen_model", "quantization", "frames_per_chunk", "transcribe",
                          "word_timings", "template", "extra_instructions", "max_tokens"]
     assert req["chunks"][1]["default"] == "empty only" and req["max_tokens"][1]["default"] == 2048
-    assert req["template"][1]["default"] == "character replace (Ref2VA, per shot)" and req["frames_per_chunk"][1]["default"] == 24
+    assert req["template"][1]["default"] == "character replace (Ref2VA, timeline)" and req["frames_per_chunk"][1]["default"] == 24
     assert sd.SeamStitchSwapDraft.OUTPUT_NODE and "sheet" in sd.SeamStitchSwapDraft.INPUT_TYPES()["optional"]
 
 
@@ -452,3 +452,29 @@ def test_a_dropped_line_goes_back_in_order_and_stage_notes_are_not_words():
     assert added == 1 and out.index("Two.") > out.index("One.") and out.index("Two.") < out.index("Three.")
     po = sd.parse_omni("transcript: [English] Lovely bundled and a... (voice trails off) audio_events: hum")
     assert po["words"] == "Lovely bundled and a..." and "voice trails off" in po["notes"]
+
+
+# ---------------------------------------------------------------- the timeline template (B4 round 1's winner)
+
+def test_timeline_moments_merge_into_a_shot_with_the_lines_at_their_times():
+    assert sd.moment_frames((29, 208), 25) == sorted(set(sd.moment_frames((29, 208), 25)))
+    mf = sd.moment_frames((29, 208), 25)
+    assert mf[0] == 31 and mf[-1] == 206 and len(mf) == 15
+    assert sd.moment_frames((0, 12), 25) == [2, 10]
+    m = sd.parse_moment("pose: leaning forward over the box\nlook: at the camera\n"
+                        "hands: holds a small white card up toward the camera with the right hand")
+    assert m == {"pose": "leaning forward over the box", "look": "at the camera",
+                 "hands": "holds a small white card up toward the camera with the right hand"}
+    moments = [(0.1, {"pose": "leaning forward over the box", "look": "down into the box",
+                      "hands": "reaches into the box"}),
+               (0.6, {"pose": "", "look": "at the camera", "hands": "holds a small white card up toward the camera"}),
+               (1.1, {"pose": "", "look": "at the camera", "hands": "holds a small white card up toward the camera"}),
+               (1.6, {"pose": "", "look": "down into the box", "hands": "hold a flat cream-and-yellow card at the chest; "
+                                                                   "the person's other hand rests on their knee"})]
+    lines = [{"text": "What have we got here?", "frames": [20, 30]}]
+    out = sd.merge_moments(moments, lines, 25, "she")
+    assert out.startswith("She sits leaning forward over the box and reaches into the box, looking down into the box.")
+    assert out.count("small white card") == 1                      # a repeated moment is dropped
+    assert out.index("small white card") < out.index("<d>[English]What have we got here?</d>")
+    assert "She holds a flat cream-and-yellow card at the chest, and she other hand" not in out
+    assert "her other hand rests on her knee" in out and "holds a flat cream-and-yellow card" in out

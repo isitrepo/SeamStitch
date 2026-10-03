@@ -51,10 +51,13 @@ OMNI_CLASS = "OmniCaptionerTranscribe"
 DEFAULT_QWEN = "Qwen3-VL-8B-Unredacted-MAX (Captioner)"
 QUANTIZATIONS = ["None (FP16)", "8-bit (Balanced)", "4-bit (VRAM-friendly)"]
 CHUNK_MODES = ["empty only", "all (into the draft field)", "selected"]
-TEMPLATES = ["character replace (Ref2VA)", "character replace (Ref2VA, per shot)"]
-# per shot: each shot described from its own frames (B4 workshop: the one-call form copied across shots and
-# chunks, or looped; per shot followed the foam, card, booklet and stickies of 400-608 shot by shot)
-DEFAULT_TEMPLATE = TEMPLATES[1]
+TEMPLATES = ["character replace (Ref2VA)", "character replace (Ref2VA, per shot)",
+             "character replace (Ref2VA, timeline)"]
+MOMENT_S = 0.5                  # timeline: one picture per this many seconds of each shot
+# timeline (B4 render rounds 1-2, 400-608 against X10 at X10's settings, 2 seeds): pose IoU 0.733 / 0.729 against
+# the hand prompt's 0.645 / 0.727 through the same nodes, mouth sync 0.67 / 0.69 against 0.26 / 0.14 (second
+# half 0.59 / 0.61 against -0.34 / -0.16). The per-shot draft (T-DRAFT) tied on pose and lost lip sync (-0.07).
+DEFAULT_TEMPLATE = TEMPLATES[2]
 # B4 workshop C2: parts of a long shot (4 s) and a 6-frame scene call made the shots wordier and more invented,
 # and video_1 no better, than whole shots (C1). Both kept as options, off by default.
 SEGMENT_S = 0.0                 # per shot: > 0 describes a longer shot in parts of at most this many seconds
@@ -445,6 +448,26 @@ video_1: ONE sentence about the clip as a whole: where the person is and what th
 sounds: ONE sentence: the sounds through the clip, in order{sounds_hint}."""
 
 
+# timeline: one full-size picture per moment, one sentence each; then the shot written from those
+# sentences as text (single images are this captioner's strength: ~1280 px each, where 16-24 frames
+# in one video call get ~460 px)
+MOMENT_INSTRUCTION = """This is one frame from a video of a person. Answer in exactly three short labelled lines and nothing else:
+
+pose: how they sit or stand and lean, in a few words (for example "leaning forward over the box").
+look: where they look: "at the camera", "down into the box", or "at the object in their hands".
+hands: what the hands do and hold, and where a held object is, as one full phrase with "a" and "the", starting with a verb (for example "holds a small black device with a red ring up beside the face with the right hand"). Name every object by what it looks like: colour, shape, size and any coloured parts. Never quote printed text or brand names."""
+
+COMPOSE_INSTRUCTION = """Here is what a person does in one continuous shot of a video ({secs:.1f} seconds), moment by moment{and_says}:
+{moments}
+
+In an edit of this video the person is replaced by a character, called "{subj}" below, who does exactly what the person does. Rewrite the moments as {n_sent} short sentences, present tense, in the same order: merge moments that repeat, give the same object the same name every time, and keep every object {subj} picks up, holds up, shows or puts down, where {subj} holds it, and where {subj} looks (say "looking at the camera" when the moments say so). An object that the moments name differently from one moment to the next keeps its most frequent name. {dialogue_rule}Use only what the moments say: add nothing. Don't mention times, moments, frames or "the person".{extra} Write only the sentences."""
+
+SCENE_INSTRUCTION = """This is one frame from a clip of a video. In the clip the person {activity}. Write exactly two labelled lines and nothing else:
+
+video_1: ONE sentence: where the person is and what they sit or stand on, what is in front of them, the background and its colour, the light (hard or soft, and the side it comes from, judged by where the shadows fall), what the person is doing in the clip, and the camera: whether it looks down on the person from above, is level with them or looks up at them, and where the person's head sits in the frame (for example near the top edge). Don't describe the person's face, hair or clothes.
+sounds: ONE sentence: the sounds through the clip, in order{sounds_hint}."""
+
+
 PRONOUNS = {"she": {"subj": "she", "Subj": "She", "poss": "her", "Poss": "Her", "does": "does", "moves": "moves",
                     "poses": "poses", "stays": "stays", "handles": "handles"},
             "he": {"subj": "he", "Subj": "He", "poss": "his", "Poss": "His", "does": "does", "moves": "moves",
@@ -600,6 +623,104 @@ def segment_lines(shot_lines, segs, i, j):
             ("frames" in ln and (a <= ln["frames"][0] <= b or (last and ln["frames"][0] > b) or (j == 0 and ln["frames"][0] < a)))]
 
 
+def moment_frames(shot, fps, step_s=None, cap=16):
+    """Timeline pictures for a shot (render-relative frames): one per step_s, 2 frames clear of the shot's
+    edges (a cut's neighbour frames can blend), at least 2 and at most cap."""
+    step_s = MOMENT_S if step_s is None else step_s
+    a, b = shot
+    lo, hi = (a + 2, b - 2) if b - a >= 6 else (a, b)
+    n = max(2, min(cap, int(round((hi - lo + 1) / float(fps) / step_s)) + 1)) if hi > lo else 1
+    return sorted({int(round(x)) for x in np.linspace(lo, hi, n)})
+
+
+def compose_instruction(*, moments, secs, lines_rel, fps, pronoun, extra=""):
+    """moments: [(seconds, sentence)]. The shot's lines go into the list at their start times, marked
+    SAYS, so the rewrite keeps each where it's spoken (T1: given apart, Qwen left every line out)."""
+    pr = PRONOUNS[pronoun]
+    rows = [(t, f"{t:.1f} s: {m}") for t, m in moments]
+    untimed = []
+    for ln in lines_rel:
+        if "frames" in ln:
+            t = ln["frames"][0] / float(fps)
+            rows.append((t + 1e-3, f'{t:.1f} s: SAYS "{ln["text"]}"'))
+        else:
+            untimed.append(ln["text"])
+    rows.sort(key=lambda r: r[0])
+    text = "\n".join(r for _, r in rows)
+    if untimed:
+        text += "\n(also spoken somewhere in the shot: " + ", ".join(f'SAYS "{u}"' for u in untimed) + ")"
+    rule = ('Keep every SAYS "words" line exactly as written, at its place in the order, inside or between your '
+            'sentences. ') if lines_rel else ""
+    n_sent = "2 to 6" if len(moments) > 3 else "1 to 3"
+    return COMPOSE_INSTRUCTION.format(secs=secs, moments=text, and_says=" (SAYS marks what is said, and when)"
+                                      if lines_rel else "", subj=pr["subj"], n_sent=n_sent, dialogue_rule=rule,
+                                      extra=_extra(extra).replace("\n- ", " "))
+
+
+def parse_moment(text):
+    """A moment answer -> {pose, look, hands} (missing labels: the whole answer as hands)."""
+    d = {}
+    for lab in ("pose", "look", "hands"):
+        m = re.search(rf"(?im)^[ \t*-]*{lab}[ \t*]*:[ \t]*(.+)$", text or "")
+        d[lab] = " ".join(m.group(1).split()).strip(" .*") if m else ""
+    if not any(d.values()):
+        d["hands"] = " ".join((text or "").split()).strip(" .")
+    return d
+
+
+def _third_to(pr, t):
+    """The person / they / their -> the subject's pronoun, for a caption written about the person."""
+    t = re.sub(r"\b[Tt]he person['’]s\b", pr["poss"], t)
+    t = re.sub(r"\b[Tt]he person\b", pr["subj"], t)
+    t = re.sub(r"\btheir\b", pr["poss"], t)
+    t = re.sub(r"\bthemselves\b", "herself" if pr["subj"] == "she" else "himself" if pr["subj"] == "he" else "themselves", t)
+    return re.sub(r"\bthey\b", pr["subj"], t)
+
+
+def _verb3(v, pr):
+    """'hold' -> 'holds' for she / he (captions sometimes come in the base form)."""
+    if pr["subj"] == "they" or not v or v.endswith("s"):
+        return v
+    return v + ("es" if v.endswith(("sh", "ch", "x")) else "s")
+
+
+def merge_moments(moments, lines_rel, fps, pronoun, language="English", similar=0.85):
+    """A shot block from its moments, by the node: one sentence per moment whose hands differ from
+    the last kept one (a repeated hand with a new gaze adds the gaze), the shot's lines placed at their
+    times. moments: [(seconds, {pose, look, hands})]. Nothing observed is dropped, nothing is added."""
+    pr = PRONOUNS[pronoun]
+    out, last_hands, last_look = [], None, None
+    ev = [(t, "m", m) for t, m in moments]
+    ev += [(ln["frames"][0] / float(fps) + 1e-3, "l", ln) for ln in lines_rel if "frames" in ln]
+    ev.sort(key=lambda e: e[0])
+    first = True
+    for _, kind, x in ev:
+        if kind == "l":
+            out.append(f"<Subject 1> (S1) says <d>[{language}]{x['text']}</d>")
+            continue
+        hands = re.sub(r"\s*;\s*", ", and ", _third_to(pr, x.get("hands") or ""))
+        look = _third_to(pr, (x.get("look") or "").lower().strip(" ."))
+        if hands:
+            w = hands.split()
+            hands = " ".join([_verb3(w[0].lower(), pr)] + w[1:])
+        same = last_hands is not None and difflib.SequenceMatcher(None, hands.lower(), last_hands.lower()).ratio() >= similar
+        if first:
+            pose = _third_to(pr, x.get("pose") or "").strip(" .")
+            lead = f"{pr['Subj']} {pose}" if pose and pose.split()[0].endswith("s") else \
+                (f"{pr['Subj']} sits {pose}" if pose else pr["Subj"])
+            out.append(lead + (f" and {hands}" if hands else "") + (f", looking {look}" if look.startswith(("at", "down", "up", "into", "toward")) else "") + ".")
+            first = False
+        elif same:
+            if look and look != last_look:
+                out.append(f"{pr['Subj']} looks {look}.")
+        elif hands:
+            out.append(f"{pr['Subj']} {hands}" + (f", looking {look}" if look and look != last_look else "") + ".")
+        last_hands, last_look = hands or last_hands, look or last_look
+    untimed = [ln for ln in lines_rel if "frames" not in ln]
+    out += [f"<Subject 1> (S1) says <d>[{language}]{ln['text']}</d>" for ln in untimed]
+    return re.sub(r"\s+", " ", " ".join(out)).strip()
+
+
 def tidy_shots(blocks):
     """[Shot 1] never opens on a jump cut; later shots (each after a source cut) always do."""
     out = []
@@ -752,7 +873,7 @@ def dedupe_sentences(text, cap=8):
     return " ".join(out)
 
 
-def parse_qwen(text, n_shots, language="English"):
+def parse_qwen(text, n_shots, language="English", cap=8):
     """Qwen's draft -> {video_1, shots [str], sounds, warnings}."""
     d = _labelled(text)
     warns = []
@@ -781,7 +902,7 @@ def parse_qwen(text, n_shots, language="English"):
         warns.append("Qwen gave no [Shot n] blocks")
     elif len(blocks) != n_shots:
         warns.append(f"Qwen gave {len(blocks)} shot block(s) for {n_shots} shot(s)")
-    blocks = [f"[Shot {i + 1}] " + convert_says(dedupe_sentences(b), language) for i, b in enumerate(blocks)]
+    blocks = [f"[Shot {i + 1}] " + convert_says(dedupe_sentences(b, cap), language) for i, b in enumerate(blocks)]
     return {"video_1": v1.rstrip(".") + "." if v1 else "", "shots": blocks, "sounds": sounds, "warnings": warns}
 
 
@@ -1375,6 +1496,7 @@ def run_draft(plan_file, *, sheet=None, mode=CHUNK_MODES[0], named=(), qwen_mode
                        "comes from <Picture 1>.")
         k_frames = max(1, int(frames_per_chunk))
         per_shot = template == TEMPLATES[1]
+        timeline = template == TEMPLATES[2]
         order = [c["id"] for c in plan["chunks"]]
         drafted_shots, drafted_objects = {}, {}
         stages["qwen_s"] = {}
@@ -1397,7 +1519,7 @@ def run_draft(plan_file, *, sheet=None, mode=CHUNK_MODES[0], named=(), qwen_mode
             log = ["==== objects: instruction ====", OBJECTS_INSTRUCTION.format(n=len(idx)), "", "==== objects: Qwen ====",
                    oraw, ""]
             t = time.time()
-            if not per_shot:
+            if not per_shot and not timeline:
                 instr = draft_instruction(n_frames=ci["n"], fps=fps, sample_idx=idx, shots_rel=ci["shots_rel"],
                                           lines=ci["lines"], language=ci["language"], prev_names=prev_names,
                                           events=ci["events"], pronoun=pronoun, objects=objs["objects"],
@@ -1405,7 +1527,7 @@ def run_draft(plan_file, *, sheet=None, mode=CHUNK_MODES[0], named=(), qwen_mode
                 draw = qwen.ask(instr, video=video, max_tokens=int(max_tokens), frame_count=len(idx))
                 log += ["==== draft: instruction ====", instr, "", "==== draft: Qwen ====", draw, ""]
                 parts = parse_qwen(draw, len(ci["shots"]), ci["language"])
-            else:
+            elif per_shot:
                 # each shot from its own frames, then video_1 and sounds over the chunk
                 blocks = []
                 k_sh = len(ci["shots_rel"])
@@ -1433,6 +1555,31 @@ def run_draft(plan_file, *, sheet=None, mode=CHUNK_MODES[0], named=(), qwen_mode
                                 frame_count=len(sidx))
                 log += ["==== chunk: instruction ====", cinstr, "", "==== chunk: Qwen ====", craw, ""]
                 parts = parse_qwen(craw + "\nshots:\n" + "\n".join(blocks), len(ci["shots"]), ci["language"])
+            elif timeline:
+                # one full-size picture per moment, a sentence each; each shot written from its sentences
+                k_sh = len(ci["shots_rel"])
+                blocks = []
+                for i, sh in enumerate(ci["shots_rel"]):
+                    mf = moment_frames(sh, fps)
+                    pics = decode_sampled(path, fps, r0, mf, max_side=1280)
+                    moments = []
+                    for f, pic in zip(mf, pics):
+                        mraw = qwen.ask(MOMENT_INSTRUCTION, image=pic[None], max_tokens=200)
+                        moments.append(((f - sh[0]) / float(fps), parse_moment(mraw)))
+                    said = lines_in_shot(ci["lines"], sh, k_sh, i)
+                    rel = [dict(ln, frames=[ln["frames"][0] - sh[0], ln["frames"][1] - sh[0]]) if "frames" in ln else ln
+                           for ln in said]
+                    body = merge_moments(moments, rel, fps, pronoun, ci["language"])
+                    log += [f"==== shot {i + 1}: moments (frames {[r0 + f for f in mf]}) ====",
+                            "\n".join(f"{t:.1f} s: {json.dumps(m, ensure_ascii=False)}" for t, m in moments), "",
+                            f"==== shot {i + 1}: merged ====", body, ""]
+                    blocks.append(f"[Shot {i + 1}] {body}")
+                mid = decode_sampled(path, fps, r0, [ci["n"] // 2], max_side=1280)
+                activity = ("talks while " if ci["lines"] else "is ") + "handling what is in front of them"
+                sinstr = SCENE_INSTRUCTION.format(activity=activity, sounds_hint=_sounds_hint(ci["events"], ci["lines"]))
+                craw = qwen.ask(sinstr, image=mid, max_tokens=384)
+                log += ["==== scene: instruction ====", sinstr, "", "==== scene: Qwen ====", craw, ""]
+                parts = parse_qwen(craw + "\nshots:\n" + "\n".join(blocks), len(ci["shots"]), ci["language"], cap=24)
             t_draft = round(time.time() - t, 2)
             stages["qwen_s"][c["id"]] = {"objects": t_obj, "draft": t_draft}
             _write(os.path.join(ci["dir"], "qwen.txt"), "\n".join(log))
@@ -1532,8 +1679,9 @@ class SeamStitchSwapDraft:
                 "word_timings": ("BOOLEAN", {"default": True, "tooltip":
                     "faster-whisper large-v3-turbo: word timings, so each line lands in its shot and moment."}),
                 "template": (TEMPLATES, {"default": DEFAULT_TEMPLATE, "tooltip":
-                    "per shot: each shot from its own frames, then video_1 and sounds over the chunk (the default). "
-                    "The other: one call for the whole chunk."}),
+                    "timeline (the default): one full-size picture every half second, a caption each, merged into "
+                    "each shot with its lines at their times. per shot: each shot from its own frames in one call. "
+                    "The first: one call for the whole chunk."}),
                 "extra_instructions": ("STRING", {"default": "", "multiline": True, "tooltip":
                     "Added to Qwen's rules for every chunk."}),
                 "max_tokens": ("INT", {"default": 2048, "min": 256, "max": 4096}),
