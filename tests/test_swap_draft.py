@@ -244,7 +244,7 @@ def test_dialogue_reaches_qwen_with_frames_and_comes_back_as_d_lines(job):
     q = FakeQwen()
     rep = _draft(job, qwen_cls=q)
     drafts = [c for c in q.calls if c["frames"] and "The clip has" in c["prompt"]]
-    assert len(drafts) == 3 and all(c["frames"] == 16 for c in drafts) and q.loaded == 1 and q.closed == 1
+    assert len(drafts) == 3 and all(c["frames"] == sd.DEFAULT_FRAMES for c in drafts) and q.loaded == 1 and q.closed == 1
     assert 'spoken: "Hello there." (0.2-0.9 s)' in drafts[0]["prompt"]
     assert "Objects seen in the pictures: open cardboard box, white card." in drafts[0]["prompt"]
     # the next chunk gets the previous chunk's object names, never its shot blocks
