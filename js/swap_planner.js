@@ -515,7 +515,11 @@ function buildPlanner(node) {
                     assemble: "SeamStitch Swap Assemble on assemble_plan", mark: "a mark group ending in SeamStitch Swap Mask on mark_chunk / mark_images" }[kind];
                 throw new Error(`nothing to run: wire ${need}`);
             }
-            const res = await api.queuePrompt(0, p, { partialExecutionTargets: targets });
+            // The frontend's own queuePrompt, not whatever other packs wrapped around it: a wrapper
+            // written as (number, data) drops the options, and with them the partial-execution
+            // targets, so every output node runs (found live: BKWILDCARDS' preview hook).
+            const queue = Object.getPrototypeOf(api).queuePrompt || api.queuePrompt;
+            const res = await queue.call(api, 0, p, { partialExecutionTargets: targets });
             if (res?.node_errors && Object.keys(res.node_errors).length) throw new Error(`node errors: ${JSON.stringify(res.node_errors).slice(0, 300)}`);
             S.queued[res.prompt_id] = { run, kind, at: Date.now(), targets, batch: batch?.id, seq: batch ? batch.seq++ : 0 };
             if (!quiet) toast(`queued ${kind}${run.chunk ? ` ${label(run.chunk)}` : ""}`, "green");
