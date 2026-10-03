@@ -38,7 +38,8 @@ const VERDICT = { green: C.green, amber: C.amber, red: C.red };
 const TYPE_LABEL = { forward: "F", entry: "E", exit: "X" };
 const MIN_PER_209 = 10;     // GPU minutes per 209-frame render through the nodes (B1b: 558-628 s)
 const OUT = { render: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 17, 18], draft: [13], assemble: [14], mark: [15, 16] };
-const HIDDEN = ["run", "ui_state"];
+const HIDDEN = ["job", "source", "run", "ui_state"];     // job and source: picked in the panel's header
+const NEW_JOB = "__new__";
 const SETTING_OF = { target_render_frames: "target_render", overlap_frames: "overlap", anchor_frames: "anchors",
     floor_frames: "floor", ceiling_frames: "ceiling", conform_to_24fps: "conform_to_24fps" };
 
@@ -229,8 +230,10 @@ function buildPlanner(node) {
         display: "none", alignItems: "center", justifyContent: "center", color: C.dim, fontSize: "1.2em" }, "");
     const dropHint = el("div", { position: "absolute", inset: "0", display: "none", alignItems: "center", justifyContent: "center",
         background: "rgba(59,98,168,0.35)", border: "2px dashed #8fb3ff", color: "#fff", fontSize: "14px" }, "drop the source video");
-    const emptyHint = el("div", { position: "absolute", inset: "0", display: "flex", alignItems: "center", justifyContent: "center",
-        color: C.dim, fontSize: "1.1em", textAlign: "center", padding: "10px", whiteSpace: "pre-line" }, "");
+    const emptyHint = el("div", { position: "absolute", inset: "0", display: "flex", flexDirection: "column", gap: "10px",
+        alignItems: "center", justifyContent: "center", color: C.dim, fontSize: "1.1em", textAlign: "center", padding: "10px" });
+    const emptyText = el("div", { whiteSpace: "pre-line" });
+    emptyHint.append(emptyText, button("load video ▾", "From the input folder, or upload one (or drop a video here)", (ev) => openSourceMenu(ev)));
     videoBox.append(video, cover, emptyHint, overlay, dropHint);
 
     const bar1 = el("div", { display: "flex", gap: "4px", alignItems: "center", flexWrap: "wrap", flexShrink: "0" });
@@ -239,18 +242,29 @@ function buildPlanner(node) {
     const bZoomOut = button("−", "Zoom out (wheel over the ruler)", () => zoomBy(1 / 1.4));
     const bZoomIn = button("+", "Zoom in (wheel over the ruler)", () => zoomBy(1.4));
     const bFit = button("fit", "Fit the whole source into the node", () => fit());
-    const bSource = button("+ source", "Set the source video: from the input folder, or upload one (or drop it on the strip)", (ev) => openSourceMenu(ev));
-    const bDetect = button("detect cuts", "ffmpeg scene detection (> 0.15): adds faint suggested cuts. Only confirmed cuts drive the warnings, fills and auto splits.", () => detectCuts());
-    const bConfirm = button("confirm all", "Confirm every suggested cut", () => op({ op: "confirm_cuts" }));
-    const bAuto = button("auto splits", "Place anchored splits for 209-frame renders (every 197), nudged off the confirmed cuts", () => autoSplits());
+    const bDetect = button("detect + plan", "Find the cuts (ffmpeg scene > 0.15) and place the splits from them in one step: the cuts come in confirmed, the auto splits (209-frame renders, every 197, nudged off the cuts) follow. Then review: delete a wrong cut, drag or re-mode a split. Runs by itself when a video is loaded.", () => detectPlan());
+    const bCuts = button("cuts ▾", "Cut detection only, confirm suggestions, re-place the auto splits", (ev) => openCutsMenu(ev));
     const bDraft = button("draft prompts", "Queue a draft run: SeamStitch Swap Draft Prompts fills every empty prompt (others into their draft field)", () => queueDraft());
     const bMark = button("mark ▾", "Track and cache the source person mask (SAM3) up front, so it can be checked on the mask row before any render", (ev) => openMarkMenu(ev));
     const bPending = button("render pending", "Queue every chunk without a usable take, left to right (pins chain at execution)", () => renderPending());
     const bAssemble = button("assemble ▾", "Join the effective takes over the original audio", (ev) => openAssembleMenu(ev));
     const status = el("span", { marginLeft: "auto", color: C.dim, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "40%" });
     const gap = () => el("span", { width: "6px" });
-    bar1.append(bPlay, bMode, gap(), bZoomOut, bZoomIn, bFit, gap(), bSource, bDetect, bConfirm, bAuto, gap(),
+    bar1.append(bPlay, bMode, gap(), bZoomOut, bZoomIn, bFit, gap(), bDetect, bCuts, gap(),
         bDraft, bMark, bPending, bAssemble, status);
+
+    // The job and its video, picked rather than typed (the job / source widgets stay, hidden, so a
+    // saved workflow keeps its values by position).
+    const head = el("div", { display: "flex", gap: "6px", alignItems: "center", flexShrink: "0", flexWrap: "wrap",
+        padding: "3px 6px", background: "#1b2230", border: "1px solid #2b3446", borderRadius: "4px" });
+    const jobSel = el("select", { background: "#111", color: C.text, border: "1px solid #3b4252", borderRadius: "4px",
+        padding: "0.15em 0.3em", fontSize: "1em", maxWidth: "22em" });
+    jobSel.onpointerdown = (e) => e.stopPropagation();
+    jobSel.onchange = () => pickJob(jobSel.value);
+    const videoName = el("span", { fontWeight: "bold", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "30em" });
+    const videoFacts = el("span", { color: C.dim, whiteSpace: "nowrap" });
+    const bVideo = button("load video ▾", "Choose the job's video: from the input folder or upload one (or drop it on the node). A new job is named after it, and its cuts and splits are found straight away.", (ev) => openSourceMenu(ev));
+    head.append(el("span", { color: C.dim }, "job"), jobSel, el("span", { width: "8px" }), el("span", { color: C.dim }, "video"), videoName, videoFacts, bVideo);
 
     const canvas = el("canvas", { width: "100%", height: `${CANVAS_H}px`, display: "block", cursor: "default",
         borderRadius: "4px", touchAction: "none", flex: "0 0 auto" });
@@ -268,7 +282,7 @@ function buildPlanner(node) {
     fileInput.accept = "video/*";
     fileInput.onchange = async () => { if (fileInput.files[0]) await setSourceFile(fileInput.files[0]); fileInput.value = ""; };
 
-    root.append(videoBox, bar1, canvas, nextBar, selBox, warnBox, fileInput);
+    root.append(head, videoBox, bar1, canvas, nextBar, selBox, warnBox, fileInput);
 
     const widget = node.addDOMWidget("swap_planner_ui", "div", root, { serialize: false, hideOnZoom: false });
     // Keep the panel out of widgets_values (a saved blank shifted onto later widgets: timeline.js).
@@ -329,6 +343,7 @@ function buildPlanner(node) {
             S.fr = Math.round(+d.plan.source.fps) || 25; S.N = +d.plan.source.frames || 0;
             if (S.sel && !selValid()) S.sel = null;
             if (firstLoad) {
+                refreshJobs();
                 await probeSource();
                 if (!S.restored) { restoreUi(); S.restored = true; }
                 requestFit();
@@ -368,38 +383,80 @@ function buildPlanner(node) {
     }
 
     // ------------------------------------------------------------ source and job
-    async function createJob(source) {
-        if (!job()) {
-            const stem = source.split(/[\\/]/).pop().replace(/\.[^.]+$/, "").replace(/[^\w.-]+/g, "_");
-            jobW.value = stem || "swap_job";
+    // Loading a video starts a job named after it (taken names get _2, _3...), and its cuts and
+    // splits are found straight away (detect + plan). The dropdown switches between jobs.
+    async function refreshJobs() {
+        let jobs = [];
+        try { jobs = (await (await api.fetchApi("/seamstitch/swap/jobs")).json()).jobs || []; } catch { }
+        S.jobs = jobs;
+        jobSel.innerHTML = "";
+        const opt = (v, t) => { const o = el("option", null, t); o.value = v; jobSel.append(o); return o; };
+        if (!job() || !jobs.some(j => j.job === job())) opt("", job() ? `${job()} (no plan yet)` : "choose a job…");
+        for (const j of jobs) {
+            const v = (j.source || "").split(/[\\/]/).pop();
+            opt(j.job, `${j.job} · ${v} · ${j.chunks} chunk${j.chunks === 1 ? "" : "s"}${j.takes ? `, ${j.takes} take${j.takes === 1 ? "" : "s"}` : ""}`);
         }
+        opt(NEW_JOB, "＋ new job: load a video…");
+        jobSel.value = jobs.some(j => j.job === job()) ? job() : "";
+    }
+    function pickJob(v) {
+        if (v === NEW_JOB) {
+            jobSel.value = job();
+            const r = jobSel.getBoundingClientRect();
+            openSourceMenu({ clientX: r.left, clientY: r.bottom });
+            return;
+        }
+        if (!v || v === job()) return;
+        if (S.promptDirty) savePrompt();
+        jobW.value = v;
+        srcW.value = (S.jobs || []).find(j => j.job === v)?.source || "";
+        S.restored = false; S.sel = null; S.plan = null;
+        app.graph?.setDirtyCanvas(true, true);
+        reload();
+    }
+    async function createJob(source) {
+        const stem = source.split(/[\\/]/).pop().replace(/\.[^.]+$/, "");
+        let name = stem;
+        try { name = (await (await api.fetchApi(`/seamstitch/swap/jobs?name_for=${encodeURIComponent(stem)}`)).json()).free_name || stem; } catch { }
+        jobW.value = name;
         srcW.value = source;
+        app.graph?.setDirtyCanvas(true, true);
+        S.restored = false; S.sel = null; S.plan = null;
         const r = await op({ op: "create", source }, true);
-        if (r) { toast(`job ${job()} created on ${source.split(/[\\/]/).pop()}`, "green"); S.restored = false; await reload(); }
+        if (!r) return;
+        toast(`job ${name} created on ${stem}: finding its cuts and splits…`, "green");
+        await reload();
+        await detectPlan();
     }
     async function setSourceFile(file) {
-        try { toast(`uploading ${file.name}…`); const name = await uploadFile(file); await useSource(name); }
+        try { toast(`uploading ${file.name}…`); const name = await uploadFile(file); await createJob(name); }
         catch (e) { toast(`${file.name}: ${e}`, "red"); }
-    }
-    async function useSource(path) {
-        if (!P()) return createJob(path);
-        if (chunks().some(c => (c.takes || []).length)) { toast("the job has takes: start a new job (another job name) for another source", "amber"); return; }
-        srcW.value = path;
-        await op({ op: "source", source: path });
     }
     async function openSourceMenu(ev) {
         let files = [];
         try { files = (await (await api.fetchApi("/seamstitch/timeline/list")).json()).files || []; } catch { }
         popup(ev, [
+            { label: "load a video: a new job, named after it" },
             { text: "⬆ upload from disk…", run: () => fileInput.click() },
-            ...(srcW.value && !P() ? [{ text: `create job on: ${srcW.value}`, run: () => createJob(srcW.value) }] : []),
             { sep: true },
             { label: files.length ? "input folder (newest first)" : "no videos in the input folder" },
-            ...files.slice(0, 60).map(f => ({ text: f, run: () => useSource(f) })),
+            ...files.slice(0, 60).map(f => ({ text: f, run: () => createJob(f) })),
         ]);
     }
 
     // ------------------------------------------------------------ cuts and splits
+    async function detectPlan() {
+        if (!P()) return;
+        toast("finding the cuts and placing the splits…");
+        try {
+            const r = await api.fetchApi("/seamstitch/swap/detect_cuts", { method: "POST", body: JSON.stringify({ job: job(), plan: true }) });
+            const j = await r.json();
+            if (j.error) throw new Error(j.error);
+            toast(j.kept_splits ? `${j.found.length} cuts found and confirmed; splits kept (chunks have prompts or takes): cuts ▾ → auto splits to re-place them`
+                : `${j.found.length} cuts, splits at ${(j.splits || []).join(" / ") || "none (one chunk)"}: review them (delete a wrong cut, drag or re-mode a split)`, "green");
+        } catch (e) { toast(`detect + plan: ${e.message || e}`, "red"); }
+        await reload();
+    }
     async function detectCuts() {
         if (!P()) return;
         toast("detecting cuts…");
@@ -410,6 +467,15 @@ function buildPlanner(node) {
             toast(`detected ${j.found.length} cuts (${j.added.length} new suggestions): confirm, move or delete them`, "green");
         } catch (e) { toast(`detect cuts: ${e.message || e}`, "red"); }
         await reload();
+    }
+    function openCutsMenu(ev) {
+        if (!P()) return;
+        const sug = cuts().filter(c => c.confirmed === false).length;
+        popup(ev, [
+            { text: "detect cuts only (faint suggestions, splits untouched)", run: () => detectCuts() },
+            ...(sug ? [{ text: `confirm all ${sug} suggested cuts`, run: () => op({ op: "confirm_cuts" }) }] : []),
+            { text: "re-place the auto splits from the confirmed cuts", run: () => autoSplits() },
+        ]);
     }
     async function autoSplits() {
         const has = chunks().some(c => (c.takes || []).length || (c.prompt || "").trim());
@@ -660,11 +726,16 @@ function buildPlanner(node) {
         drawNext();
         drawWarnings();
         const has = !!P();
-        emptyHint.textContent = !job() ? "Set a job name (the job widget), then drop the source video here or use + source."
-            : S.err && !srcW.value ? `job ${job()}: no plan yet. Drop the source video here, or use + source.`
-                : S.err ? `job ${job()}: ${S.err}\n(+ source → "create job" to start it on ${srcW.value})` : "";
+        emptyText.textContent = !job() ? "Load a video to start a job (its cuts and splits are found straight away),\nor pick a job from the list above."
+            : `job ${job()} has no plan here${S.err ? ` (${S.err.split(":")[0]})` : ""}.\nLoad a video to start a job, or pick another from the list above.`;
         emptyHint.style.display = has ? "none" : "flex";
-        for (const b of [bDetect, bConfirm, bAuto, bDraft, bMark, bPending, bAssemble]) b.disabled = !has;
+        for (const b of [bDetect, bCuts, bDraft, bMark, bPending, bAssemble]) b.disabled = !has;
+        if (!S.jobs || S.jobsFor !== job()) { S.jobsFor = job(); refreshJobs(); }
+        else jobSel.value = S.jobs.some(j => j.job === job()) ? job() : "";
+        const src = P()?.source;
+        videoName.textContent = src ? src.path.split(/[\\/]/).pop() : "none";
+        videoName.title = src ? src.path : "";
+        videoFacts.textContent = src ? `${src.frames} frames · ${src.fps} fps · ${src.width}×${src.height} · ${(src.frames / src.fps).toFixed(1)} s` : "";
         bMode.textContent = { source: "source", quick: "quick", full: "full ●", mask: "mask" }[S.mode];
         bMode.title = "View: source (the original) · quick (each chunk's effective take, chained) · full (the latest assembly) · mask (the cached person mask)";
         updateOverlay();
@@ -778,15 +849,21 @@ function buildPlanner(node) {
             const st = statusOf(c.id), x0 = f2x(c.deliver[0]), x1 = f2x(c.deliver[1] + 1);
             if (x1 < 0 || x0 > w) return;
             const pct = Math.round((st.mask || 0) * 100);
-            const lost = (st.mask_empty || []).filter(f => f >= c.deliver[0] && f <= c.deliver[1]);
+            const inD = (f) => f >= c.deliver[0] && f <= c.deliver[1];
+            const lost = (st.mask_empty || []).filter(inD), filled = (st.mask_filled || []).filter(inD);
+            const span = (a) => `${a[0]}${a.length > 1 ? `-${a.at(-1)}` : ""}`;
             g.fillStyle = lost.length ? C.red : pct >= 100 ? "#d1fae5" : pct ? C.amber : C.faint;
             g.save(); g.beginPath(); g.rect(x0 + 2, MASK_Y, Math.max(0, x1 - x0 - 4), MASK_H); g.clip();
             g.fillText((pct >= 100 ? `mask ✓${(c.options || {}).mark === false ? " (marking off)" : ""}` : pct ? `mask ${pct}%` : "no mask: the render tracks its own")
-                + (lost.length ? ` · no person on ${lost.length} frame${lost.length === 1 ? "" : "s"} (${lost[0]}${lost.length > 1 ? `-${lost.at(-1)}` : ""})` : ""), x0 + 5, MASK_Y + MASK_H / 2);
+                + (lost.length ? ` · no person on ${lost.length} frame${lost.length === 1 ? "" : "s"} (${span(lost)})` : "")
+                + (filled.length ? ` · ${filled.length} filled (${span(filled)})` : ""), x0 + 5, MASK_Y + MASK_H / 2);
             g.restore();
-            // frames where SAM3 found nobody: a red tick each, so a lost track shows before any render
-            g.fillStyle = C.red;
-            for (const f of lost) g.fillRect(f2x(f), MASK_Y + 1, Math.max(1.5, S.pxPerFrame), MASK_H - 2);
+            // frames where SAM3 found nobody: red where still empty, amber where a short hole was filled
+            // from the frames either side, so a lost track shows before any render
+            for (const [fs, col] of [[filled, C.amber], [lost, C.red]]) {
+                g.fillStyle = col;
+                for (const f of fs) g.fillRect(f2x(f), MASK_Y + 1, Math.max(1.5, S.pxPerFrame), MASK_H - 2);
+            }
         });
 
         // prompt row: [Shot n] blocks at the confirmed cuts, dialogue in them

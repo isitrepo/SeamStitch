@@ -383,7 +383,8 @@ FILE_OPS = {"delete_take": _op_delete_take, "restore_take": _op_restore_take, "u
 
 
 # ---------------------------------------------------------------------------
-# cut detection (suggestions only: the user confirms, moves or deletes them)
+# cut detection: "detect + plan" (the default) brings the cuts in confirmed and places the auto
+# splits from them in one step, for one review; "detect" alone adds faint suggestions
 # ---------------------------------------------------------------------------
 
 def detect_cuts(path, fps, threshold=SCENE_THRESHOLD):
@@ -403,16 +404,33 @@ def detect_cuts(path, fps, threshold=SCENE_THRESHOLD):
     return sorted(out)
 
 
-def merge_detected(plan, found):
-    """Detected cuts in as unconfirmed suggestions. Confirmed or hand-placed cuts stay; earlier
-    unconfirmed suggestions are replaced; a suggestion on a frame that already has a cut is skipped."""
-    keep = [c for c in plan.get("cuts", []) if c.get("confirmed", True) or c.get("from") != "detected"]
+def merge_detected(plan, found, confirmed=False):
+    """Detected cuts in, as suggestions (or confirmed). Confirmed or hand-placed cuts stay; earlier
+    unconfirmed suggestions are replaced; a detection on a frame that already has a cut is skipped
+    (confirmed=True confirms a suggestion already there)."""
+    keep = [c for c in plan.get("cuts", []) if c.get("confirmed", True) or c.get("from") != "detected"
+            or (confirmed and c["frame"] in found)]
+    if confirmed:
+        for c in keep:
+            if c["frame"] in found:
+                c["confirmed"] = True
     have = {c["frame"] for c in keep}
     added = [f for f in found if f not in have]
-    plan["cuts"] = sorted(keep + [{"frame": f, "from": "detected", "confirmed": False} for f in added],
+    plan["cuts"] = sorted(keep + [{"frame": f, "from": "detected", "confirmed": bool(confirmed)} for f in added],
                           key=lambda c: c["frame"])
     sp.rebuild_chunks(plan)
     return added
+
+
+def detect_and_plan(plan, found):
+    """One step: the detected cuts confirmed, then the auto splits placed from every confirmed cut.
+    Splits are only replaced while no chunk has a prompt or a take; otherwise they're kept."""
+    added = merge_detected(plan, found, confirmed=True)
+    busy = any(c.get("takes") or (c.get("prompt") or "").strip() for c in plan.get("chunks", []))
+    res = {"added": added, "splits": None, "kept_splits": busy}
+    if not busy:
+        res["splits"] = apply_op(plan, {"op": "auto_splits"})["splits"]
+    return res
 
 
 def do_detect_cuts(body, out_dir=None):
@@ -420,9 +438,45 @@ def do_detect_cuts(body, out_dir=None):
     plan = sp.load_plan(pp)
     src = plan["source"]
     found = detect_cuts(src["path"], int(round(float(src["fps"]))), float(body.get("threshold", SCENE_THRESHOLD)))
-    added = []
-    plan = sp.update_plan(pp, lambda p: added.extend(merge_detected(p, found)), body.get("rev"))
-    return {"ok": True, "found": found, "added": added, "rev": plan["rev"]}
+    out = {"added": [], "splits": None, "kept_splits": False}
+    if body.get("plan"):
+        plan = sp.update_plan(pp, lambda p: out.update(detect_and_plan(p, found)), body.get("rev"))
+    else:
+        plan = sp.update_plan(pp, lambda p: out["added"].extend(merge_detected(p, found)), body.get("rev"))
+    return dict(out, ok=True, found=found, rev=plan["rev"])
+
+
+def list_jobs(out_dir=None):
+    """Every job under output/seamstitch_swap/, newest first: name, source, frames, chunks, takes."""
+    base = os.path.join(out_dir or output_dir(), sp.JOBS_SUBDIR)
+    jobs = []
+    if not os.path.isdir(base):
+        return jobs
+    for name in os.listdir(base):
+        pp = sp.plan_path(os.path.join(base, name))
+        if not os.path.isfile(pp):
+            continue
+        try:
+            p = sp.load_plan(pp)
+        except sp.PlanError:
+            continue
+        src = p.get("source") or {}
+        jobs.append({"job": name, "source": src.get("path"), "frames": src.get("frames"), "fps": src.get("fps"),
+                     "chunks": len(p.get("chunks") or []), "takes": sum(len(c.get("takes") or []) for c in p.get("chunks") or []),
+                     "saved": p.get("saved") or p.get("created"), "mtime": os.path.getmtime(pp)})
+    jobs.sort(key=lambda j: j["mtime"], reverse=True)
+    return jobs
+
+
+def free_job_name(stem, out_dir=None):
+    """A job name for a video: its stem made folder-safe, with _2, _3... when that job exists."""
+    base = re.sub(r"[^\w.-]+", "_", stem).strip("._") or "swap_job"
+    have = {j["job"] for j in list_jobs(out_dir)}
+    name, i = base, 2
+    while name in have:
+        name = f"{base}_{i}"
+        i += 1
+    return name
 
 
 def do_op(body, out_dir=None):
@@ -523,8 +577,9 @@ def chunk_status(plan, jd):
     fps = int(round(float((plan.get("source") or {}).get("fps") or 25)))
     # a frame counts only if the segment that covers it (the newest, as renders read it) is empty there
     segs = sorted(plan.get("masks") or [], key=lambda m: str(m.get("created", "")), reverse=True)
-    empty = sorted(f for m in segs for f in mask_empty_frames(jd, m, fps)
-                   if next(s for s in segs if s["range"][0] <= f <= s["range"][1]) is m)
+    wins = lambda f, m: next(s for s in segs if s["range"][0] <= f <= s["range"][1]) is m  # noqa: E731
+    empty = sorted(f for m in segs for f in mask_empty_frames(jd, m, fps) if wins(f, m))
+    filled = sorted(f for m in segs for f in m.get("filled") or [] if wins(f, m))
     for c in plan.get("chunks", []):
         t, st = sp.effective_take(c)
         if t is not None and not sp.take_covers(t, *c["deliver"]):
@@ -536,7 +591,7 @@ def chunk_status(plan, jd):
              "prompt": "empty" if not (c.get("prompt") or "").strip() else c.get("prompt_state") or "edited",
              "draft": bool((c.get("draft") or "").strip()),
              "mask": round(sp.mask_coverage(plan, r0, r1) / float(r1 - r0 + 1), 4),
-             "mask_empty": [f for f in empty if r0 <= f <= r1]}
+             "mask_empty": [f for f in empty if r0 <= f <= r1], "mask_filled": [f for f in filled if r0 <= f <= r1]}
         if c.get("state") == "rendering":
             d["rendering"] = c.get("rendering")
         elif c.get("state") == "failed":
@@ -967,6 +1022,14 @@ try:
             except Exception:
                 pass
             return web.json_response(res)
+        except Exception as e:
+            return web.json_response({"error": str(e)}, status=400)
+
+    @PromptServer.instance.routes.get("/seamstitch/swap/jobs")
+    async def _jobs_route(request):
+        try:
+            stem = request.query.get("name_for")
+            return web.json_response({"jobs": list_jobs(), "free_name": free_job_name(stem) if stem else None})
         except Exception as e:
             return web.json_response({"error": str(e)}, status=400)
 
