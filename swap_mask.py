@@ -72,7 +72,10 @@ def save_mask(mark, mask, preview=None, save_preview=True):
     except BaseException:
         shutil.rmtree(d, ignore_errors=True)
         raise
+    # frames where SAM3 found nobody: the mask row marks them, so a lost track is seen before a render
+    empty = [a + i for i in range(n) if float(mask[i].max()) <= 0.5]
     entry = {"id": mid, "range": [a, b], "frames": n, "file": f"{rel}/mask.mkv", "preview": prev, "size": [w, h],
+             "empty": empty,
              "chunk": mark.get("chunk"), "created": sp.now(), "nonce": mark.get("nonce"),
              "seconds": round(time.time() - float(mark.get("started") or time.time()))}
 

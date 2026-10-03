@@ -173,16 +173,23 @@ def test_mark_run_caches_a_mask_that_the_render_run_reuses(nodes):
     got = (imgs.numpy() * 255 + 0.5).astype(np.uint8)
     assert np.array_equal(got, np.stack(nodes["src"][r0:r1 + 1]))
     m = (torch.rand((r1 - r0 + 1, 12, 16)) > 0.5).float()
+    m[2] = 0                                                  # SAM3 lost the person on one frame
     with pytest.raises(sm.MaskError, match="1:1"):
         sm.save_mask(mark, m[:-1])
     e = sm.SeamStitchSwapMask().save(mark, m, True, None)["result"][0]
     q = sp.load_plan(nodes["plan"])
     seg = q["masks"][0]
     assert seg["id"] == e == "m001" and seg["range"] == [r0, r1] and seg["size"] == [16, 12]
+    assert seg["empty"] == [r0 + 2]
+    # a segment cached before "empty" was recorded is scanned from its file, with the same answer
+    del seg["empty"]
+    assert spl.mask_empty_frames(str(nodes["dir"]), seg, FR) == [r0 + 2]
+    seg["empty"] = [r0 + 2]
     for f in ("mask.mkv", "preview.mp4"):
         assert os.path.isfile(os.path.join(nodes["dir"], os.path.dirname(seg["file"]), f))
     st = {s["chunk"]: s for s in spl.chunk_status(q, str(nodes["dir"]))}
     assert st[c[1]["id"]]["mask"] == 1.0 and st[c[0]["id"]]["mask"] < 1.0
+    assert st[c[1]["id"]]["mask_empty"] == [r0 + 2]
     # the render run of that chunk carries the cached mask, lossless, held frames repeated
     out = _run(nodes, "render", chunk=c[1]["id"], seed=3)["result"]
     assert out[18] is True and out[17].shape[0] == out[5]
