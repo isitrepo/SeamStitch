@@ -266,6 +266,8 @@ FOLLOW_SIDE = 25                 # frames either side of a splice for the join's
 
 
 def _src_mask_path(job, take):
+    if not take.get("file"):                    # the source pseudo-take of a kept chunk
+        return None
     for name in ("mask_src.mkv", "mask_src.mp4"):
         p = os.path.join(job, os.path.dirname(take["file"]), name)
         if os.path.isfile(p):
@@ -300,6 +302,8 @@ def _join_follow(job, a, b, splice, lo, hi):
 
 
 def _mask_path(job, take):
+    if not take.get("file"):                    # the source pseudo-take of a kept chunk
+        return None
     for name in ("mask_out.mkv", "mask_out.mp4"):
         p = os.path.join(job, os.path.dirname(take["file"]), name)
         if os.path.isfile(p):
@@ -356,6 +360,9 @@ def assemble(plan_file, hand_back=12, fmt="video/h264-mp4", crf=12, pix_fmt="yuv
     flags = []
     eff = []
     for c in chunks:
+        if sp.is_kept(c):                       # kept as the original (§4.10): the source, untouched
+            eff.append((dict(sp.source_take(N), _path=source), sp.ORIGINAL))
+            continue
         t, state = sp.effective_take(c)
         if t is not None and not sp.take_covers(t, *c["deliver"]):
             flags.append({"chunk": c["id"], "code": "range_changed",
@@ -467,9 +474,16 @@ def assemble(plan_file, hand_back=12, fmt="video/h264-mp4", crf=12, pix_fmt="yuv
             f0, f1 = j["fade"]
             lm = sj.means(read_range(a["_path"], fr, a["render"][0], f0, f1, (w, h)))
             rm = sj.means(read_range(b["_path"], fr, b["render"][0], f0, f1, (w, h)))
-            j["ratios"] = sj.fade_ratios(lm, rm)
             j["weights"] = sj.fade_weights(f1 - f0 + 1)
-            j["decay"] = j["ratios"][-1]
+            if j.get("fade_dir") == "out":
+                # into the original on the right: the render is level-matched to the source and fades
+                # out; the source is never re-graded (no decay after the splice), and the render eases
+                # toward the first match over the hand-back frames before the fade
+                j["ratios"] = sj.fade_ratios(rm, lm)
+                j["pre"] = j["ratios"][0]
+            else:
+                j["ratios"] = sj.fade_ratios(lm, rm)
+                j["decay"] = j["ratios"][-1]
 
     try:
         spec = _format_spec(fmt, crf, pix_fmt)
@@ -514,12 +528,19 @@ def assemble(plan_file, hand_back=12, fmt="video/h264-mp4", crf=12, pix_fmt="yuv
                         g = sj.decay_gain(left["decay"], i, left["hand_back"])
                         if g is not None:
                             frame = sj.apply_gain(frame, g)
+                if right is not None and right.get("pre") is not None:
+                    g = sj.pre_gain(right["pre"], right["fade"][0] - f, right["hand_back"])
+                    if g is not None:
+                        frame = sj.apply_gain(frame, g)
                 if right is not None and right["repair"] == sp.REPAIR_FADE and f >= right["fade"][0]:
                     if k + 1 not in readers:
                         readers[k + 1] = reader(k + 1)
                     r = readers[k + 1].read(f)
                     i = f - right["fade"][0]
-                    frame = sj.fade_frame(frame, r, right["ratios"][i], right["weights"][i])
+                    if right.get("fade_dir") == "out":
+                        frame = sj.fade_frame_out(frame, r, right["ratios"][i], right["weights"][i])
+                    else:
+                        frame = sj.fade_frame(frame, r, right["ratios"][i], right["weights"][i])
                 enc.write(frame)
                 lum[f] = sj.luma(frame)
                 if f in seam_frames:
@@ -582,9 +603,9 @@ def assemble(plan_file, hand_back=12, fmt="video/h264-mp4", crf=12, pix_fmt="yuv
         if not f_lo < j["splice"] <= f_hi:
             continue
         a, b = eff[k][0], eff[k + 1][0]
-        row = {key: j[key] for key in ("split", "frame", "type", "splice", "repair", "override", "hand_back", "fade",
-                                       "linked", "stale", "left_chunk", "right_chunk", "left_take", "right_take",
-                                       "lock_options")}
+        row = {key: j.get(key) for key in ("split", "frame", "type", "splice", "repair", "override", "hand_back", "fade",
+                                           "linked", "stale", "left_chunk", "right_chunk", "left_take", "right_take",
+                                           "lock_options", "original", "fade_dir")}
         if j["gains"] is not None:
             row["lock_gain_first"] = [round(float(x), 5) for x in j["gains"][0]]
         for key in ("lock_mode", "lock_fit", "lock_mode_note"):
@@ -597,7 +618,7 @@ def assemble(plan_file, hand_back=12, fmt="video/h264-mp4", crf=12, pix_fmt="yuv
         if measure:
             lo_t = max(int(a["render"][0]) if a else starts[k], f_lo)
             hi_t = min(int(b["render"][1]) if b else ends[k + 1], f_hi)
-            r_start = int(b["render"][0]) if b else j["splice"]
+            r_start = int(b["render"][0]) if b and not b.get("source") else (j["fade"] or [j["splice"]])[0]
             lo, hi = sj.measure_window(r_start, j["splice"], j["hand_back"])
             row["frame_luma"] = sj.jumps(lum[lo_t:hi_t + 1], lo_t, j["splice"], max(lo, lo_t), min(hi, hi_t + 1))
             ma = _mask_path(job, a) if a else None

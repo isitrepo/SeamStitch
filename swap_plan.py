@@ -20,6 +20,19 @@ last frame is held (hold) and the held frames are dropped again.
 Each take records which take its pins came from and the splits it was rendered for. That
 lineage decides each join's type (straight, forward, re-roll entry, re-roll exit, stale,
 pending), and the type decides the splice point and the default repair (swap_join.py).
+
+KEEP ORIGINAL (design §4.10, B3b). A chunk with `keep: true` is never rendered, marked or
+drafted: it has no render range, length or fill, and the assembly delivers the source frames
+there untouched. Its joins:
+  * straight split: a plain cut between the source and the render (on a source cut it's clean;
+    mid-shot it warns, since H3 redraws the whole room);
+  * anchored onto the original, kept on the LEFT: the render starts `overlap` frames early as
+    usual, its first `anchors` frames pinned to the SOURCE, and the join is the re-roll entry's
+    fade from the source into the render over the overlap (splice at J);
+  * anchored onto the original, kept on the RIGHT (the mirror): the render runs `overlap` frames
+    past J into the kept stretch, its last `anchors` frames pinned to the source, and it fades
+    out into the untouched source over [J, J + overlap - 1] (splice at J + overlap).
+A take pinned to the source records `{"source": true, "frames": [a, b]}` for that side.
 """
 
 import copy
@@ -54,6 +67,8 @@ DEFAULT_SETTINGS = {
 
 # join types
 STRAIGHT, FORWARD, ENTRY, EXIT, STALE, PENDING = "straight", "forward", "entry", "exit", "stale", "pending"
+ORIGINAL = "original"          # both sides kept: the source either side, nothing to join
+SOURCE_TAKE_ID = "source"      # the "take" a kept chunk delivers: the source itself
 # repairs
 REPAIR_NONE, REPAIR_LOCK, REPAIR_FADE, REPAIR_CUT = "none", "lock", "fade", "cut"
 DEFAULT_REPAIR = {STRAIGHT: REPAIR_NONE, FORWARD: REPAIR_LOCK, ENTRY: REPAIR_FADE, EXIT: REPAIR_LOCK,
@@ -116,8 +131,18 @@ def _norm_splits(splits):
     return out
 
 
-def geometry(frames, splits, cuts=(), settings=None):
-    """Chunks for a source of `frames` frames split at `splits`.
+def source_take(frames):
+    """The pseudo-take a kept chunk delivers: the source's own frames, all of them."""
+    return {"id": SOURCE_TAKE_ID, "render": [0, int(frames) - 1], "source": True, "state": "ok"}
+
+
+def is_kept(chunk):
+    return bool(chunk and chunk.get("keep"))
+
+
+def geometry(frames, splits, cuts=(), settings=None, keep=()):
+    """Chunks for a source of `frames` frames split at `splits`. `keep`: the left-split ids
+    (None for the first chunk) of the chunks kept as the original (§4.10).
 
     Returns a list of dicts, one per chunk, in order:
       deliver [a, b]   source frames this chunk delivers (inclusive)
@@ -127,6 +152,9 @@ def geometry(frames, splits, cuts=(), settings=None):
       base             the unfilled render length
       fill             None or {"kind": "tail"|"head"|"hold", "frames": n}
       left / right     the bounding split dicts (None at the ends of the video)
+      keep             True for a kept chunk: render None, held / length / base 0, fill None
+    A rendered chunk whose anchored split borders a kept chunk on its RIGHT renders `overlap`
+    frames past that split (its fade out into the original); on its left nothing changes.
     """
     s = _settings(settings)
     n_src = int(frames)
@@ -140,13 +168,21 @@ def geometry(frames, splits, cuts=(), settings=None):
     cut_frames = confirmed_cuts(cuts)
     ov = int(s["overlap"])
     bounds = [None] + sp + [None]
+    keep = set(keep or ())
+    kept = [(bounds[k]["id"] if bounds[k] else None) in keep for k in range(len(sp) + 1)]
     chunks = []
     for k in range(len(sp) + 1):
         left, right = bounds[k], bounds[k + 1]
         a = left["frame"] if left else 0
         b = right["frame"] - 1 if right else n_src - 1
+        if kept[k]:
+            chunks.append({"deliver": [a, b], "render": None, "held": 0, "length": 0, "base": 0, "fill": None,
+                           "left": left, "right": right, "keep": True})
+            continue
         r0 = max(0, a - ov) if left and left["mode"] == MODE_ANCHORED else a
         r1 = b
+        if right and right["mode"] == MODE_ANCHORED and k + 1 < len(kept) and kept[k + 1]:
+            r1 = min(n_src - 1, b + ov)       # the overlap runs into the kept stretch (fade out)
         base = r1 - r0 + 1
         length = snap_up(base)
         n = length - base
@@ -165,17 +201,20 @@ def geometry(frames, splits, cuts=(), settings=None):
                 held = n
                 fill = {"kind": "hold", "frames": n}
         chunks.append({"deliver": [a, b], "render": [r0, r1], "held": held, "length": length, "base": base,
-                       "fill": fill, "left": left, "right": right})
+                       "fill": fill, "left": left, "right": right, "keep": False})
     return chunks
 
 
-def warnings(frames, splits, cuts=(), settings=None, chunks=None):
-    """Every §4.1 warning (none of them blocks). Each: {code, text, split|chunk, ...}."""
+def warnings(frames, splits, cuts=(), settings=None, chunks=None, keep=()):
+    """Every §4.1 warning (none of them blocks). Each: {code, text, split|chunk, ...}. Kept chunks
+    (§4.10) have no length warnings; a split between two kept chunks has none at all."""
     s = _settings(settings)
     cut_frames = confirmed_cuts(cuts)
-    chunks = chunks if chunks is not None else geometry(frames, splits, cuts, s)
+    chunks = chunks if chunks is not None else geometry(frames, splits, cuts, s, keep)
     out = []
     for i, c in enumerate(chunks):
+        if c.get("keep"):
+            continue
         L = c["length"]
         where = {"chunk": i, "deliver": c["deliver"]}
         if L < s["floor"]:
@@ -187,19 +226,36 @@ def warnings(frames, splits, cuts=(), settings=None, chunks=None):
     for i, c in enumerate(chunks[1:], start=1):
         sp = c["left"]
         J = sp["frame"]
+        lk, rk = bool(chunks[i - 1].get("keep")), bool(c.get("keep"))
+        if lk and rk:
+            continue                                  # the source either side: nothing to join
         if sp["mode"] == MODE_ANCHORED:
-            lo, hi = c["render"][0] - s["guard"], J + s["guard"]
+            if rk:                                    # the overlap runs into the kept stretch on the right
+                lo, hi = J - s["guard"], chunks[i - 1]["render"][1] + s["guard"]
+            else:
+                lo, hi = c["render"][0] - s["guard"], J + s["guard"]
             inside = [x for x in cut_frames if lo <= x <= hi]
             if inside:
                 out.append({"split": sp.get("id"), "frame": J, "code": "guard", "cuts": inside, "guard": [lo, hi],
                             "text": (f"anchored split at {J}: cut at {', '.join(map(str, inside))} inside its overlap "
                                      f"guard [{lo}, {hi}]. Make it a straight cut on that cut, or move it clear."),
                             "remedies": [{"action": "straight_cut", "frame": inside[0]},
-                                         {"action": "move", "clear": clearance(frames, splits, cuts, s, sp.get("id"))}]})
+                                         {"action": "move", "clear": clearance(frames, splits, cuts, s, sp.get("id"),
+                                                                               keep)}]})
         else:
             if not any(abs(x - J) <= 1 for x in cut_frames):
-                out.append({"split": sp.get("id"), "frame": J, "code": "no_cut",
-                            "text": f"straight split at {J}: visible jump, the source doesn't cut here"})
+                if lk or rk:
+                    side = "left" if lk else "right"
+                    out.append({"split": sp.get("id"), "frame": J, "code": "no_cut", "kept": side,
+                                "text": (f"straight split at {J} between the original ({side}) and a render, mid-shot: "
+                                         f"the room changes here (H3 redraws the whole frame). Put it on a cut, or "
+                                         f"anchor it onto the original."),
+                                "remedies": [{"action": "anchor_onto_original"}]
+                                + ([{"action": "move_to_cut", "frame": min(cut_frames, key=lambda x: abs(x - J))}]
+                                   if cut_frames else [])})
+                else:
+                    out.append({"split": sp.get("id"), "frame": J, "code": "no_cut",
+                                "text": f"straight split at {J}: visible jump, the source doesn't cut here"})
     return out
 
 
@@ -207,13 +263,16 @@ def _guard_clear(chunks, k, cut_frames, guard):
     """Is the anchored split on the left of chunk k clear of every cut (after the fill)?"""
     c = chunks[k]
     sp = c["left"]
-    if sp is None or sp["mode"] != MODE_ANCHORED:
+    if sp is None or sp["mode"] != MODE_ANCHORED or (c.get("keep") and chunks[k - 1].get("keep")):
         return True
-    lo, hi = c["render"][0] - guard, sp["frame"] + guard
+    if c.get("keep"):
+        lo, hi = sp["frame"] - guard, chunks[k - 1]["render"][1] + guard
+    else:
+        lo, hi = c["render"][0] - guard, sp["frame"] + guard
     return not any(lo <= x <= hi for x in cut_frames)
 
 
-def clearance(frames, splits, cuts, settings, split_id):
+def clearance(frames, splits, cuts, settings, split_id, keep=()):
     """The nearest frames, forward and backward, an anchored split could move to so that its
     overlap guard holds no cut (after the fill), the other splits unchanged. For the strip."""
     s = _settings(settings)
@@ -231,7 +290,7 @@ def clearance(frames, splits, cuts, settings, split_id):
             trial = [dict(d) for d in sp]
             trial[idx]["frame"] = J
             try:
-                ch = geometry(frames, trial, cut_frames, s)
+                ch = geometry(frames, trial, cut_frames, s, keep)
             except PlanError:
                 continue
             if _guard_clear(ch, idx + 1, cut_frames, s["guard"]):
@@ -332,6 +391,12 @@ def _pin_take(take, side):
     return p.get("take") if isinstance(p, dict) else None
 
 
+def _pin_source(take, side):
+    """Were the take's pins on this side the source's own frames (anchored onto the original)?"""
+    p = (take.get("pins") or {}).get(side) if take else None
+    return isinstance(p, dict) and bool(p.get("source"))
+
+
 def _rendered_for(take, side, J):
     """Was the take rendered for an anchored split at J on this side?"""
     sp = (take.get("splits") or {}).get(side) if take else None
@@ -344,25 +409,50 @@ def join_info(split, a, b, settings=None):
     Returns {type, splice, repair, hand_back, fade, linked, stale, override}:
       splice  the first output frame taken from the right take
       fade    [r0, splice - 1] for a fade (the right take's overlap), else None
-    Types (§4.2):
+    Types (§4.2, §4.10):
+      original  both sides are kept: the source either side, nothing to join
       straight  the split's mode is cut
       pending   a side has no usable take
+      entry     (kept left)  b's start pins are the source's: a fade from the source into b over
+                its overlap, splice J; info["original"] = "left"
+      exit      (kept right) a's end pins are the source's: a fade out of a into the source over
+                [J, J + overlap - 1], splice J + overlap; info["original"] = "right"
       forward   b's start pins came from a, b has no end pins        splice J, lock
       entry     b's start pins came from a, b also has end pins      fade over b's overlap, splice J
       exit      a's end pins came from b                              splice at a's end-pin start, lock
       stale     anchored, neither take rendered against the other for this J
     A per-split override (split["repair"] = {"mode": ..., "hand_back": ...}) replaces the
-    default repair ("auto" keeps it)."""
+    default repair ("auto" keeps it). A kept side is passed as source_take(...)."""
     s = _settings(settings)
     J = int(split["frame"])
     over = split.get("repair") or {}
     hb = int(over.get("hand_back") or s["hand_back"])
     info = {"split": split.get("id"), "frame": J, "splice": J, "fade": None, "hand_back": hb,
-            "linked": False, "stale": False, "override": None}
+            "linked": False, "stale": False, "override": None, "original": None}
+    a_src, b_src = bool(a and a.get("source")), bool(b and b.get("source"))
+    if a_src and b_src:
+        info.update(type=ORIGINAL, repair=REPAIR_NONE, original="both")
+        return info
+    if a_src or b_src:
+        info["original"] = "left" if a_src else "right"
     if split.get("mode") == MODE_CUT:
         info["type"] = STRAIGHT
     elif a is None or b is None:
         info["type"] = PENDING
+    elif a_src:                                     # anchored onto the original, kept on the left
+        if _pin_source(b, "start") and _rendered_for(b, "left", J):
+            info["type"] = ENTRY
+            info["linked"] = True
+        else:
+            info["type"] = STALE
+            info["stale"] = True
+    elif b_src:                                     # anchored onto the original, kept on the right
+        if _pin_source(a, "end") and _rendered_for(a, "right", J):
+            info["type"] = EXIT
+            info["linked"] = True
+        else:
+            info["type"] = STALE
+            info["stale"] = True
     elif _pin_take(b, "start") == a.get("id") and _rendered_for(b, "left", J):
         info["type"] = ENTRY if _pin_take(b, "end") else FORWARD
         info["linked"] = True
@@ -374,6 +464,8 @@ def join_info(split, a, b, settings=None):
         info["type"] = STALE
         info["stale"] = True
     repair = DEFAULT_REPAIR[info["type"]]
+    if info["original"] and info["type"] in (ENTRY, EXIT, STALE):
+        repair = REPAIR_FADE                        # the original is never locked or re-graded: fade
     mode = over.get("mode")
     if mode and mode != "auto" and info["type"] not in (STRAIGHT, PENDING):
         if mode not in (REPAIR_LOCK, REPAIR_FADE, REPAIR_CUT):
@@ -383,8 +475,20 @@ def join_info(split, a, b, settings=None):
     if repair == REPAIR_CUT:
         repair = REPAIR_NONE
         info["override"] = REPAIR_CUT
+    if repair == REPAIR_LOCK and info["original"]:
+        repair = REPAIR_FADE                        # never lock: the original side is never re-graded
     info["repair"] = repair
-    if repair == REPAIR_FADE:
+    if repair == REPAIR_FADE and info["original"] == "right":
+        # fade OUT of the render into the original: over the render's frames past J
+        r1 = int(a["render"][1])
+        end = min(r1, J + int(s["overlap"]) - 1)
+        if end >= J:
+            info["fade"] = [J, end]
+            info["splice"] = end + 1
+            info["fade_dir"] = "out"
+        else:
+            info["repair"] = REPAIR_NONE
+    elif repair == REPAIR_FADE:
         r0 = int(b["render"][0])
         if a is not None:
             r0 = max(r0, int(a["render"][0]))
@@ -466,6 +570,14 @@ def join_verdict(j, m):
     return join_flags(j, m)["verdict"]
 
 
+def chunk_take(plan, chunk):
+    """(take, state) a chunk delivers: the source for a kept chunk ("original"), else its
+    effective take (§4.4)."""
+    if is_kept(chunk):
+        return source_take(plan["source"]["frames"]), ORIGINAL
+    return effective_take(chunk)
+
+
 def plan_joins(plan):
     """Every join of a plan in order: join_info plus the chunks either side, their effective
     takes and states. A take that no longer covers its chunk counts as pending."""
@@ -477,8 +589,8 @@ def plan_joins(plan):
         split = next((d for d in plan.get("splits", []) if d.get("id") == R.get("left")), None)
         if split is None:
             raise PlanError(f"chunk {R.get('id')} has no left split {R.get('left')!r}")
-        a, a_state = effective_take(L)
-        b, b_state = effective_take(R)
+        a, a_state = chunk_take(plan, L)
+        b, b_state = chunk_take(plan, R)
         if a is not None and not take_covers(a, *L["deliver"]):
             a, a_state = None, "range changed"
         if b is not None and not take_covers(b, *R["deliver"]):
@@ -530,8 +642,10 @@ def rebuild_chunks(plan):
     options, takes, choice). A chunk is identified by the split on its left (None = the first),
     so moving a split keeps its chunks, and adding one adds a chunk. Returns the warnings."""
     src = plan["source"]
-    geo = geometry(src["frames"], plan.get("splits", []), plan.get("cuts", []), plan.get("settings"))
     old = {c.get("left"): c for c in plan.get("chunks", [])}
+    split_ids = {d.get("id") for d in plan.get("splits", [])} | {None}
+    keep = {c.get("left") for c in plan.get("chunks", []) if is_kept(c) and c.get("left") in split_ids}
+    geo = geometry(src["frames"], plan.get("splits", []), plan.get("cuts", []), plan.get("settings"), keep)
     chunks = []
     for g in geo:
         left = g["left"]["id"] if g["left"] else None
@@ -543,7 +657,7 @@ def rebuild_chunks(plan):
         chunks.append(c)
     plan["chunks"] = chunks
     plan["warnings"] = warnings(src["frames"], plan.get("splits", []), plan.get("cuts", []),
-                                plan.get("settings"), geo)
+                                plan.get("settings"), geo, keep)
     return plan["warnings"]
 
 
