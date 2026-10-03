@@ -26,14 +26,14 @@ import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
 
 const C = {
-    bg: "#16181d", ruler: "#20242c", tick: "#6b7280", text: "#e5e7eb", dim: "#9ca3af", faint: "#4b5563",
+    bg: "#16181d", ruler: "#20242c", tick: "#6b7280", text: "#f3f4f6", dim: "#b4bccb", faint: "#4b5563", panel: "#0f1115",
     row: "#1b1e25", rowAlt: "#1e2129",
     pending: "#3a3f4b", unreviewed: "#2f4a7a", chosen: "#3b62a8", sel: "#8fb3ff",
     amber: "#fbbf24", amberFill: "#5c4512", red: "#f87171", redFill: "#5b1f24", green: "#34d399",
     render: "rgba(143,179,255,0.45)", fill: "rgba(251,191,36,0.55)", held: "rgba(248,113,113,0.55)",
     mask: "#2e7d5b", maskOld: "#1f4f3c", prompt: "#2a3142", promptDraft: "#1e3a5f", shot: "#3b4252",
     play: "#f59e0b", cut: "#e5e7eb", cutSug: "rgba(156,163,175,0.55)", draft: "#60a5fa",
-    kept: "#22302a", keptHatch: "rgba(167,243,208,0.16)", keptText: "#a7f3d0", trim: "#34d399",
+    kept: "#22302a", keptHatch: "rgba(167,243,208,0.16)", keptText: "#86efac", trim: "#34d399",
 };
 const VERDICT = { green: C.green, amber: C.amber, red: C.red };
 const TYPE_LABEL = { forward: "F", entry: "E", exit: "X" };
@@ -235,6 +235,7 @@ function buildPlanner(node) {
         display: "flex", flexDirection: "column", gap: "4px", width: "100%", height: "100%",
         boxSizing: "border-box", fontFamily: "sans-serif", fontSize: "11px", color: C.text,
         userSelect: "none", outline: "none", overflow: "hidden",
+        background: C.panel, padding: "5px", borderRadius: "6px",      // Kay: the node's grey made the text hard to read
     });
     root.tabIndex = 0;
 
@@ -263,13 +264,14 @@ function buildPlanner(node) {
     const bFit = button("fit", "Fit the whole source into the node", () => fit());
     const bDetect = button("detect + plan", "Find the cuts (ffmpeg scene > 0.15) and place the splits from them in one step: the cuts come in confirmed, the auto splits (209-frame renders, every 197, nudged off the cuts) follow. Then review: delete a wrong cut, drag or re-mode a split. Runs by itself when a video is loaded.", () => detectPlan());
     const bCuts = button("cuts ▾", "Cut detection only, confirm suggestions, re-place the auto splits", (ev) => openCutsMenu(ev));
+    const bClear = button("clear all", "Start fresh: remove every cut, split, kept stretch and prompt (one chunk over the whole video). Takes stay on disk (listed under removed chunks) and the cached masks stay. Then 'detect + plan' starts over.", () => clearAll());
     const bDraft = button("draft prompts", "Queue a draft run: SeamStitch Swap Draft Prompts fills every empty prompt (others into their draft field)", () => queueDraft());
     const bMark = button("mark ▾", "Track and cache the source person mask (SAM3) up front, so it can be checked on the mask row before any render", (ev) => openMarkMenu(ev));
     const bPending = button("render pending", "Queue every chunk without a usable take, left to right (pins chain at execution)", () => renderPending());
     const bAssemble = button("assemble ▾", "Join the effective takes over the original audio", (ev) => openAssembleMenu(ev));
     const status = el("span", { marginLeft: "auto", color: C.dim, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "40%" });
     const gap = () => el("span", { width: "6px" });
-    bar1.append(bPlay, bMode, gap(), bZoomOut, bZoomIn, bFit, gap(), bDetect, bCuts, gap(),
+    bar1.append(bPlay, bMode, gap(), bZoomOut, bZoomIn, bFit, gap(), bDetect, bCuts, bClear, gap(),
         bDraft, bMark, bPending, bAssemble, status);
 
     // The job and its video, picked rather than typed (the job / source widgets stay, hidden, so a
@@ -294,7 +296,9 @@ function buildPlanner(node) {
         overflowY: "auto", borderTop: "1px solid #2b3040", paddingTop: "3px" });
     const nextBar = el("div", { display: "flex", gap: "6px", alignItems: "center", height: "1.9em", overflow: "hidden", padding: "2px 6px", flexShrink: "0",
         background: "#1e1b2e", border: "1px solid #3b2d5c", borderRadius: "4px", flexWrap: "wrap" });
-    const warnBox = el("div", { display: "flex", flexDirection: "column", gap: "1px", flex: "0 0 auto", height: "5em", overflowY: "auto" });
+    // The warnings: a titled panel, one readable row each (wrapped, not cut off), click one to jump to it.
+    const warnBox = el("div", { display: "flex", flexDirection: "column", gap: "2px", flex: "0 0 auto", height: "8.5em", overflowY: "auto",
+        background: "#17140d", border: "1px solid #4a3b12", borderRadius: "4px", padding: "3px 6px", boxSizing: "border-box" });
 
     const fileInput = el("input", { display: "none" });
     fileInput.type = "file";
@@ -503,6 +507,17 @@ function buildPlanner(node) {
             ...(sug ? [{ text: `confirm all ${sug} suggested cuts`, run: () => op({ op: "confirm_cuts" }) }] : []),
             { text: "re-place the auto splits from the confirmed cuts", run: () => autoSplits() },
         ]);
+    }
+    async function clearAll() {
+        if (!P()) return;
+        const takes = chunks().reduce((a, c) => a + (c.takes || []).length, 0);
+        const prompts = chunks().filter(c => (c.prompt || "").trim()).length;
+        if (!confirm(`Clear everything on job ${job()}: ${cuts().length} cuts, ${splits().length} splits, ` +
+            `${chunks().filter(kept).length} kept stretches and ${prompts} prompts?\n\n` +
+            `Nothing is erased: ${takes ? `${takes} takes stay on disk (listed under removed chunks), ` : ""}` +
+            `the cached masks stay. Then press 'detect + plan' to start over.`)) return;
+        const r = await op({ op: "clear_all" }, true);
+        if (r) { S.sel = null; toast(`cleared: ${r.result.cleared.cuts} cuts, ${r.result.cleared.splits} splits, ${r.result.cleared.kept} kept, ${r.result.cleared.prompts} prompts; masks kept (${r.result.cleared.masks_kept})`, "green"); refresh(); }
     }
     async function autoSplits() {
         const has = chunks().some(c => (c.takes || []).length || (c.prompt || "").trim());
@@ -760,7 +775,7 @@ function buildPlanner(node) {
         emptyText.textContent = !job() ? "Load a video to start a job (its cuts and splits are found straight away),\nor pick a job from the list above."
             : `job ${job()} has no plan here${S.err ? ` (${S.err.split(":")[0]})` : ""}.\nLoad a video to start a job, or pick another from the list above.`;
         emptyHint.style.display = has ? "none" : "flex";
-        for (const b of [bDetect, bCuts, bDraft, bMark, bPending, bAssemble]) b.disabled = !has;
+        for (const b of [bDetect, bCuts, bClear, bDraft, bMark, bPending, bAssemble]) b.disabled = !has;
         if (!S.jobs || S.jobsFor !== job()) { S.jobsFor = job(); refreshJobs(); }
         else jobSel.value = S.jobs.some(j => j.job === job()) ? job() : "";
         const src = P()?.source;
@@ -1115,7 +1130,9 @@ function buildPlanner(node) {
         const keepBox = el("input"); keepBox.type = "checkbox"; keepBox.checked = kept(c);
         keepBox.onpointerdown = (e) => e.stopPropagation();
         keepBox.onchange = () => op({ op: "keep", chunk: c.id, keep: keepBox.checked });
-        const keepL = el("label", { display: "flex", alignItems: "center", gap: "3px", marginLeft: "8px", color: C.keptText });
+        const keepL = el("label", { display: "flex", alignItems: "center", gap: "4px", marginLeft: "8px", color: C.keptText,
+            fontWeight: "bold", padding: "1px 6px", border: `1px solid ${kept(c) ? C.trim : "#2f4f40"}`, borderRadius: "4px",
+            background: kept(c) ? "#14281e" : "transparent", cursor: "pointer" });
         keepL.title = "Keep the original: never rendered, masked, drafted or prompted; the assembly shows the source here untouched";
         keepL.append(keepBox, el("span", null, "keep original"));
         if (kept(c)) {
@@ -1311,9 +1328,15 @@ function buildPlanner(node) {
     }
     function drawWarnings() {
         warnBox.innerHTML = "";
-        for (const w of S.view?.warnings || []) {
-            const r = el("div", { color: C.amber, cursor: "pointer", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }, `⚠ ${w.text}`);
-            r.title = w.text;
+        const ws = S.view?.warnings || [];
+        const extra = chunks().filter(c => ["missing file", "range changed"].includes(statusOf(c.id).state)).length + S.joins.filter(j => j.stale).length;
+        const n = ws.length + extra;
+        warnBox.append(el("div", { color: n ? C.amber : C.dim, fontWeight: "bold", position: "sticky", top: "0", background: "#17140d", paddingBottom: "1px" },
+            n ? `⚠ ${n} warning${n === 1 ? "" : "s"}: none of them blocks a render · click one to jump to it` : "no warnings"));
+        for (const w of ws) {
+            const r = el("div", { color: "#fcd34d", cursor: "pointer", whiteSpace: "normal", lineHeight: "1.3", padding: "1px 0",
+                borderTop: "1px solid #2a2310" }, `⚠ ${w.chunk != null && w.deliver ? `chunk ${w.chunk + 1} (${w.deliver[0]}-${w.deliver[1]}): ` : ""}${w.text}`);
+            r.title = "click to select it on the strip";
             r.onclick = () => { if (w.split) S.sel = { kind: "split", id: w.split }; else if (w.chunk != null && chunks()[w.chunk]) S.sel = { kind: "chunk", id: chunks()[w.chunk].id }; seek(w.frame ?? chunks()[w.chunk]?.deliver[0] ?? S.playhead); refresh(); };
             warnBox.append(r);
         }

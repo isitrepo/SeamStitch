@@ -264,3 +264,21 @@ def test_render_run_pins_the_source_and_the_take_refuses_a_kept_chunk(nodes):
     imgs = torch.zeros((desc["length"], 8, 8, 3))
     with pytest.raises(stk.TakeError, match="kept as the original"):
         stk.save_take(desc, imgs)
+
+
+def test_clear_all_starts_fresh_and_erases_nothing():
+    p = _plan978([(300, "anchored"), (600, "cut")])
+    _keep(p, edge="start", frame=96)
+    p["chunks"][1]["prompt"] = "a prompt"
+    p["chunks"][2]["takes"] = [{"id": "c9-t001", "render": [300, 599], "state": "ok"}]
+    p["masks"] = [{"id": "m001", "range": [0, 977]}]
+    r = spl.apply_op(p, {"op": "clear_all"})
+    assert r["cleared"]["cuts"] == 11 and r["cleared"]["splits"] == 3 and r["cleared"]["kept"] == 1
+    assert p["cuts"] == [] and p["splits"] == [] and len(p["chunks"]) == 1
+    assert [w["code"] for w in p["warnings"]] == ["trained"]      # one 978-frame chunk: over H3's range, as it should say
+    c = p["chunks"][0]
+    assert c["deliver"] == [0, 977] and not c.get("keep") and not c["prompt"]
+    assert len(p["removed_chunks"]) == 2 and p["masks"] == [{"id": "m001", "range": [0, 977]}]
+    p["chunks"][0]["state"] = "rendering"
+    with pytest.raises(sp.PlanError, match="rendering"):
+        spl.apply_op(p, {"op": "clear_all"})
