@@ -33,6 +33,7 @@ const C = {
     render: "rgba(143,179,255,0.45)", fill: "rgba(251,191,36,0.55)", held: "rgba(248,113,113,0.55)",
     mask: "#2e7d5b", maskOld: "#1f4f3c", prompt: "#2a3142", promptDraft: "#1e3a5f", shot: "#3b4252",
     play: "#f59e0b", cut: "#e5e7eb", cutSug: "rgba(156,163,175,0.55)", draft: "#60a5fa",
+    kept: "#22302a", keptHatch: "rgba(167,243,208,0.16)", keptText: "#a7f3d0", trim: "#34d399",
 };
 const VERDICT = { green: C.green, amber: C.amber, red: C.red };
 const TYPE_LABEL = { forward: "F", entry: "E", exit: "X" };
@@ -342,6 +343,14 @@ function buildPlanner(node) {
     const joinAt = (sid) => S.joins.find(j => j.split === sid);
     const warnsFor = (key, id) => (S.view?.warnings || []).filter(w => w[key] === id);
     const takeOf = (cid, tid) => (chunks().find(c => c.id === cid)?.takes || []).find(t => t.id === tid);
+    const kept = (c) => !!(c && c.keep);          // keep original (§4.10): never rendered, marked or drafted
+    // the trim handles: the start trim sits on the kept start's right split, else at frame 0; the end trim mirrors it
+    function trims() {
+        const cs = chunks(), N = S.N;
+        const s0 = cs.length > 1 && kept(cs[0]) ? splitById(cs[1].left)?.frame : null;
+        const s1 = cs.length > 1 && kept(cs.at(-1)) ? splitById(cs.at(-1).left)?.frame : null;
+        return { start: s0 ?? 0, end: s1 ?? N, hasStart: s0 != null, hasEnd: s1 != null };
+    }
     const label = (cid) => { const i = chunkIndex(cid); return i >= 0 ? `${i + 1}` : cid; };
 
     function toast(msg, kind = "dim") { status.textContent = msg; status.style.color = C[kind] || C.dim; status.title = msg; }
@@ -617,8 +626,9 @@ function buildPlanner(node) {
             app.graph?.setDirtyCanvas(true, true);
         }
     }
-    function emptyPrompts() { return chunks().filter(c => !(c.prompt || "").trim()); }
+    function emptyPrompts() { return chunks().filter(c => !kept(c) && !(c.prompt || "").trim()); }
     function needsRender(c) {
+        if (kept(c)) return false;
         const st = statusOf(c.id);
         return ["pending", "range changed", "missing file"].includes(st.state) && !queuedFor(c.id) && !st.rendering;
     }
@@ -646,6 +656,7 @@ function buildPlanner(node) {
     async function reroll(cid, n, fresh) {
         const c = chunks().find(x => x.id === cid);
         if (!c) return;
+        if (kept(c)) { toast(`chunk ${label(cid)} is kept as the original: switch 'keep original' off to render it`, "amber"); return; }
         if (!(c.prompt || "").trim()) { toast(`chunk ${label(cid)} has no prompt`, "red"); return; }
         if (S.promptDirty && S.sel?.id === cid) await savePrompt();
         const fixed = c.seed_mode && typeof c.seed_mode === "object";
@@ -664,8 +675,9 @@ function buildPlanner(node) {
     }
     function openMarkMenu(ev) {
         if (!P()) return;
-        const sel = S.sel?.kind === "chunk" ? chunks().find(c => c.id === S.sel.id) : null;
-        const unmarked = chunks().filter(c => (statusOf(c.id).mask || 0) < 1);
+        const sel0 = S.sel?.kind === "chunk" ? chunks().find(c => c.id === S.sel.id) : null;
+        const sel = kept(sel0) ? null : sel0;
+        const unmarked = chunks().filter(c => !kept(c) && (statusOf(c.id).mask || 0) < 1);
         popup(ev, [
             { label: "the source person mask (SAM3), cached per chunk's render range" },
             ...(sel ? [{ text: `mark chunk ${label(sel.id)} (${sel.render[0]}-${sel.render[1]})`, run: () => queueRun({ action: "mark", chunk: sel.id }, "mark") }] : []),
@@ -731,6 +743,7 @@ function buildPlanner(node) {
     function f2x(f) { return f * S.pxPerFrame - S.scroll; }
     function x2f(x) { return (x + S.scroll) / S.pxPerFrame; }
     function shotsOf(c) {
+        if (kept(c) || !c.render) return [];
         const [r0, r1] = c.render;
         const inner = confirmed().filter(f => f > r0 && f <= r1);
         const edges = [r0, ...inner, r1 + 1];
@@ -798,6 +811,19 @@ function buildPlanner(node) {
             const x0 = f2x(c.deliver[0]), x1 = f2x(c.deliver[1] + 1);
             if (x1 < 0 || x0 > w) return;
             const bw_ = Math.max(1, x1 - x0 - 2);
+            if (kept(c)) {                       // kept as the original: hatched, no render, no dots
+                hatch(g, x0 + 1, BLOCK_Y, bw_, BLOCK_H);
+                const selected = sel?.kind === "chunk" && sel.id === c.id;
+                g.lineWidth = selected ? 2.5 : 1; g.strokeStyle = selected ? C.sel : "#2f4f40";
+                g.strokeRect(x0 + 1.5, BLOCK_Y + 0.5, bw_ - 1, BLOCK_H - 1); g.lineWidth = 1;
+                g.save(); g.beginPath(); g.rect(x0 + 3, BLOCK_Y, Math.max(0, bw_ - 4), BLOCK_H); g.clip();
+                const n = c.deliver[1] - c.deliver[0] + 1;
+                g.fillStyle = C.keptText; g.font = font(11, true); g.fillText(`${i + 1} original`, x0 + 6, BLOCK_Y + 9 * U);
+                g.font = font(10); g.fillStyle = C.dim;
+                g.fillText(`${n}f · ${(n / S.fr).toFixed(2)}s · kept: never rendered`, x0 + 6, BLOCK_Y + 22 * U);
+                g.restore();
+                return;
+            }
             const q = queuedFor(c.id);
             let fill = C.pending, mark = "";
             if (st.state === "unreviewed") { fill = C.unreviewed; mark = "?"; }
@@ -866,6 +892,12 @@ function buildPlanner(node) {
         cs.forEach((c, i) => {
             const st = statusOf(c.id), x0 = f2x(c.deliver[0]), x1 = f2x(c.deliver[1] + 1);
             if (x1 < 0 || x0 > w) return;
+            if (kept(c)) {
+                hatch(g, x0 + 1, MASK_Y + 1, x1 - x0 - 2, MASK_H - 2);
+                g.save(); g.beginPath(); g.rect(x0 + 2, MASK_Y, Math.max(0, x1 - x0 - 4), MASK_H); g.clip();
+                g.fillStyle = C.keptText; g.fillText("original: no mask needed", x0 + 5, MASK_Y + MASK_H / 2); g.restore();
+                return;
+            }
             const pct = Math.round((st.mask || 0) * 100);
             const inD = (f) => f >= c.deliver[0] && f <= c.deliver[1];
             const lost = (st.mask_empty || []).filter(inD), filled = (st.mask_filled || []).filter(inD);
@@ -888,6 +920,14 @@ function buildPlanner(node) {
         cs.forEach((c) => {
             const st = statusOf(c.id), x0 = f2x(c.deliver[0]), x1 = f2x(c.deliver[1] + 1);
             if (x1 < 0 || x0 > w) return;
+            if (kept(c)) {
+                hatch(g, x0 + 1, PR_Y + 1, x1 - x0 - 2, PR_H - 2);
+                g.save(); g.beginPath(); g.rect(x0 + 2, PR_Y, Math.max(0, x1 - x0 - 4), PR_H); g.clip();
+                g.font = font(10); g.fillStyle = C.keptText; g.fillText("original: no prompt needed", x0 + 6, PR_Y + 9 * U);
+                if (sel?.kind === "chunk" && sel.id === c.id) { g.strokeStyle = C.sel; g.lineWidth = 2; g.strokeRect(x0 + 2, PR_Y + 1, x1 - x0 - 4, PR_H - 2); g.lineWidth = 1; }
+                g.restore();
+                return;
+            }
             const empty = !(c.prompt || "").trim();
             const shots = shotsOf(c), blocks = parseShots(c.prompt);
             g.save(); g.beginPath(); g.rect(x0 + 1, PR_Y, Math.max(0, x1 - x0 - 2), PR_H); g.clip();
@@ -951,12 +991,32 @@ function buildPlanner(node) {
             else if (j?.stale) { fill = C.amber; txt = "stale"; }
             else if (j && j.linked) { fill = VERDICT[j.verdict] || "#93c5fd"; txt = TYPE_LABEL[j.type] || "A"; }
             else if (j && j.type === "pending") { fill = "#6b7280"; txt = "A"; tcol = "#e5e7eb"; }
+            else if (j && j.type === "original") { fill = C.kept; txt = "="; tcol = C.keptText; }
             const pw = (txt.length > 1 ? 30 : 16) * U, ph = 13 * U;
             g.fillStyle = fill;
             roundRect(g, x - pw / 2, PILL_Y - ph / 2, pw, ph, ph / 2); g.fill();
             g.fillStyle = tcol; g.font = font(9, true); g.textAlign = "center"; g.fillText(txt, x, PILL_Y + 0.5); g.textAlign = "left";
             if (warn) { g.fillStyle = C.amber; g.font = font(11, true); g.fillText("⚠", x + pw / 2 + 2, PILL_Y + 0.5); }
             if (dragging) { g.fillStyle = C.sel; g.font = font(10, true); g.fillText(`${f}${S.drag.snap ? " (cut)" : ""}`, x + 6, BLOCK_Y + BLOCK_H - 6 * U); }
+        }
+        // trim handles (keep original at the start / end): a grip on each side of the strip
+        const tr = trims();
+        for (const [edge, f, has] of [["start", tr.start, tr.hasStart], ["end", tr.end, tr.hasEnd]]) {
+            const dragging = S.drag?.kind === "trim" && S.drag.edge === edge;
+            const ff = dragging ? S.drag.to : f;
+            const x = f2x(ff), gw = 9 * U;
+            const gx = edge === "start" ? (ff > 0 ? x - gw : x) : (ff < S.N ? x : x - gw);
+            const hot = dragging || (S.hover?.kind === "trim" && S.hover.edge === edge);
+            if (dragging) {                     // the stretch that would be kept
+                const a = edge === "start" ? 0 : ff, b = edge === "start" ? ff : S.N;
+                hatch(g, f2x(a), BLOCK_Y, f2x(b) - f2x(a), BLOCK_H);
+                g.fillStyle = C.sel; g.font = font(10, true);
+                g.fillText(`${edge === "start" ? `keep 0-${ff - 1}` : `keep ${ff}-${S.N - 1}`}${S.drag.snap ? " (cut)" : ""}`, Math.max(4, x + (edge === "start" ? 6 : -110 * U)), BLOCK_Y + BLOCK_H + 9 * U);
+            }
+            g.fillStyle = hot ? C.sel : has ? C.trim : "rgba(52,211,153,0.55)";
+            roundRect(g, gx, BLOCK_Y + 4 * U, gw, BLOCK_H - 8 * U, 3 * U); g.fill();
+            g.fillStyle = "#0b1f17"; g.font = font(9, true); g.textAlign = "center";
+            g.fillText(edge === "start" ? "⟦" : "⟧", gx + gw / 2, BLOCK_Y + BLOCK_H / 2); g.textAlign = "left";
         }
         // a split being dragged: its overlap guard, so a cut inside it shows before the drop
         if (S.drag?.kind === "split") {
@@ -974,6 +1034,14 @@ function buildPlanner(node) {
         // row tags
         g.font = font(8, true); g.fillStyle = "rgba(156,163,175,0.6)";
         g.fillText("MASK", 3, MASK_Y - 3 * U); g.fillText("PROMPT", 3, PR_Y - 2 * U);
+    }
+    function hatch(g, x, y, w, h) {
+        if (w <= 0) return;
+        g.save(); g.beginPath(); g.rect(x, y, w, h); g.clip();
+        g.fillStyle = C.kept; g.fillRect(x, y, w, h);
+        g.strokeStyle = C.keptHatch; g.lineWidth = 3 * U;
+        for (let hx = x - h; hx < x + w; hx += 9 * U) { g.beginPath(); g.moveTo(hx, y + h); g.lineTo(hx + h, y); g.stroke(); }
+        g.restore(); g.lineWidth = 1;
     }
     function roundRect(g, x, y, w, h, r) {
         g.beginPath(); g.moveTo(x + r, y); g.lineTo(x + w - r, y); g.arcTo(x + w, y, x + w, y + r, r); g.lineTo(x + w, y + h - r);
@@ -1031,6 +1099,8 @@ function buildPlanner(node) {
                 for (const rem of w.remedies || []) {
                     if (rem.action === "straight_cut") wr.append(button(`straight cut at ${rem.frame}`, "", async () => { await op({ op: "move_split", split: sp_.id, to: rem.frame }); await op({ op: "split_mode", split: sp_.id, mode: "cut" }); }));
                     if (rem.action === "move") for (const [k, v] of Object.entries(rem.clear || {})) wr.append(button(`move ${k} to ${v}`, "The nearest frame whose overlap guard holds no cut", () => op({ op: "move_split", split: sp_.id, to: v })));
+                    if (rem.action === "anchor_onto_original") wr.append(button("anchor onto the original", "The render pins its first (or last) frames to the source and fades in (or out) over the overlap (§4.10; untested on the GPU: T-KEEP)", () => op({ op: "split_mode", split: sp_.id, mode: "anchored" })));
+                    if (rem.action === "move_to_cut") wr.append(button(`move to the cut at ${rem.frame}`, "A straight cut on a real source cut is clean", () => op({ op: "move_split", split: sp_.id, to: rem.frame })));
                 }
                 selBox.append(wr);
             }
@@ -1042,6 +1112,25 @@ function buildPlanner(node) {
         const st = statusOf(c.id), k = chunkIndex(c.id);
         const head = row();
         const n = c.deliver[1] - c.deliver[0] + 1;
+        const keepBox = el("input"); keepBox.type = "checkbox"; keepBox.checked = kept(c);
+        keepBox.onpointerdown = (e) => e.stopPropagation();
+        keepBox.onchange = () => op({ op: "keep", chunk: c.id, keep: keepBox.checked });
+        const keepL = el("label", { display: "flex", alignItems: "center", gap: "3px", marginLeft: "8px", color: C.keptText });
+        keepL.title = "Keep the original: never rendered, masked, drafted or prompted; the assembly shows the source here untouched";
+        keepL.append(keepBox, el("span", null, "keep original"));
+        if (kept(c)) {
+            const tr_ = trims();
+            const edge = k === 0 && tr_.hasStart ? "start" : k === chunks().length - 1 && tr_.hasEnd ? "end" : null;
+            head.append(el("span", { fontWeight: "bold" }, `chunk ${k + 1} (${c.id})`),
+                el("span", { color: C.keptText }, `original: delivers ${c.deliver[0]}-${c.deliver[1]} (${n}f · ${(n / S.fr).toFixed(2)}s) from the source, untouched; never rendered, masked or drafted`),
+                keepL);
+            if (edge) head.append(button("remove the trim", "Give these frames back to the next chunk (the split goes)", () => op({ op: "keep", edge, frame: edge === "start" ? 0 : S.N })));
+            selBox.append(head);
+            const note = row();
+            note.append(el("span", { color: C.dim }, "Its joins: a straight cut (clean on a source cut; mid-shot it warns), or anchored onto the original (the render pins to the source and fades in or out over the overlap)."));
+            selBox.append(note);
+            return;
+        }
         head.append(el("span", { fontWeight: "bold" }, `chunk ${k + 1} (${c.id})`),
             el("span", { color: C.dim }, `delivers ${c.deliver[0]}-${c.deliver[1]} (${n}f · ${(n / S.fr).toFixed(2)}s) · renders ${c.render[0]}-${c.render[1]}${c.fill ? ` +${c.fill.kind} ${c.fill.frames}` : ""} = ${c.length}f · ${st.state}${st.take ? ` (${st.take})` : ""}`));
         if (st.failed) { const f = el("span", { color: C.red }, `failed: ${st.failed.slice(0, 120)}`); f.title = st.failed; head.append(f, button("clear", "Clear the failed state", () => op({ op: "clear_state", chunk: c.id }))); }
@@ -1075,7 +1164,7 @@ function buildPlanner(node) {
         seedSel.onpointerdown = seedIn.onpointerdown = (e) => e.stopPropagation();
         seedSel.onchange = () => { if (seedSel.value === "new") op({ op: "seed_mode", chunk: c.id, seed_mode: "new" }); else { seedIn.style.display = ""; seedIn.focus(); } };
         seedIn.onchange = () => { const v = parseInt(seedIn.value, 10); if (Number.isInteger(v) && v >= 0) op({ op: "seed_mode", chunk: c.id, seed_mode: { fixed: v } }); };
-        acts.append(mkL, seedSel, seedIn);
+        acts.append(mkL, seedSel, seedIn, keepL);
         selBox.append(acts);
 
         // the prompt editor (adopt draft, redraft)
@@ -1168,13 +1257,16 @@ function buildPlanner(node) {
         if (!c || K <= 0) return out;
         const L = c.left && splitById(c.left);
         const covers = (cid, a, b) => { const st = statusOf(cid); return st.take && st.render && st.render[0] <= a && b <= st.render[1] && ["unreviewed", "chosen"].includes(st.state); };
+        if (kept(c)) return out;
         if (k > 0 && L && L.mode === "anchored") {
             const prev = cs[k - 1];
-            if (earlier.has(k - 1) || covers(prev.id, c.render[0], c.render[0] + K - 1)) out.start = `${k + 1}←${k}`;
+            if (kept(prev)) out.start = `${k + 1}←source`;          // anchored onto the original
+            else if (earlier.has(k - 1) || covers(prev.id, c.render[0], c.render[0] + K - 1)) out.start = `${k + 1}←${k}`;
         }
         if (k + 1 < cs.length) {
             const R = cs[k + 1].left && splitById(cs[k + 1].left);
-            if (R && R.mode === "anchored" && !c.held && !batch.has(k + 1) && covers(cs[k + 1].id, c.render[1] - K + 1, c.render[1])) out.end = `${k + 1}→${k + 2}`;
+            if (R && R.mode === "anchored" && !c.held && kept(cs[k + 1])) out.end = `${k + 1}→source`;
+            else if (R && R.mode === "anchored" && !c.held && !batch.has(k + 1) && covers(cs[k + 1].id, c.render[1] - K + 1, c.render[1])) out.end = `${k + 1}→${k + 2}`;
         }
         return out;
     }
@@ -1186,6 +1278,11 @@ function buildPlanner(node) {
         const q = busy.length ? el("span", { color: C.amber, marginLeft: "auto" }, `${busy.length} queued from this Planner`) : null;
         const cs = chunks();
         const sel = S.sel?.kind === "chunk" ? cs.find(c => c.id === S.sel.id) : null;
+        if (sel && kept(sel)) {
+            nextBar.append(lead, el("span", { color: C.keptText }, `chunk ${chunkIndex(sel.id) + 1} is kept as the original: nothing to render`));
+            if (q) nextBar.append(q);
+            return;
+        }
         if (sel && (sel.takes || []).length) {
             const k = chunkIndex(sel.id), p = forecastPins(k, new Set([k]));
             const two = p.start && p.end;
@@ -1197,7 +1294,7 @@ function buildPlanner(node) {
         const empty = emptyPrompts();
         const todo = cs.map((c, k) => [c, k]).filter(([c]) => needsRender(c));
         if (!todo.length) {
-            nextBar.append(lead, el("span", { color: C.dim }, cs.every(c => (c.takes || []).length) ? "every chunk has a take: review, re-roll or assemble" : "everything pending is queued"));
+            nextBar.append(lead, el("span", { color: C.dim }, cs.every(c => kept(c) || (c.takes || []).length) ? "every chunk has a take (or is kept as the original): review, re-roll or assemble" : "everything pending is queued"));
             if (q) nextBar.append(q);
             return;
         }
@@ -1420,6 +1517,14 @@ function buildPlanner(node) {
             for (const c of cuts()) if (Math.abs(p.x - f2x(c.frame)) < 6 * U && p.y > RULER_H - 11 * U) return { kind: "cut", frame: c.frame };
             return { kind: "ruler" };
         }
+        if (p.y >= BLOCK_Y && p.y <= BLOCK_Y + BLOCK_H) {
+            const tr = trims(), gw = 9 * U;
+            for (const [edge, f] of [["start", tr.start], ["end", tr.end]]) {
+                const x = f2x(f);
+                const gx = edge === "start" ? (f > 0 ? x - gw : x) : (f < S.N ? x : x - gw);
+                if (p.x >= gx - 1 && p.x <= gx + gw + 1) return { kind: "trim", edge, frame: f };
+            }
+        }
         for (const s of splits()) {
             const x = f2x(s.frame);
             if (Math.abs(p.y - PILL_Y) < 8 * U && Math.abs(p.x - x) < 16 * U) return { kind: "pill", id: s.id };
@@ -1440,10 +1545,11 @@ function buildPlanner(node) {
         if (S.drag) { onDrag(p); return; }
         const h = hit(p);
         S.hover = h;
-        canvas.style.cursor = h.kind === "split" ? "ew-resize" : h.kind === "pill" || h.kind === "cut" ? "pointer" : h.kind === "chunk" || h.kind === "ruler" ? "col-resize" : h.kind === "prompt" ? "text" : "default";
+        canvas.style.cursor = h.kind === "split" || h.kind === "trim" ? "ew-resize" : h.kind === "pill" || h.kind === "cut" ? "pointer" : h.kind === "chunk" || h.kind === "ruler" ? "col-resize" : h.kind === "prompt" ? "text" : "default";
         // hover text: the failed render's error, a split's warnings
         if (h.kind === "chunk" && statusOf(h.id).failed) canvas.title = `failed: ${statusOf(h.id).failed}`;
         else if (h.kind === "pill" || h.kind === "split") canvas.title = warnsFor("split", h.id).map(w => w.text).join("\n");
+        else if (h.kind === "trim") canvas.title = `drag to keep the ${h.edge} of the video as the original (never rendered or masked); drag back to the ${h.edge === "start" ? "start" : "end"} to undo`;
         else if (h.kind === "cut") { const c = cuts().find(x => x.frame === h.frame); canvas.title = `cut at ${h.frame}: ${c?.confirmed === false ? "suggested (double-click to confirm)" : "confirmed"} · drag to move`; }
         else canvas.title = "";
         drawCanvas();
@@ -1458,6 +1564,7 @@ function buildPlanner(node) {
         if (S.reviewing) { S.reviewing = null; video.dataset.src = ""; }
         if (h.kind === "ruler") { S.drag = { kind: "scrub" }; seek(x2f(p.x)); return; }
         if (h.kind === "cut") { S.sel = { kind: "cut", frame: h.frame }; S.drag = { kind: "cut", frame: h.frame, to: h.frame, startX: p.x, moved: false }; refresh(); return; }
+        if (h.kind === "trim") { S.drag = { kind: "trim", edge: h.edge, from: h.frame, to: h.frame, startX: p.x, moved: false }; return; }
         if (h.kind === "pill") { S.sel = { kind: "split", id: h.id }; refresh(); splitMenu(ev, splitById(h.id)); return; }
         if (h.kind === "split") { const s = splitById(h.id); S.sel = { kind: "split", id: h.id }; S.drag = { kind: "split", id: h.id, to: s.frame, startX: p.x, moved: false }; refresh(); return; }
         if (h.kind === "chunk" || h.kind === "mask") {
@@ -1475,12 +1582,12 @@ function buildPlanner(node) {
         const d = S.drag;
         const f = x2f(p.x);
         if (d.kind === "scrub") { seek(f); return; }
-        if (d.kind === "split" || d.kind === "cut") {
+        if (d.kind === "split" || d.kind === "cut" || d.kind === "trim") {
             if (!d.moved && Math.abs(p.x - d.startX) < 3) return;
             d.moved = true;
-            let to = Math.max(1, Math.min(S.N - 1, Math.round(f)));
+            let to = d.kind === "trim" ? Math.max(0, Math.min(S.N, Math.round(f))) : Math.max(1, Math.min(S.N - 1, Math.round(f)));
             d.snap = false;
-            if (d.kind === "split") {          // snap to a confirmed cut within ~8 px (at least 2 frames)
+            if (d.kind === "split" || (d.kind === "trim" && to > 0 && to < S.N)) {   // snap to a confirmed cut within ~8 px (at least 2 frames)
                 const near = nearestConfirmed(to, Math.max(2, Math.round(8 * U / S.pxPerFrame)));
                 if (near != null) { to = near; d.snap = true; }
             }
@@ -1502,6 +1609,10 @@ function buildPlanner(node) {
                 else await op({ op: "move_split", split: s.id, to: d.to });
             }
             seek(d.to);
+        } else if (d.kind === "trim" && d.moved && d.to !== d.from) {
+            // one write: the split at the frame, the outer piece kept (or the trim removed at the very end)
+            const r = await op({ op: "keep", edge: d.edge, frame: d.to }, true);
+            if (r) toast(d.to <= 0 || d.to >= S.N ? `${d.edge} trim removed` : `kept the ${d.edge} as the original: ${d.edge === "start" ? `0-${d.to - 1}` : `${d.to}-${S.N - 1}`}`, "green");
         } else if (d.kind === "cut" && d.moved && d.to !== d.frame) {
             const c = cuts().find(x => x.frame === d.frame);
             if (c) await moveCut(c, d.to);

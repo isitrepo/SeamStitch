@@ -264,6 +264,9 @@ def save_take(chunk, images, source_mask=None, output_mask=None, marked_guide=No
     if plan.get("job") != desc["job"]:
         raise TakeError(f"this chunk is from job {desc['job']!r}, the plan at {plan_file} is {plan.get('job')!r}")
     c = sp.find_chunk(plan, desc["chunk"])
+    if sp.is_kept(c):
+        raise TakeError(f"chunk {desc['chunk']} is kept as the original (switched on after this render was queued?): "
+                        f"a kept chunk takes no takes; switch 'keep original' off in its panel first")
     job = os.path.dirname(plan_file)
 
     n = int(images.shape[0])

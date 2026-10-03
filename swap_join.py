@@ -238,6 +238,23 @@ def fade_frame(left, right, ratio, w):
     return np.clip((1 - w) * left.astype(np.float32) + w * ym, 0, 255).astype(np.uint8)
 
 
+def fade_frame_out(left, right, ratio, w):
+    """One frame of a fade OUT into the original (a kept chunk on the right, §4.10): the left (the
+    render) level-matched to the right by `ratio`, the right (the source) faded in untouched."""
+    lm = left.astype(np.float32) * np.asarray(ratio).astype(np.float32)
+    return np.clip((1 - w) * lm + w * right.astype(np.float32), 0, 255).astype(np.uint8)
+
+
+def pre_gain(first_ratio, k, frames=HAND_BACK):
+    """Gain for the render's frame k frames BEFORE a fade out into the original (k = 1 is the frame
+    just before it): ramping from 1 toward the fade's first match ratio, the mirror of decay_gain.
+    None outside the ramp."""
+    if k < 1 or k >= frames:
+        return None
+    f = 1 - k / frames
+    return 1 + (np.asarray(first_ratio) - 1) * f
+
+
 def decay_gain(last_ratio, k, frames=HAND_BACK):
     """Gain for the k-th right frame after the overlap (k = 0 is the splice frame): the last
     match ratio decaying to 1 by frame `frames`. None once it is identity."""

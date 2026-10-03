@@ -89,6 +89,21 @@ class PlannerError(Exception):
     pass
 
 
+def _say(msg):
+    """print() that can't take a run down: on a console or log file that can't encode a character (a
+    cp1252 stdout redirected to a file), the line goes out with that character replaced. A failed print
+    inside a node otherwise kills ComfyUI's prompt worker (found in B3b on a redirected test server)."""
+    try:
+        print(msg)
+    except UnicodeEncodeError:
+        import sys
+        enc = getattr(sys.stdout, "encoding", None) or "ascii"
+        try:
+            print(msg.encode(enc, errors="replace").decode(enc, errors="replace"))
+        except Exception:
+            pass
+
+
 # ---------------------------------------------------------------------------
 # job paths
 # ---------------------------------------------------------------------------
@@ -258,17 +273,42 @@ def apply_op(plan, body):
         geo = True
     elif op == "auto_splits":
         # 209-frame renders from the confirmed cuts (§4.1). Replacing splits drops their chunks'
-        # prompts and takes, so it is refused once any chunk has either, unless forced.
-        if not body.get("force") and any(c.get("takes") or (c.get("prompt") or "").strip()
-                                         for c in plan.get("chunks", [])):
+        # prompts and takes, so it is refused once any chunk has either, unless forced. Kept chunks
+        # (§4.10) stay, with the splits either side of them; auto splits fill each rendered stretch.
+        chunks = plan.get("chunks", [])
+        live = [c for c in chunks if not sp.is_kept(c)]
+        if not body.get("force") and any(c.get("takes") or (c.get("prompt") or "").strip() for c in live):
             raise sp.PlanError("auto splits would replace chunks that have prompts or takes (force to do it anyway)")
-        if any(c.get("takes") for c in plan.get("chunks", [])):
-            plan.setdefault("removed_chunks", []).extend(dict(c, removed=sp.now()) for c in plan["chunks"] if c.get("takes"))
-        frames = sp.auto_splits(plan["source"]["frames"], plan.get("cuts", []), plan.get("settings"))
-        plan["splits"] = []
-        plan["chunks"] = []
+        if any(c.get("takes") for c in live):
+            plan.setdefault("removed_chunks", []).extend(dict(c, removed=sp.now()) for c in live if c.get("takes"))
+        n = int(plan["source"]["frames"])
+        by_id = {d["id"]: d for d in plan.get("splits", [])}
+        kept, keep_splits = [], {}
+        for i, c in enumerate(chunks):
+            if sp.is_kept(c):
+                kept.append(c)
+                for sid in (c.get("left"), chunks[i + 1].get("left") if i + 1 < len(chunks) else None):
+                    if sid in by_id:
+                        keep_splits[sid] = by_id[sid]
+        spans, f0 = [], 0
+        for c in kept:
+            a, b = c["deliver"]
+            if a > f0:
+                spans.append((f0, a - 1))
+            f0 = b + 1
+        if f0 <= n - 1:
+            spans.append((f0, n - 1))
+        cut_frames = sp.confirmed_cuts(plan.get("cuts"))
+        frames = []
+        for a, b in spans:
+            rel = [c - a for c in cut_frames if a < c <= b]
+            frames += [a + x for x in sp.auto_splits(b - a + 1, rel, plan.get("settings"))]
+        plan["splits"] = sorted(keep_splits.values(), key=lambda d: d["frame"])
+        plan["chunks"] = kept
+        have = {d["frame"] for d in plan["splits"]}
         for f in frames:
-            sp.add_split(plan, f, sp.MODE_ANCHORED)
+            if f not in have:
+                sp.add_split(plan, f, sp.MODE_ANCHORED)
         res["splits"] = frames
         geo = True
     elif op == "adopt_draft":
@@ -293,11 +333,114 @@ def apply_op(plan, body):
     elif op == "delete_mask":
         mid = body.get("mask")
         plan["masks"] = [m for m in plan.get("masks", []) if m.get("id") != mid]
+    elif op == "keep":
+        # keep the original (§4.10): {"chunk", "keep": bool}, or a trim handle {"edge": "start"|"end",
+        # "frame": J (0 or the frame count = no trim), "mode": optional}
+        if body.get("edge"):
+            res.update(_keep_edge(plan, body["edge"], body.get("frame"), body.get("mode")))
+        else:
+            c = _chunk(plan, body["chunk"])
+            if bool(body.get("keep", True)):
+                if c.get("state") == "rendering":
+                    raise sp.PlanError(f"chunk {c['id']} is rendering: keep it once the render is in")
+                c["keep"] = True
+            else:
+                c.pop("keep", None)
+            res["chunk"] = c["id"]
+        geo = True
     else:
         raise sp.PlanError(f"unknown op {op!r}")
     if geo:
         res["warnings"] = sp.rebuild_chunks(plan)
     return res
+
+
+def _new_chunk_record(plan, left, **kw):
+    c = {"id": sp._next_id(plan, "chunk", "c"), "left": left, "prompt": "", "prompt_state": "empty", "draft": None,
+         "options": {"mark": True}, "seed_mode": "new", "chosen": None, "takes": []}
+    c.update(kw)
+    return c
+
+
+def _keep_edge(plan, edge, frame, mode=None):
+    """A trim handle (§4.10): keep the source's start (or end) up to (or from) frame J as the original,
+    in one write. A split goes at J (a straight cut, snapped to a confirmed cut within a frame, unless
+    `mode` says otherwise); the outer piece is kept. Dragging an existing handle moves its split;
+    J = 0 (start) or the frame count (end) removes the trim and gives the frames back to the next chunk."""
+    if edge not in ("start", "end"):
+        raise sp.PlanError("edge is 'start' or 'end'")
+    n = int(plan["source"]["frames"])
+    chunks = plan.get("chunks") or []
+    if not chunks:
+        sp.rebuild_chunks(plan)
+        chunks = plan["chunks"]
+    J = None if frame is None else int(frame)
+    off = J is None or (edge == "start" and J <= 0) or (edge == "end" and J >= n)
+    outer = chunks[0] if edge == "start" else chunks[-1]
+    has = sp.is_kept(outer) and len(chunks) > 1
+    splits = {d["id"]: d for d in plan.get("splits", [])}
+    if off:
+        if not has:
+            if sp.is_kept(outer):
+                outer.pop("keep", None)
+            return {"edge": edge, "trim": None}
+        if edge == "start":                       # the next chunk takes the frames back, its data kept
+            nxt = chunks[1]
+            d = splits[nxt["left"]]
+            plan["splits"] = [x for x in plan["splits"] if x is not d]
+            plan["chunks"] = [c for c in chunks if c is not outer]
+            nxt["left"] = None
+        else:
+            d = splits[outer["left"]]
+            plan["splits"] = [x for x in plan["splits"] if x is not d]
+            plan["chunks"] = [c for c in chunks if c is not outer]
+        return {"edge": edge, "trim": None}
+    if not 0 < J < n:
+        raise sp.PlanError(f"frame {J} is outside the video (1..{n - 1})")
+    cuts = sp.confirmed_cuts(plan.get("cuts"))
+    near = [c for c in cuts if abs(c - J) <= 1]
+    if near:
+        J = near[0]
+    want_mode = mode or sp.MODE_CUT
+    if has:                                       # move the handle's split
+        d = splits[chunks[1]["left"]] if edge == "start" else splits[outer["left"]]
+        others = [x["frame"] for x in plan["splits"] if x is not d]
+        if edge == "start" and any(f <= J for f in others):
+            raise sp.PlanError(f"the start trim can't reach {J}: a split sits at or before it ({min(others)})")
+        if edge == "end" and any(f >= J for f in others):
+            raise sp.PlanError(f"the end trim can't reach {J}: a split sits at or after it ({max(others)})")
+        d["frame"] = J
+        if mode:
+            d["mode"] = mode
+        plan["splits"].sort(key=lambda x: x["frame"])
+        return {"edge": edge, "trim": J, "split": d["id"]}
+    existing = next((x for x in plan.get("splits", []) if x["frame"] == J), None)
+    if edge == "start":
+        if existing is None and any(x["frame"] < J for x in plan.get("splits", [])):
+            raise sp.PlanError(f"the start trim at {J} would pass split(s) before it: move or delete them first")
+        if existing is not None:                  # the first chunk already ends there: keep it
+            outer["keep"] = True
+            return {"edge": edge, "trim": J, "split": existing["id"]}
+        d = sp.add_split(plan, J, want_mode)
+        # the rendered remainder keeps the old first chunk's data (prompt, takes); the kept piece is new
+        outer["left"] = d["id"]
+        plan["chunks"] = [_new_chunk_record(plan, None, keep=True)] + [c for c in chunks]
+    else:
+        if existing is None and any(x["frame"] > J for x in plan.get("splits", [])):
+            raise sp.PlanError(f"the end trim at {J} would pass split(s) after it: move or delete them first")
+        d = existing or sp.add_split(plan, J, want_mode)
+        hit = next((c for c in chunks if c.get("left") == d["id"]), None)
+        if hit is None:
+            plan["chunks"] = chunks + [_new_chunk_record(plan, d["id"], keep=True)]
+        else:
+            hit["keep"] = True
+    return {"edge": edge, "trim": J, "split": d["id"]}
+
+
+def draft_chunks(plan, which=None):
+    """The chunks a draft run writes prompts for: never a kept chunk (§4.10). which: chunk ids, or
+    None for every rendered chunk."""
+    return [c for c in plan.get("chunks", []) if not sp.is_kept(c) and (which is None or c["id"] in which)]
 
 
 # ---------------------------------------------------------------------------
@@ -428,7 +571,7 @@ def detect_and_plan(plan, found):
     """One step: the detected cuts confirmed, then the auto splits placed from every confirmed cut.
     Splits are only replaced while no chunk has a prompt or a take; otherwise they're kept."""
     added = merge_detected(plan, found, confirmed=True)
-    busy = any(c.get("takes") or (c.get("prompt") or "").strip() for c in plan.get("chunks", []))
+    busy = any(c.get("takes") or (c.get("prompt") or "").strip() for c in plan.get("chunks", []) if not sp.is_kept(c))
     res = {"added": added, "splits": None, "kept_splits": busy}
     if not busy:
         res["splits"] = apply_op(plan, {"op": "auto_splits"})["splits"]
@@ -559,6 +702,9 @@ def plan_text(plan):
         fill_s = f" +{fill['kind']} {fill['frames']}" if fill else ""
         takes = ", ".join(x["id"].split("-")[-1] + ("*" if x["id"] == c.get("chosen") else "")
                           for x in c.get("takes", [])) or "-"
+        if sp.is_kept(c):
+            lines.append(f" {c['id']} {c['deliver'][0]}-{c['deliver'][1]} · original (kept: never rendered)")
+            continue
         pr = "prompt ✓" if (c.get("prompt") or "").strip() else "NO PROMPT"
         st = c.get("state") if c.get("state") == "rendering" else state
         lines.append(f" {c['id']} {c['deliver'][0]}-{c['deliver'][1]} · render {c['render'][0]}-{c['render'][1]}"
@@ -573,7 +719,8 @@ def plan_text(plan):
         for j in joins:
             lines.append(f" {j['split']} @{j['frame']}: {j['type']}"
                          + (f" {j['left_take']} | {j['right_take']}, splice {j['splice']}, {j['repair']}"
-                            if j["type"] not in (sp.STRAIGHT, sp.PENDING) else ""))
+                            if j["type"] not in (sp.STRAIGHT, sp.PENDING, sp.ORIGINAL) else "")
+                         + (f" (original on the {j['original']})" if j.get("original") in ("left", "right") else ""))
     for w in plan.get("warnings", []):
         lines.append(f" ⚠ {w['text']}")
     return "\n".join(lines)
@@ -611,6 +758,11 @@ def chunk_status(plan, jd):
     empty = sorted(f for m in segs for f in mask_empty_frames(jd, m, fps) if wins(f, m))
     filled = sorted(f for m in segs for f in m.get("filled") or [] if wins(f, m))
     for c in plan.get("chunks", []):
+        if sp.is_kept(c):
+            out.append({"chunk": c["id"], "state": "original", "keep": True, "take": None,
+                        "takes": len(c.get("takes") or []), "prompt": "not needed", "draft": False, "mask": None,
+                        "mask_empty": [], "mask_filled": [], "take_flags": {}, "rank": []})
+            continue
         t, st = sp.effective_take(c)
         if t is not None and not sp.take_covers(t, *c["deliver"]):
             st = "range changed"
@@ -675,9 +827,13 @@ def resolve_pins(plan, k):
     pins, notes = {"start": None, "end": None}, []
     if K <= 0:
         return pins, ["anchor_frames is 0: no pins"]
+    if sp.is_kept(c):
+        return pins, ["kept as the original: never rendered"]
     r0, r1 = c["render"]
     left = splits.get(c.get("left"))
-    if k > 0 and left and left["mode"] == sp.MODE_ANCHORED:
+    if k > 0 and left and left["mode"] == sp.MODE_ANCHORED and sp.is_kept(chunks[k - 1]):
+        pins["start"] = {"source": True, "frames": [r0, r0 + K - 1]}       # anchored onto the original
+    elif k > 0 and left and left["mode"] == sp.MODE_ANCHORED:
         t, _st = sp.effective_take(chunks[k - 1])
         f = [r0, r0 + K - 1]
         if t is not None and sp.take_covers(t, *f):
@@ -691,6 +847,8 @@ def resolve_pins(plan, k):
             t, _st = sp.effective_take(chunks[k + 1])
             if int(c.get("held") or 0):
                 notes.append("end: the render ends in held frames, so it can't be pinned at its end")
+            elif sp.is_kept(chunks[k + 1]):
+                pins["end"] = {"source": True, "frames": f}                    # anchored onto the original
             elif t is not None and sp.take_covers(t, *f):
                 pins["end"] = {"take": t["id"], "frames": f}
             elif t is not None:
@@ -702,6 +860,9 @@ def render_descriptor(plan, plan_file, run, settings=None):
     """The render run's chunk descriptor (no decoding): what the Take node needs, and what the
     Planner decodes. Refuses an empty prompt."""
     c = _chunk(plan, run.get("chunk"))
+    if sp.is_kept(c):
+        raise PlannerError(f"chunk {c['id']} {c['deliver']} is kept as the original: it's never rendered "
+                           f"(switch 'keep original' off in its panel to render it)")
     k = plan["chunks"].index(c)
     prompt = run["prompt"] if run.get("prompt") is not None else c.get("prompt", "")
     if not (prompt or "").strip():
@@ -784,6 +945,10 @@ def render_inputs(desc, job_dir, plan):
         if not p:
             pins[side] = torch.zeros((0, h, w, 3), dtype=torch.float32)
             continue
+        if p.get("source"):                      # anchored onto the original: the source's own frames
+            f0, f1 = p["frames"]
+            pins[side] = decode_frames(path, fr, f0, f1 - f0 + 1, (w, h))
+            continue
         _c, t = sp.find_take(plan, p["take"])
         tp = os.path.join(job_dir, t["file"])
         if not os.path.isfile(tp):
@@ -802,6 +967,8 @@ def mark_descriptor(plan, plan_file, run):
         cid = None
     else:
         c = _chunk(plan, run.get("chunk"))
+        if sp.is_kept(c):
+            raise PlannerError(f"chunk {c['id']} {c['deliver']} is kept as the original: it needs no mask")
         r0, r1 = c["render"]
         cid = c["id"]
     if not 0 <= r0 <= r1 < int(src["frames"]):
@@ -927,7 +1094,7 @@ class SeamStitchSwapPlanner:
         cur = sp._settings(plan.get("settings"))
         changed = {k: v for k, v in settings.items() if cur.get(k) != type(sp.DEFAULT_SETTINGS[k])(v)}
         if changed:
-            print(f"[SeamStitch] Swap Planner: {job}: settings from the widgets {changed}")
+            _say(f"[SeamStitch] Swap Planner: {job}: settings from the widgets {changed}")
             plan = sp.update_plan(pp, lambda p: apply_op(p, {"op": "settings", "settings": changed}))
 
         out = _blocked()
@@ -950,16 +1117,16 @@ class SeamStitchSwapPlanner:
             out[OUT_SOURCE_MASK] = m if m is not None else torch.zeros((1, 64, 64), dtype=torch.float32)
             out[OUT_HAS_MASK] = m is not None
             desc["source_mask"] = "cached" if m is not None else None
-            print(f"[SeamStitch] Swap Planner:   source mask: " + (f"cached ({m.shape[2]}x{m.shape[1]})" if m is not None
+            _say(f"[SeamStitch] Swap Planner:   source mask: " + (f"cached ({m.shape[2]}x{m.shape[1]})" if m is not None
                                                                     else f"none ({why}): the render group tracks it"))
-            pin_s = ", ".join(f"{s} {p['take']} {p['frames'][0]}-{p['frames'][1]}"
+            pin_s = ", ".join(f"{s} {'the source' if p.get('source') else p['take']} {p['frames'][0]}-{p['frames'][1]}"
                               for s, p in desc["pins"].items() if p) or "none"
-            print(f"[SeamStitch] Swap Planner: {job}: render {desc['chunk']} (take {desc['take']}) frames "
+            _say(f"[SeamStitch] Swap Planner: {job}: render {desc['chunk']} (take {desc['take']}) frames "
                   f"{desc['render'][0]}-{desc['render'][1]}" + (f" + {desc['held']} held" if desc["held"] else "")
                   + f" = {desc['length']}, seed {desc['seed']}, pins {pin_s}"
                   + (f", audio on H3's {desc['render_fps']} fps clock" if desc["render_fps"] != fr else ""))
             for n_ in desc["pin_notes"]:
-                print(f"[SeamStitch] Swap Planner:   {n_}")
+                _say(f"[SeamStitch] Swap Planner:   {n_}")
         elif action == ACTION_MARK:
             desc = mark_descriptor(plan, pp, r)
             src = desc["source"]
@@ -968,14 +1135,14 @@ class SeamStitchSwapPlanner:
             fr = int(round(float(src["fps"])))
             out[OUT_MARK_CHUNK] = desc
             out[OUT_MARK_IMAGES] = decode_frames(src["path"], fr, desc["range"][0], desc["frames"])
-            print(f"[SeamStitch] Swap Planner: {job}: mark {desc['chunk'] or ''} frames {desc['range'][0]}-"
+            _say(f"[SeamStitch] Swap Planner: {job}: mark {desc['chunk'] or ''} frames {desc['range'][0]}-"
                   f"{desc['range'][1]} ({desc['frames']}): the source person mask, tracked and cached")
         elif action == ACTION_ASSEMBLE:
             out[OUT_ASSEMBLE] = pp
         elif action == ACTION_DRAFT:
             out[OUT_DRAFT] = pp
         for w_ in plan.get("warnings", []):
-            print(f"[SeamStitch] Swap Planner: ⚠ {w_['text']}")
+            _say(f"[SeamStitch] Swap Planner: warning: {w_['text']}")
         return {"ui": {"seamstitch_swap_plan": [{"job": plan["job"], "rev": plan["rev"], "text": plan_text(plan)}]},
                 "result": tuple(out)}
 
