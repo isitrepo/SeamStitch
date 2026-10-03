@@ -714,7 +714,7 @@ class SeamStitchSwapAssemble:
         print("[SeamStitch] Swap Assemble: " + text.replace("\n", "\n[SeamStitch] Swap Assemble: "))
         view = rp._view_params(report["file"]) if folder_paths is not None else None
         ui = {"file": report["file"], "view": view, "frames": report["frames"], "fps": report["fps"],
-              "joins": [{k: r.get(k) for k in ("split", "splice", "type", "repair", "override", "frame_luma",
+              "joins": [{k: r.get(k) for k in ("split", "frame", "splice", "type", "repair", "override", "frame_luma", "char_luma",
                                                 "join_ratio", "join_verdict")} for r in report["joins"]],
               "flags": report["flags"]}
         return {"ui": {"seamstitch_swap_assemble": [ui]},

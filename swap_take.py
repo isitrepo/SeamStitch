@@ -410,6 +410,7 @@ class SeamStitchSwapTake:
               "review": rp._view_params(rv) if os.path.isfile(rv) else None, "review_path": rv,
               "proxy": rp._view_params(os.path.join(tdir, "proxy.mp4")), "scores": take["scores"],
               "joins": take["joins"], "flags": take["flags"], "fps": int(round(float(chunk["source"]["fps"]))),
-              "window": (report.get("review") or {}).get("window"), "text": "\n".join(lines)}
+              "window": (report.get("review") or {}).get("window"), "deliver": list(chunk["deliver"]),
+              "text": "\n".join(lines)}
         return {"ui": {"seamstitch_swap_take": [ui]},
                 "result": (os.path.join(tdir, os.path.basename(take["file"])), take["id"], json.dumps(report))}

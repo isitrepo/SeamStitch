@@ -395,6 +395,84 @@ def join_info(split, a, b, settings=None):
     return info
 
 
+def mask_cover(plan, a, b):
+    """The cached source-mask segments (plan["masks"], written by a mark run) that cover source
+    frames a..b, newest first per frame: [(segment, f0, f1), ...] in frame order, or None when a
+    frame is uncovered or the segments disagree on the mask size."""
+    segs = sorted(plan.get("masks") or [], key=lambda m: str(m.get("created", "")), reverse=True)
+    out, f = [], int(a)
+    while f <= b:
+        seg = next((m for m in segs if m["range"][0] <= f <= m["range"][1]), None)
+        if seg is None:
+            return None
+        f1 = min(int(b), int(seg["range"][1]))
+        # a newer segment starting inside this one takes over from there
+        for m in segs:
+            if m is seg:
+                break
+            if f < m["range"][0] <= f1:
+                f1 = m["range"][0] - 1
+        out.append((seg, f, f1))
+        f = f1 + 1
+    if len({tuple(s.get("size") or ()) for s, _a, _b in out}) > 1:
+        return None
+    return out
+
+
+def mask_coverage(plan, a, b):
+    """How many of source frames a..b some cached mask segment covers (for the strip's mask row)."""
+    hit = set()
+    for m in plan.get("masks") or []:
+        lo, hi = max(int(a), int(m["range"][0])), min(int(b), int(m["range"][1]))
+        hit.update(range(lo, hi + 1))
+    return len(hit)
+
+
+def join_measure(plan, j):
+    """The latest measurement of join j (a plan_joins row): the assembly's join_cache entry for this
+    exact pairing and repair, else a take's own review-clip measurement of it. None if never measured."""
+    key = f"{j['split']}|{j.get('left_take')}|{j.get('right_take')}|{j.get('override') or j.get('repair')}|{j.get('hand_back')}"
+    hit = (plan.get("join_cache") or {}).get(key)
+    if hit:
+        return dict(hit, source="assembly")
+    for cid, tid in ((j.get("right_chunk"), j.get("right_take")), (j.get("left_chunk"), j.get("left_take"))):
+        if not tid:
+            continue
+        for c in plan.get("chunks", []):
+            if c.get("id") != cid:
+                continue
+            for t in c.get("takes", []):
+                if t.get("id") != tid:
+                    continue
+                for r in t.get("joins") or []:
+                    if r.get("split") == j["split"] and r.get("left_take") == j.get("left_take") \
+                            and r.get("right_take") == j.get("right_take"):
+                        return dict(r, source="review")
+    return None
+
+
+def join_verdict(j, m):
+    """green / amber / red / None for a split's pill: the worst of colour (the luma jump at the
+    splice, frame and character: <= 1.0, <= 2.0) and motion (Result Preview's verdict), with a stale
+    join never better than amber. Provisional: B3 fits the thresholds (T-FLAGS)."""
+    if j["type"] in (STRAIGHT, PENDING):
+        return None
+    rank = {"green": 0, "amber": 1, "red": 2}
+    worst = "amber" if j.get("stale") else None
+    if m:
+        for key in ("frame_luma", "char_luma"):
+            v = (m.get(key) or {}).get("at_splice")
+            if v is None:
+                continue
+            v = abs(float(v))
+            c = "green" if v <= 1.0 else "amber" if v <= 2.0 else "red"
+            worst = c if worst is None or rank[c] > rank[worst] else worst
+        mv = {"seamless": "green", "soft bump": "amber", "hard cut": "red"}.get(m.get("join_verdict"))
+        if mv:
+            worst = mv if worst is None or rank[mv] > rank[worst] else worst
+    return worst
+
+
 def plan_joins(plan):
     """Every join of a plan in order: join_info plus the chunks either side, their effective
     takes and states. A take that no longer covers its chunk counts as pending."""
@@ -434,7 +512,7 @@ def new_plan(job, source, settings=None):
     """A fresh plan. `source`: {path, frames, fps, width, height, audio, size, mtime_ns}."""
     return {"format": FORMAT, "rev": 0, "job": job, "created": now(), "source": dict(source),
             "settings": _settings(settings), "subject": "", "cuts": [], "splits": [], "chunks": [],
-            "join_cache": {}, "assembled": [], "next_ids": {"split": 1, "chunk": 1}}
+            "join_cache": {}, "assembled": [], "masks": [], "trash": [], "next_ids": {"split": 1, "chunk": 1}}
 
 
 def _next_id(plan, kind, prefix):
