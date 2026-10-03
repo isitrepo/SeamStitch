@@ -116,6 +116,7 @@ def probe(path, frame_rate):
             "base_time": base,
             "has_audio": a is not None,
             "sample_rate": int(a.rate) if a is not None else 0,
+            "deep_rgb": _deep_rgb(vs.codec_context.format),
         }
     fr = float(frame_rate) if frame_rate and frame_rate > 0 else (round(native) or 24)
     info["frame_rate"] = fr
@@ -158,6 +159,21 @@ def _color_args(cc, w, h):
     return cs, cr, dst
 
 
+def _deep_rgb(fmt):
+    """An RGB-coded pixel format with more than 8 bits a channel (FFV1 gbrp16le / gbrap16le,
+    as VHS's ffv1-mkv and SeamStitch Swap Assemble's 16-bit master write)."""
+    return fmt is not None and fmt.name.startswith(_RGB_PIX) and max(c.bits for c in fmt.components) > 8
+
+
+def _rgb8_from_16(frame):
+    """16-bit RGB to uint8, nearest level: round(x / 257), the exact inverse of v * 257 (how VHS
+    and Swap Assemble store 8-bit level v). swscale's own 16->8 bit conversion (to_ndarray("rgb24"))
+    is not: it lifts some pixels one level, a share that depends on the level, channel and
+    position (none below ~110, all from ~200 up), so a 16-bit master read back mean +0.13."""
+    x = frame.to_ndarray(format="rgb48le").astype(np.uint32)
+    return ((x + 128) // 257).astype(np.uint8)
+
+
 def _iter_frames(path, frame_rate, start_idx, end_idx):
     """Yield uint8 HxWx3 frames start_idx..end_idx-1 at frame_rate, decode order from
     the stream's own first frame. Same selection rule as recombine._decode_range:
@@ -195,7 +211,7 @@ def _iter_frames(path, frame_rate, start_idx, end_idx):
                     break
                 if rgb is None and frame.format.name.startswith(_RGB_PIX):
                     # RGB-coded (FFV1 rgb / gbrp): no YUV matrix to apply - see loader._RGB_PIX.
-                    rgb = frame.to_ndarray(format="rgb24")
+                    rgb = _rgb8_from_16(frame) if _deep_rgb(frame.format) else frame.to_ndarray(format="rgb24")
                 if rgb is None:
                     try:
                         rgb = frame.reformat(format="rgb24", src_colorspace=cs, src_color_range=cr,
@@ -410,6 +426,8 @@ def _cut_key(cut, fr, crf, fit, codec=CODEC_LOSSLESS, conform=False):
     key = [_ASSEMBLY_VERSION, fr, int(crf), fit, codec]
     if conform_rate(fr, conform) != fr:
         key.append(f"conform{H3_FPS}")   # only when it changes the file: unconformed keys stay as they were
+    if any(probe(p["path"], fr).get("deep_rgb") for p in cut["pieces"]):
+        key.append("rgb16exact")         # same: an all-8-bit cut keeps its key (and its bytes)
     h.update(json.dumps(key).encode())
     for p in cut["pieces"]:
         st = os.stat(p["path"])
