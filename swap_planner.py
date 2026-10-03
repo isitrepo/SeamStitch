@@ -333,6 +333,23 @@ def apply_op(plan, body):
     elif op == "delete_mask":
         mid = body.get("mask")
         plan["masks"] = [m for m in plan.get("masks", []) if m.get("id") != mid]
+    elif op == "clear_all":
+        # start fresh: every cut, split, kept stretch and prompt goes (one chunk over the whole source).
+        # Nothing is erased: chunks with takes or prompts are listed under removed_chunks (their take
+        # files stay on disk), and the cached masks stay (they're per source frame, still valid).
+        busy = [c["id"] for c in plan.get("chunks", []) if c.get("state") == "rendering"]
+        if busy:
+            raise sp.PlanError(f"chunk {', '.join(busy)} is rendering: clear once it's in")
+        gone = [c for c in plan.get("chunks", []) if c.get("takes") or (c.get("prompt") or "").strip()]
+        if gone:
+            plan.setdefault("removed_chunks", []).extend(dict(c, removed=sp.now(), reason="clear all") for c in gone)
+        res["cleared"] = {"cuts": len(plan.get("cuts", [])), "splits": len(plan.get("splits", [])),
+                          "kept": sum(1 for c in plan.get("chunks", []) if sp.is_kept(c)),
+                          "prompts": sum(1 for c in plan.get("chunks", []) if (c.get("prompt") or "").strip()),
+                          "takes_listed": sum(len(c.get("takes") or []) for c in gone),
+                          "masks_kept": len(plan.get("masks") or [])}
+        plan["cuts"], plan["splits"], plan["chunks"] = [], [], []
+        geo = True
     elif op == "keep":
         # keep the original (§4.10): {"chunk", "keep": bool}, or a trim handle {"edge": "start"|"end",
         # "frame": J (0 or the frame count = no trim), "mode": optional}
