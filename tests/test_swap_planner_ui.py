@@ -96,8 +96,12 @@ def test_short_mask_holes_fill_from_the_nearer_side():
     assert torch.equal(out[7], m[8]) and torch.equal(out[9], m[8]) and torch.equal(out[10], m[11])
     _o, filled, empty = sm.fill_holes(m, 2)                    # the 3-frame hole is too long now
     assert filled == [2, 9, 10] and empty == [5, 6, 7]
-    edge = torch.zeros((5, 2, 2)); edge[2:, 0, 0] = 1          # a hole at the range's start stays empty
-    assert sm.fill_holes(edge, 6)[1:] == ([], [0, 1])
+    edge = torch.zeros((6, 2, 2)); edge[2:4, 0, 0] = 1; edge[3, 1, 1] = 1   # holes at both ends: one side each
+    out, filled, empty = sm.fill_holes(edge, 6)
+    assert filled == [0, 1, 4, 5] and empty == []
+    assert torch.equal(out[0], edge[2]) and torch.equal(out[5], edge[3])
+    assert sm.fill_holes(edge, 1)[1:] == ([], [0, 1, 4, 5])            # too long for max_len 1
+    assert sm.fill_holes(torch.zeros((4, 2, 2)), 6)[1:] == ([], [0, 1, 2, 3])   # nobody at all: left empty
 
 
 # ---------------------------------------------------------------- takes, prompts, states

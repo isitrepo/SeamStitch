@@ -34,9 +34,10 @@ FILL_HOLES = 6          # frames: a tracking hole this short, with the person fo
 
 def fill_holes(mask, max_len=FILL_HOLES):
     """Short tracking holes filled from the nearer side. A hole is a run of frames where the mask is
-    empty with non-empty frames on both sides inside the range, up to max_len long; each of its
-    frames takes the mask of the nearer non-empty frame (the earlier one on a tie). Runs at the
-    range's edges and longer runs stay empty. Returns (mask, filled indices, empty indices)."""
+    empty, up to max_len long; each of its frames takes the mask of the nearer non-empty frame (the
+    earlier one on a tie). A hole at the range's start or end has one side only and holds that side's
+    mask (seen live: SAM3 lost a head-down person on the clip's last 5 frames). Longer runs, and a
+    range with nobody in it at all, stay empty. Returns (mask, filled indices, empty indices)."""
     n = int(mask.shape[0])
     empty = [i for i in range(n) if float(mask[i].max()) <= 0.5]
     filled, emp = [], set(empty)
@@ -51,10 +52,15 @@ def fill_holes(mask, max_len=FILL_HOLES):
                 runs.append((start, i - 1))
                 start = None
         for a, b in runs:
-            if a == 0 or b == n - 1 or b - a + 1 > max_len:
+            if b - a + 1 > max_len or (a == 0 and b == n - 1):
                 continue
             for i in range(a, b + 1):
-                out[i] = mask[a - 1] if i - (a - 1) <= (b + 1) - i else mask[b + 1]
+                if a == 0:
+                    out[i] = mask[b + 1]
+                elif b == n - 1:
+                    out[i] = mask[a - 1]
+                else:
+                    out[i] = mask[a - 1] if i - (a - 1) <= (b + 1) - i else mask[b + 1]
                 filled.append(i)
         mask = out
     left = [i for i in empty if i not in set(filled)]
@@ -135,8 +141,9 @@ class SeamStitchSwapMask:
                 "save_preview": ("BOOLEAN", {"default": True, "tooltip":
                     "preview.mp4 for the Planner's mask row: the marked guide if wired, else the mask."}),
                 "fill_holes": ("INT", {"default": FILL_HOLES, "min": 0, "max": 50, "step": 1, "tooltip":
-                    "Fill a tracking hole up to this many frames long (the person found on both sides) from the "
-                    "nearer frame's mask; the mask row shows them amber. Longer holes stay empty (red). 0 = off."}),
+                    "Fill a tracking hole up to this many frames long from the nearer frame's mask (at the range's "
+                    "start or end, from its one side); the mask row shows them amber. Longer holes stay empty "
+                    "(red). 0 = off."}),
             },
             "optional": {
                 "preview": ("IMAGE", {"tooltip": "What to show on the mask row: the marked guide (the person inverted)."}),
