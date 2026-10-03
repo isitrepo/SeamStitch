@@ -778,10 +778,15 @@ function buildPlanner(node) {
             const st = statusOf(c.id), x0 = f2x(c.deliver[0]), x1 = f2x(c.deliver[1] + 1);
             if (x1 < 0 || x0 > w) return;
             const pct = Math.round((st.mask || 0) * 100);
-            g.fillStyle = pct >= 100 ? "#d1fae5" : pct ? C.amber : C.faint;
+            const lost = (st.mask_empty || []).filter(f => f >= c.deliver[0] && f <= c.deliver[1]);
+            g.fillStyle = lost.length ? C.red : pct >= 100 ? "#d1fae5" : pct ? C.amber : C.faint;
             g.save(); g.beginPath(); g.rect(x0 + 2, MASK_Y, Math.max(0, x1 - x0 - 4), MASK_H); g.clip();
-            g.fillText(pct >= 100 ? `mask ✓${(c.options || {}).mark === false ? " (marking off)" : ""}` : pct ? `mask ${pct}%` : "no mask: the render tracks its own", x0 + 5, MASK_Y + MASK_H / 2);
+            g.fillText((pct >= 100 ? `mask ✓${(c.options || {}).mark === false ? " (marking off)" : ""}` : pct ? `mask ${pct}%` : "no mask: the render tracks its own")
+                + (lost.length ? ` · no person on ${lost.length} frame${lost.length === 1 ? "" : "s"} (${lost[0]}${lost.length > 1 ? `-${lost.at(-1)}` : ""})` : ""), x0 + 5, MASK_Y + MASK_H / 2);
             g.restore();
+            // frames where SAM3 found nobody: a red tick each, so a lost track shows before any render
+            g.fillStyle = C.red;
+            for (const f of lost) g.fillRect(f2x(f), MASK_Y + 1, Math.max(1.5, S.pxPerFrame), MASK_H - 2);
         });
 
         // prompt row: [Shot n] blocks at the confirmed cuts, dialogue in them

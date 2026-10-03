@@ -495,11 +495,36 @@ def plan_text(plan):
     return "\n".join(lines)
 
 
+_EMPTY_CACHE = {}
+
+
+def mask_empty_frames(jd, seg, fps):
+    """Source frames of a cached mask segment where the mask is empty (SAM3 lost the person). Swap
+    Mask records them; a segment cached before it did is scanned once per file version."""
+    if "empty" in seg:
+        return seg["empty"]
+    path = os.path.join(jd, seg["file"])
+    try:
+        st = os.stat(path)
+    except OSError:
+        return []
+    key = (os.path.abspath(path), st.st_mtime_ns, st.st_size)
+    if key not in _EMPTY_CACHE:
+        a = int(seg["range"][0])
+        _EMPTY_CACHE[key] = [a + i for i, f in enumerate(tl._iter_frames(path, fps, 0, None)) if not (f[..., 0] > 127).any()]
+    return _EMPTY_CACHE[key]
+
+
 def chunk_status(plan, jd):
     """What the strip draws for each chunk (§5.1 UI states), from the plan and the files on disk:
     state = pending | unreviewed | chosen | range changed | missing file, plus rendering / failed
     when the plan says so, the takes count, and how much of its render range the mask cache covers."""
     out = []
+    fps = int(round(float((plan.get("source") or {}).get("fps") or 25)))
+    # a frame counts only if the segment that covers it (the newest, as renders read it) is empty there
+    segs = sorted(plan.get("masks") or [], key=lambda m: str(m.get("created", "")), reverse=True)
+    empty = sorted(f for m in segs for f in mask_empty_frames(jd, m, fps)
+                   if next(s for s in segs if s["range"][0] <= f <= s["range"][1]) is m)
     for c in plan.get("chunks", []):
         t, st = sp.effective_take(c)
         if t is not None and not sp.take_covers(t, *c["deliver"]):
@@ -510,7 +535,8 @@ def chunk_status(plan, jd):
         d = {"chunk": c["id"], "state": st, "take": t and t["id"], "takes": len(c.get("takes") or []),
              "prompt": "empty" if not (c.get("prompt") or "").strip() else c.get("prompt_state") or "edited",
              "draft": bool((c.get("draft") or "").strip()),
-             "mask": round(sp.mask_coverage(plan, r0, r1) / float(r1 - r0 + 1), 4)}
+             "mask": round(sp.mask_coverage(plan, r0, r1) / float(r1 - r0 + 1), 4),
+             "mask_empty": [f for f in empty if r0 <= f <= r1]}
         if c.get("state") == "rendering":
             d["rendering"] = c.get("rendering")
         elif c.get("state") == "failed":
