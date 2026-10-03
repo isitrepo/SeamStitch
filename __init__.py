@@ -66,6 +66,9 @@ except Exception as e:
 try:
     from .swap_planner import SeamStitchSwapPlanner, SeamStitchSwapOption
     from .swap_take import SeamStitchSwapTake
+    from .swap_mask import SeamStitchSwapMask
+    NODE_CLASS_MAPPINGS["SeamStitchSwapMask"] = SeamStitchSwapMask
+    NODE_DISPLAY_NAME_MAPPINGS["SeamStitchSwapMask"] = "SeamStitch Swap Mask"
     NODE_CLASS_MAPPINGS["SeamStitchSwapPlanner"] = SeamStitchSwapPlanner
     NODE_DISPLAY_NAME_MAPPINGS["SeamStitchSwapPlanner"] = "SeamStitch Swap Planner"
     NODE_CLASS_MAPPINGS["SeamStitchSwapOption"] = SeamStitchSwapOption
@@ -73,7 +76,7 @@ try:
     NODE_CLASS_MAPPINGS["SeamStitchSwapTake"] = SeamStitchSwapTake
     NODE_DISPLAY_NAME_MAPPINGS["SeamStitchSwapTake"] = "SeamStitch Swap Take"
 except Exception as e:
-    logging.getLogger(__name__).warning(f"[SeamStitch] Swap Planner / Option / Take not loaded: {e}")
+    logging.getLogger(__name__).warning(f"[SeamStitch] Swap Planner / Option / Take / Mask not loaded: {e}")
 
 WEB_DIRECTORY = "js"
 

@@ -151,8 +151,10 @@ def test_planner_render_run_emits_frames_audio_and_pins_from_the_takes(nodes):
     ta = _add_take(nodes, 0, A, r[0])
     res = _run(nodes, "render", chunk=c[1]["id"], seed=11)
     out = res["result"]
-    desc, images, audio, prompt, seed, length, sp_, ep_, w, h, frate, sfr, opts, draft, asm = out
+    desc, images, audio, prompt, seed, length, sp_, ep_, w, h, frate, sfr, opts, draft, asm = out[:15]
     assert isinstance(draft, spl.ExecutionBlocker) and isinstance(asm, spl.ExecutionBlocker)
+    # no mask cached: the mark outputs are blocked, and the render group is told to track its own
+    assert all(isinstance(o, spl.ExecutionBlocker) for o in out[15:17]) and out[18] is False
     assert draft.message is None
     assert length == c[1]["length"] == images.shape[0] and (w, h) == (W_, H_) and (frate, sfr) == (24, 25)
     assert prompt == f"prompt {c[1]['id']}" and seed == 11 and json.loads(opts) == {"mark": True}
@@ -176,7 +178,8 @@ def test_planner_render_run_emits_frames_audio_and_pins_from_the_takes(nodes):
 
 def test_planner_assemble_and_empty_runs_block_the_render(nodes):
     out = _run(nodes, "assemble")["result"]
-    assert out[14] == nodes["plan"] and all(isinstance(o, spl.ExecutionBlocker) for o in out[:14])
+    assert out[14] == nodes["plan"] and all(isinstance(o, spl.ExecutionBlocker) for o in out[:14] + out[15:])
+    assert len(out) == len(spl.RETURN_TYPES) == len(spl.RETURN_NAMES) == 19
     out = spl.SeamStitchSwapPlanner().plan("t", "", 39, 6, 5, 10, 260, True, "")["result"]
     assert all(isinstance(o, spl.ExecutionBlocker) for o in out)
     sp.update_plan(nodes["plan"], lambda p: p["chunks"][2].__setitem__("prompt", " "))
