@@ -416,5 +416,39 @@ def test_each_shot_gets_exactly_its_own_lines_in_the_transcription_words():
     out, added = sd.place_dialogue(b, lines)
     assert out.count("<d>[English]Link app,</d>") == 1 and out.count("<d>[English]product manual,</d>") == 1
     assert "Lovely bundled" not in out                       # another shot's line: moved there, not kept here
-    assert out.endswith("<Subject 1> (S1) says <d>[English]got some stickies,</d>") and added == 1
+    assert "<d>[English]product manual,</d> <Subject 1> (S1) says <d>[English]got some stickies,</d>" in out and added == 1
     assert "saying" not in out and "“" not in out
+
+
+def test_a_speech_verb_before_a_tag_goes_and_long_shots_split_only_when_asked():
+    out, _ = sd.place_dialogue("She reads it and she mutters <Subject 1> (S1) says <d>[English]Product manual.</d> quietly.",
+                               [{"text": "Product manual."}])
+    assert out == "She reads it and <Subject 1> (S1) says <d>[English]Product manual.</d> quietly."
+    assert sd.shot_segments([(0, 179)], 25, 0) == [(0, (0, 179), 0, 1)]
+    assert sd.shot_segments([(0, 179)], 25, 4.0) == [(0, (0, 89), 0, 2), (0, (90, 179), 1, 2)]
+
+
+def test_a_line_belongs_to_the_shot_its_middle_is_in_and_a_stretched_first_word_is_trimmed():
+    words = [{"word": "So", "start": 0.76, "end": 1.26}, {"word": "what", "start": 1.26, "end": 1.38},
+             {"word": "here?", "start": 1.7, "end": 1.86}]
+    al = sd.align_words("So what here?", words)
+    assert al[0]["start"] == pytest.approx(0.86)
+    ln = sd.dialogue_lines(al, 25, 209)[0]
+    assert ln["frames"] == [22, 46]
+    shots = [(0, 12), (13, 28), (29, 208)]                    # 400-608: cuts at 413 and 429
+    assert sd.lines_in_shot([ln], shots[2], 3, 2) == [ln] and sd.lines_in_shot([ln], shots[1], 3, 1) == []
+
+
+def test_a_subject_answer_without_its_labels_still_parses():
+    r = sd.parse_subject("pink-clown angel  \na young woman, red clown nose, pink hair with bangs, rainbow choker  \nshe")
+    assert r == {"name": "pink-clown angel", "appearance": "a young woman, red clown nose, pink hair with bangs, rainbow choker",
+                 "pronoun": "she"}
+
+
+def test_a_dropped_line_goes_back_in_order_and_stage_notes_are_not_words():
+    lines = [{"text": "One."}, {"text": "Two."}, {"text": "Three."}]
+    b = "A. <Subject 1> (S1) says <d>[English]One.</d> B. <Subject 1> (S1) says <d>[English]Three.</d> C."
+    out, added = sd.place_dialogue(b, lines)
+    assert added == 1 and out.index("Two.") > out.index("One.") and out.index("Two.") < out.index("Three.")
+    po = sd.parse_omni("transcript: [English] Lovely bundled and a... (voice trails off) audio_events: hum")
+    assert po["words"] == "Lovely bundled and a..." and "voice trails off" in po["notes"]
