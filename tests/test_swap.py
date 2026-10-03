@@ -534,6 +534,28 @@ def test_assemble_16bit_master_holds_the_8bit_frames_exactly(job):
         out = np.stack([f.to_ndarray(format="rgb48le") for f in c.decode(video=0)])
     src = _frames(sp.load_plan(job["plan"])["source"]["path"])
     assert out.shape[0] == job["N"] and np.array_equal(out, src.astype(np.uint16) * 257)
+    assert np.array_equal(_frames(rep["file"]), src)                                  # and reads back as itself
+
+
+def test_16bit_ffv1_reads_back_to_the_exact_8bit_levels(tmp_path):
+    """Every 8-bit level, written as v * 257 through the 16-bit ffv1 path (FFV1_16_SPEC's main pass),
+    comes back through timeline._iter_frames as v. swscale's own 16->8 bit conversion lifted levels
+    from about 110 up by one (B3b); the decoder now rounds x / 257 itself."""
+    import av
+    import timeline as tl
+    lv = np.arange(256, dtype=np.uint8).reshape(16, 16)
+    src = np.stack([np.stack([np.roll(lv, i, 0), lv[::-1], lv.T], -1) for i in range(8)])
+    path = str(tmp_path / "master16.mkv")
+    subprocess.run([_ffmpeg(), "-v", "error", "-y", "-f", "rawvideo", "-pix_fmt", "rgb48le", "-s", "16x16",
+                    "-r", str(FR), "-i", "-", *FFV1_16_SPEC["main_pass"][1:], path],
+                   input=(src.astype(np.uint16) * 257).tobytes(), check=True)
+    with av.open(path) as c:
+        assert c.streams.video[0].codec_context.format.name == "gbrap16le"
+        swscale = np.stack([f.to_ndarray(format="rgb24") for f in c.decode(video=0)])
+    assert not np.array_equal(swscale, src)                                           # the old read was off
+    assert tl.probe(path, FR)["deep_rgb"]
+    assert np.array_equal(np.stack(list(tl._iter_frames(path, FR, 0, None))), src)
+    assert np.array_equal(np.stack(list(tl._iter_frames(path, FR, 3, 6))), src[3:6])
 
 
 # ---------------------------------------------------------------- B1b: the cut-aware, regional lock
