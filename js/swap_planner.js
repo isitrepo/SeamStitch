@@ -1209,9 +1209,33 @@ function buildPlanner(node) {
             dv.title = `The draft:\n\n${c.draft.slice(0, 1500)}`;
             side.append(dv);
         }
-        side.append(button("redraft", "Queue a draft run (Draft Prompts' chunks widget decides which: empty only / all into the draft field / selected)", () => queueRun({ action: "draft", chunk: c.id }, "draft")));
+        side.append(button("redraft", "Queue a draft run of this chunk: SeamStitch Swap Draft Prompts drafts it into the prompt if that's empty, otherwise into the draft field (never over your prompt)", () => queueRun({ action: "draft", chunk: c.id }, "draft")));
         pr.append(ta, side);
         selBox.append(pr);
+
+        // the subject: one per job, shared by every chunk's subject_definitions (an edit replaces it in each prompt)
+        const sr = row();
+        const subj = el("textarea", { flex: "1 1 auto", minWidth: "300px", height: "3.2em", background: "#111", color: C.text,
+            border: "1px solid #444", borderRadius: "4px", fontFamily: "monospace", fontSize: "0.9em", boxSizing: "border-box", userSelect: "text" });
+        subj.value = P().subject || "";
+        subj.placeholder = "Subject (one per job): drafted from the sheet by Draft Prompts, or write '<Subject 1> (S1) is the ... whose motion comes from <Video 1> and whose appearance comes from <Picture 1>: ...'";
+        subj.title = "The job's subject, shared by every chunk: saving an edit replaces the old subject text in every chunk's prompt and draft";
+        const saveSubj = () => { if (subj.value.trim() !== (P().subject || "").trim()) op({ op: "set_subject", subject: subj.value }, true).then(r => { if (r) toast(`subject saved${r.result?.subject_replaced_in ? `, replaced in ${r.result.subject_replaced_in} prompt(s)` : ""}`, "green"); }); };
+        subj.onblur = saveSubj;
+        subj.onkeydown = (e) => { e.stopPropagation(); if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); saveSubj(); } };
+        subj.onpointerdown = (e) => e.stopPropagation();
+        subj.onwheel = (e) => e.stopPropagation();
+        const sSide = el("div", { display: "flex", flexDirection: "column", gap: "3px" });
+        sSide.append(el("span", { color: (P().subject || "").trim() ? C.dim : C.amber, fontWeight: "bold" }, "subject"));
+        if ((P().subject_draft || "").trim()) {
+            const ad = button("adopt subject draft", "Replace the subject (and its text in every chunk's prompt) with the waiting draft", () => op({ op: "adopt_subject_draft" }));
+            ad.title = `The subject draft:
+
+${P().subject_draft}`;
+            sSide.append(ad);
+        }
+        sr.append(subj, sSide);
+        selBox.append(sr);
 
         // the takes list: chosen radio, ▶ in context, use this prompt and seed, delete to trash
         const takes = (c.takes || []).slice();
