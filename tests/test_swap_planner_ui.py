@@ -59,6 +59,47 @@ def test_detect_cuts_finds_a_hard_cut(tmp_path):
     assert spl.detect_cuts(path, FR) == [20, 45]
 
 
+def test_detect_and_plan_is_one_step_and_keeps_worked_splits():
+    p = _plan978(cuts=())
+    spl.apply_op(p, {"op": "add_cut", "frame": 785, "from": "detected", "confirmed": False})
+    res = spl.detect_and_plan(p, CUTS_978)
+    assert all(c["confirmed"] for c in p["cuts"]) and [c["frame"] for c in p["cuts"]] == CUTS_978
+    assert res["splits"] == [209, 406, 603, 815] and not res["kept_splits"]
+    spl.apply_op(p, {"op": "set_prompt", "chunk": p["chunks"][1]["id"], "prompt": "x"})
+    spl.apply_op(p, {"op": "move_split", "split": p["splits"][0]["id"], "to": 200})
+    res = spl.detect_and_plan(p, CUTS_978 + [500])
+    assert res["kept_splits"] and res["splits"] is None and p["splits"][0]["frame"] == 200
+    assert 500 in [c["frame"] for c in p["cuts"] if c["confirmed"]]
+
+
+def test_jobs_list_and_free_names(tmp_path):
+    out = str(tmp_path)
+    assert spl.list_jobs(out) == [] and spl.free_job_name("100d clip", out) == "100d_clip"
+    for name in ("100d_clip", "100d_clip_2"):
+        jd, pp = spl.job_paths(name, out)
+        p = sp.new_plan(name, {"path": "C:/v/100d clip.mp4", "frames": 978, "fps": 25, "width": 8, "height": 6})
+        sp.rebuild_chunks(p)
+        sp.save_plan(pp, p)
+    assert {j["job"] for j in spl.list_jobs(out)} == {"100d_clip", "100d_clip_2"}
+    assert spl.free_job_name("100d clip", out) == "100d_clip_3"
+
+
+def test_short_mask_holes_fill_from_the_nearer_side():
+    import swap_mask as sm
+    m = torch.zeros((12, 2, 2))
+    for i, v in enumerate([1, 1, 0, 1, 2, 0, 0, 0, 3, 0, 0, 4]):
+        m[i, 0, 0] = 1.0 if v else 0.0
+        m[i, 1, 1] = v / 4.0
+    out, filled, empty = sm.fill_holes(m, 3)
+    assert filled == [2, 5, 6, 7, 9, 10] and empty == []
+    assert torch.equal(out[2], m[1]) and torch.equal(out[5], m[4]) and torch.equal(out[6], m[4])   # tie -> earlier
+    assert torch.equal(out[7], m[8]) and torch.equal(out[9], m[8]) and torch.equal(out[10], m[11])
+    _o, filled, empty = sm.fill_holes(m, 2)                    # the 3-frame hole is too long now
+    assert filled == [2, 9, 10] and empty == [5, 6, 7]
+    edge = torch.zeros((5, 2, 2)); edge[2:, 0, 0] = 1          # a hole at the range's start stays empty
+    assert sm.fill_holes(edge, 6)[1:] == ([], [0, 1])
+
+
 # ---------------------------------------------------------------- takes, prompts, states
 
 def _take_files(jd, c, tid, seed=5, prompt="old prompt"):
@@ -176,7 +217,7 @@ def test_mark_run_caches_a_mask_that_the_render_run_reuses(nodes):
     m[2] = 0                                                  # SAM3 lost the person on one frame
     with pytest.raises(sm.MaskError, match="1:1"):
         sm.save_mask(mark, m[:-1])
-    e = sm.SeamStitchSwapMask().save(mark, m, True, None)["result"][0]
+    e = sm.SeamStitchSwapMask().save(mark, m, save_preview=True, fill_holes=0)["result"][0]
     q = sp.load_plan(nodes["plan"])
     seg = q["masks"][0]
     assert seg["id"] == e == "m001" and seg["range"] == [r0, r1] and seg["size"] == [16, 12]
