@@ -451,26 +451,19 @@ def join_measure(plan, j):
     return None
 
 
+def join_flags(j, m):
+    """A split's join flags (colour, motion, following, lineage) and its verdict, the worst of
+    them: swap_scores.join_flags, with the thresholds B3 fitted (design §4.5, T-FLAGS)."""
+    try:
+        from . import swap_scores as ss
+    except ImportError:  # top-level import (tests, tools)
+        import swap_scores as ss
+    return ss.join_flags(j, m)
+
+
 def join_verdict(j, m):
-    """green / amber / red / None for a split's pill: the worst of colour (the luma jump at the
-    splice, frame and character: <= 1.0, <= 2.0) and motion (Result Preview's verdict), with a stale
-    join never better than amber. Provisional: B3 fits the thresholds (T-FLAGS)."""
-    if j["type"] in (STRAIGHT, PENDING):
-        return None
-    rank = {"green": 0, "amber": 1, "red": 2}
-    worst = "amber" if j.get("stale") else None
-    if m:
-        for key in ("frame_luma", "char_luma"):
-            v = (m.get(key) or {}).get("at_splice")
-            if v is None:
-                continue
-            v = abs(float(v))
-            c = "green" if v <= 1.0 else "amber" if v <= 2.0 else "red"
-            worst = c if worst is None or rank[c] > rank[worst] else worst
-        mv = {"seamless": "green", "soft bump": "amber", "hard cut": "red"}.get(m.get("join_verdict"))
-        if mv:
-            worst = mv if worst is None or rank[mv] > rank[worst] else worst
-    return worst
+    """green / amber / red / None for a split's pill (join_flags' verdict)."""
+    return join_flags(j, m)["verdict"]
 
 
 def plan_joins(plan):

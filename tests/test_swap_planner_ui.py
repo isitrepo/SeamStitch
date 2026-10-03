@@ -181,9 +181,9 @@ def test_join_verdicts_for_the_pills():
          "right_chunk": "c2", "repair": "lock", "override": None, "hand_back": 12}
     assert sp.join_verdict(j, None) is None
     assert sp.join_verdict(j, {"frame_luma": {"at_splice": 0.4}, "char_luma": {"at_splice": 0.3},
-                               "join_verdict": "seamless"}) == "green"
-    assert sp.join_verdict(j, {"frame_luma": {"at_splice": 1.06}, "char_luma": {"at_splice": 2.11}}) == "red"
-    assert sp.join_verdict(j, {"frame_luma": {"at_splice": 0.4}, "join_verdict": "soft bump"}) == "amber"
+                               "join_ratio": 0.9}) == "green"
+    assert sp.join_verdict(j, {"frame_luma": {"at_splice": 2.06}, "char_luma": {"at_splice": 0.1}}) == "red"
+    assert sp.join_flags(j, {"frame_luma": {"at_splice": 0.4}, "join_ratio": 99})["motion"] == "red"
     assert sp.join_verdict(dict(j, type=sp.STALE, stale=True), None) == "amber"
     assert sp.join_verdict(dict(j, type=sp.STRAIGHT), {"frame_luma": {"at_splice": 9}}) is None
     plan = {"join_cache": {}, "chunks": [{"id": "c2", "takes": [{"id": "b", "joins": [

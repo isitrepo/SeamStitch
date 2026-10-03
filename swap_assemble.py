@@ -622,6 +622,8 @@ def assemble(plan_file, hand_back=12, fmt="video/h264-mp4", crf=12, pix_fmt="yuv
             follow = _join_follow(job, a, b, s, max(f_lo, s - FOLLOW_SIDE), min(f_hi, s + FOLLOW_SIDE - 1))
             if follow is not None:
                 row["follow"] = follow
+            row["flags"] = sp.join_flags(row, row)
+            row["verdict"] = row["flags"]["verdict"]
         rows.append(row)
 
     report = {"file": final, "frames": out_info["frames"], "window": None if window is None else [f_lo, f_hi], "fps": fr, "size": [w, h], "format": fmt, "crf": int(crf),

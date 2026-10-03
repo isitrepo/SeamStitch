@@ -32,12 +32,14 @@ try:
     from . import swap_assemble as sa
     from . import timeline as tl
     from . import result_preview as rp
+    from . import swap_scores as ss
 except ImportError:  # imported as a top-level module (tests, tools)
     import swap_plan as sp
     import swap_planner as spl
     import swap_assemble as sa
     import timeline as tl
     import result_preview as rp
+    import swap_scores as ss
 
 CODEC_LOSSLESS = tl.CODEC_LOSSLESS
 CODEC_H264 = tl.CODEC_H264
@@ -121,23 +123,89 @@ def mask_frames_u8(mask, n):
         yield np.repeat(g[..., None], 3, axis=2)
 
 
-def pose_iou(src_mask, out_mask, n):
-    """r10's following measure: per frame IoU of the source and output person masks (mean, p10)."""
-    try:
-        from . import swap_join as sj
-    except ImportError:
-        import swap_join as sj
-    vals = []
+def mask_list(mask, n):
+    """MASK [N, h, w] (0..1) -> the first n frames as bool arrays."""
+    out = []
     for i in range(n):
-        a = src_mask[i].detach().cpu().numpy() > 0.5
-        b = out_mask[i].detach().cpu().numpy() > 0.5
-        v = sj.iou(a, b)
-        if v is not None:
-            vals.append(v)
-    if not vals:
-        return None
-    return {"pose_iou": round(float(np.mean(vals)), 4), "pose_iou_p10": round(float(np.percentile(vals, 10)), 4),
-            "frames": len(vals)}
+        m = mask[i].detach().cpu().numpy() if isinstance(mask, torch.Tensor) else np.asarray(mask[i])
+        out.append(m > 0.5)
+    return out
+
+
+def _mouth_cache(job, r0, r1):
+    return os.path.join(job, "cache", f"mouth_src_{r0:05d}-{r1:05d}.json")
+
+
+def compute_scores(job, plan, r0, r1, out_frames, src_masks=None, out_masks=None, mouth=True):
+    """Every chunk score of a take delivering source frames r0..r1 (swap_scores, design §4.5):
+    following (with both masks), lost cuts per confirmed cut inside, the scene alarm (with the
+    source mask), and mouth sync (with mediapipe and models/mediapipe/face_landmarker.task; the
+    source's mouth series is cached in the job's cache/ by range). out_frames: RGB uint8,
+    frame i = source frame r0 + i."""
+    src = plan["source"]
+    fr = int(round(float(src["fps"])))
+    cuts = [c for c in sp.confirmed_cuts(plan.get("cuts")) if r0 < c <= r1]
+    cache = _mouth_cache(job, r0, r1)
+    ms = None
+    if mouth and os.path.isfile(cache):
+        try:
+            with open(cache, encoding="utf-8") as f:
+                ms = json.load(f)
+            if len(ms) != r1 - r0 + 1:
+                ms = None
+        except (OSError, ValueError):
+            ms = None
+    src_frames = tl._iter_frames(src["path"], fr, r0, r1 + 1)
+    scores, extras = ss.score_frames(out_frames, src_frames, src_masks, out_masks, cuts, r0, fr, mouth=mouth,
+                                     mouth_src=ms)
+    if extras.get("mouth_src") is not None and ms is None:
+        try:
+            os.makedirs(os.path.dirname(cache), exist_ok=True)
+            with open(cache, "w", encoding="utf-8") as f:
+                json.dump(extras["mouth_src"], f)
+        except OSError:
+            pass
+    scores["scored"] = sp.now()
+    return scores
+
+
+def _take_masks(tdir, n, fr):
+    """The take's saved SAM3 masks (source, output) as bool frames, or None where missing."""
+    out = []
+    for name in ("mask_src.mkv", "mask_out.mkv"):
+        p = os.path.join(tdir, name)
+        out.append([f[..., 0] > 127 for f in tl._iter_frames(p, fr, 0, n)] if os.path.isfile(p) else None)
+    return out
+
+
+def rescore_take(plan_file, take_id, mouth=True):
+    """Recompute a saved take's scores from its own files (the take, its masks, the source), e.g.
+    for takes saved before B3. Writes them into plan.json and take.json; returns the scores."""
+    plan = sp.load_plan(plan_file)
+    job = os.path.dirname(plan_file)
+    _c, t = sp.find_take(plan, take_id)
+    r0, r1 = (int(x) for x in t["render"])
+    n = r1 - r0 + 1
+    path = os.path.join(job, t["file"])
+    tdir = os.path.dirname(path)
+    fr = int(round(float(plan["source"]["fps"])))
+    sm, om = _take_masks(tdir, n, fr)
+    scores = compute_scores(job, plan, r0, r1, tl._iter_frames(path, fr, 0, n), sm, om, mouth)
+
+    def upd(p):
+        _cc, tt = sp.find_take(p, take_id)
+        tt["scores"] = scores
+    sp.update_plan(plan_file, upd)
+    tj = os.path.join(tdir, "take.json")
+    try:
+        with open(tj, encoding="utf-8") as f:
+            d = json.load(f)
+        d["scores"] = scores
+        with open(tj, "w", encoding="utf-8") as f:
+            json.dump(d, f, indent=1)
+    except (OSError, ValueError):
+        pass
+    return scores
 
 
 def settings_summary(api_prompt):
@@ -268,15 +336,14 @@ def save_take(chunk, images, source_mask=None, output_mask=None, marked_guide=No
                 flags.append({"code": "marked_guide_failed", "text": f"marked_guide.mp4 not saved: {e}"})
 
         scores = {}
-        if score and source_mask is not None and output_mask is not None and "mask_src" in files and "mask_out" in files:
+        if score:
             try:
-                pi = pose_iou(source_mask, output_mask, keep)
-                if pi:
-                    scores.update(pi)
+                sm = mask_list(source_mask, keep) if source_mask is not None and "mask_src" in files else None
+                om = mask_list(output_mask, keep) if output_mask is not None and "mask_out" in files else None
+                scores = compute_scores(job, plan, r0, r1, frames_u8(), sm, om, bool(mouth_sync))
             except Exception as e:
-                flags.append({"code": "score_failed", "text": f"pose IoU not computed: {e}"})
-        if mouth_sync:
-            scores["mouth"] = None            # B3: needs mediapipe's face landmarker under models/
+                flags.append({"code": "score_failed", "text": f"scores not computed: {e}"})
+                print(f"[SeamStitch] Swap Take: scoring failed: {e}")
 
         with open(os.path.join(tdir, "prompt.txt"), "w", encoding="utf-8") as f:
             f.write(desc["prompt"])
@@ -332,8 +399,8 @@ def save_take(chunk, images, source_mask=None, output_mask=None, marked_guide=No
     take["save_s"] = round(time.time() - t0)
     take["review"] = report.get("review")
     take["joins"] = [{k: r.get(k) for k in ("split", "frame", "type", "splice", "repair", "override", "left_take",
-                                             "right_take", "frame_luma", "char_luma", "join_ratio", "join_verdict",
-                                             "follow")} for r in report["joins"]]
+                                             "right_take", "stale", "frame_luma", "char_luma", "join_ratio",
+                                             "join_verdict", "follow", "flags", "verdict")} for r in report["joins"]]
 
     def finish(p):
         _c, t = sp.find_take(p, tid)
@@ -356,8 +423,12 @@ class SeamStitchSwapTake:
                     "lossless (ffv1): RGB planes + FLAC, about 0.4-0.5 GB per 209 frames at 1080p; pins and the "
                     "assembly read the exact model output. h264: crf below, one lossy generation."}),
                 "crf": ("INT", {"default": 12, "min": 0, "max": 51, "step": 1}),
-                "score": ("BOOLEAN", {"default": True, "tooltip": "Pose IoU from the two SAM3 person masks."}),
-                "mouth_sync": ("BOOLEAN", {"default": True, "tooltip": "Mouth sync (needs mediapipe's face landmarker; B3)."}),
+                "score": ("BOOLEAN", {"default": True, "tooltip":
+                    "Score the take (design §4.5): following (pose IoU of the two SAM3 person masks), lost cuts and "
+                    "the scene alarm. Information for you: nothing picks a take."}),
+                "mouth_sync": ("BOOLEAN", {"default": True, "tooltip":
+                    "Mouth sync, a secondary signal (never a gate). Needs mediapipe and "
+                    "models/mediapipe/face_landmarker.task; n/a without them."}),
                 "review_clip": ("BOOLEAN", {"default": True, "tooltip":
                     "review.mp4: the chunk +- 2 s with both joins as if this take were chosen."}),
             },
@@ -393,7 +464,9 @@ class SeamStitchSwapTake:
         take, tdir, report = save_take(chunk, images, source_mask, output_mask, marked_guide, take_codec, crf, score,
                                        mouth_sync, review_clip, prompt, extra_pnginfo, progress)
         lines = [f"{take['id']}: {take['frames']} frames {take['render'][0]}-{take['render'][1]}, seed {take['seed']}"
-                 + (f", pose IoU {take['scores']['pose_iou']}" if take["scores"].get("pose_iou") is not None else "")]
+                 + (f", pose IoU {take['scores']['pose_iou']}" if take["scores"].get("pose_iou") is not None else "")
+                 + (f", mouth {take['scores']['mouth']}" if take["scores"].get("mouth") is not None else "")]
+        quality = ss.chunk_flags(take["scores"])
         for j in report["joins"]:
             fl = j.get("frame_luma") or {}
             cl = j.get("char_luma") or {}
@@ -408,7 +481,7 @@ class SeamStitchSwapTake:
         rv = os.path.join(tdir, "review.mp4")
         ui = {"job": chunk["job"], "chunk": chunk["chunk"], "take": take["id"], "seed": take["seed"],
               "review": rp._view_params(rv) if os.path.isfile(rv) else None, "review_path": rv,
-              "proxy": rp._view_params(os.path.join(tdir, "proxy.mp4")), "scores": take["scores"],
+              "proxy": rp._view_params(os.path.join(tdir, "proxy.mp4")), "scores": take["scores"], "quality": quality,
               "joins": take["joins"], "flags": take["flags"], "fps": int(round(float(chunk["source"]["fps"]))),
               "window": (report.get("review") or {}).get("window"), "deliver": list(chunk["deliver"]),
               "text": "\n".join(lines)}
