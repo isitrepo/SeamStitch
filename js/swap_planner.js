@@ -116,14 +116,32 @@ async function uploadFile(file) {
     return name;
 }
 
-// Quality colours for the flag dots (§4.5; provisional until B3 fits them).
-function followColour(v) { return v == null ? C.faint : v >= 0.65 ? C.green : v >= 0.5 ? C.amber : C.red; }
-function mouthColour(v) { return v == null ? C.faint : "#9ca3af"; }
-function cutsColour(cuts) {
-    if (!cuts || !Object.keys(cuts).length) return C.faint;
-    const v = Object.values(cuts);
-    return v.includes("lost") ? C.red : v.includes("unsure") ? C.amber : C.green;
+// Quality colours for the flag dots: the flags come from the backend (swap_scores, design §4.5, thresholds
+// fitted in B3 against Kay's verdicts); this only maps a flag to a colour. Grey = information only (mouth).
+const FLAG = { green: C.green, amber: C.amber, red: C.red, grey: "#9ca3af" };
+const flagColour = (f) => FLAG[f] || C.faint;
+// The tooltips: each flag's numbers, mouth with its face coverage (a hand or a prop over the mouth makes it noisy).
+function flagTips(sc) {
+    sc = sc || {};
+    const mi = sc.mouth_info || {};
+    const cuts = Object.entries(sc.cuts || {});
+    const halves = (mi.halves || []).map(h => h.mouth ?? "n/a").join(" / ");
+    return {
+        F: `following: pose IoU ${sc.pose_iou ?? "n/a"}${sc.pose_iou_p10 != null ? `, p10 ${sc.pose_iou_p10}` : ""} (mean >= 0.60 and p10 >= 0.45 green)`,
+        C: `cuts: ${cuts.length ? cuts.map(([f, s]) => `${f} ${s}`).join(", ") : "no confirmed cut inside"}`,
+        M: sc.mouth != null ? `mouth sync ${sc.mouth} at lag ${mi.lag}, face on ${Math.round(100 * (mi.face || 0))}% of frames`
+            + (halves ? ` (halves ${halves})` : "") + " - information only, never a gate"
+            : `mouth sync n/a${mi.why ? `: ${mi.why}` : ""}`,
+        S: sc.scene ? `scene: background ${sc.scene.bg_psnr} dB outside the person (amber under 15: the room was rewritten)` : "scene n/a",
+    };
 }
+const SCORE_TXT = (sc) => {
+    sc = sc || {};
+    const lost = Object.values(sc.cuts || {}).filter(v => v === "lost").length;
+    const n = Object.keys(sc.cuts || {}).length;
+    const face = sc.mouth_info?.face;
+    return `F ${sc.pose_iou ?? "–"} · C ${n ? `${n - lost}/${n}` : "–"} · M ${sc.mouth ?? "–"}${face != null ? ` (face ${Math.round(100 * face)}%)` : ""}`;
+};
 
 // The prompt's [Shot n] blocks and the dialogue in each.
 function parseShots(prompt) {
@@ -812,10 +830,10 @@ function buildPlanner(node) {
             g.fillText(`${n}f · ${(n / S.fr).toFixed(2)}s`, x0 + 6 + 22 * U, BLOCK_Y + 9 * U);
             g.fillStyle = C.dim;
             g.fillText(`render ${c.length}f${fill_} · ${st.takes || 0} take${st.takes === 1 ? "" : "s"}${st.rendering ? " · rendering" : q ? " · queued" : ""}`, x0 + 6, BLOCK_Y + 22 * U);
-            // flag dots: F following, C cuts, M mouth (grey: information only)
-            const sc = st.scores || {};
-            [["F", followColour(sc.pose_iou), `following: pose IoU ${sc.pose_iou ?? "n/a"}`], ["C", cutsColour(sc.cuts), "lost cuts (B3)"],
-                ["M", mouthColour(sc.mouth), `mouth sync ${sc.mouth ?? "n/a"} (secondary, never a gate)`]].forEach(([t, col], k) => {
+            // flag dots: F following, C cuts, M mouth (grey / amber / green: information only), S the scene alarm
+            const fl = st.flags || {};
+            [["F", flagColour(fl.following)], ["C", flagColour(fl.cuts)], ["M", flagColour(fl.mouth)],
+                ...(fl.scene === "amber" ? [["S", C.amber]] : [])].forEach(([t, col], k) => {
                 const dx = x0 + 8 * U + k * 22 * U, dy = BLOCK_Y + 33 * U;
                 g.fillStyle = col; g.beginPath(); g.arc(dx, dy, 3.5 * U, 0, Math.PI * 2); g.fill();
                 g.fillStyle = C.dim; g.font = font(8, true); g.fillText(t, dx + 5 * U, dy);
@@ -996,7 +1014,9 @@ function buildPlanner(node) {
             const j = joinAt(sp_.id);
             const r = row();
             const m = j?.measure;
-            const meas = m ? ` · jump ${m.frame_luma?.at_splice ?? "?"} / char ${m.char_luma?.at_splice ?? "?"}${m.join_ratio != null ? `, ratio ${m.join_ratio} ${m.join_verdict || ""}` : ""} (${m.source})` : "";
+            const jf = j?.flags || {};
+            const meas = m ? ` · jump ${m.frame_luma?.at_splice ?? "?"} / char ${m.char_luma?.at_splice ?? "?"}${m.join_ratio != null ? `, ratio ${m.join_ratio}` : ""}${m.follow?.pose_iou != null ? `, follow ${m.follow.pose_iou}` : ""} (${m.source})`
+                + (jf.verdict ? ` · colour ${jf.colour ?? "–"}, motion ${jf.motion ?? "–"}, following ${jf.following ?? "–"}, lineage ${jf.lineage ?? "–"} → ${jf.verdict}` : "") : "";
             r.append(el("span", { fontWeight: "bold" }, `split ${sp_.id} at ${sp_.frame}`),
                 el("span", { color: C.dim }, `${sp_.mode === "cut" ? "straight cut" : "anchored"}${j ? ` · ${j.type}${j.left_take ? ` ${j.left_take} | ${j.right_take}` : ""} · splice ${j.splice} · ${j.override || j.repair}${j.hand_back !== settings().hand_back ? ` · hand-back ${j.hand_back}` : ""}` : ""}${meas}`),
                 button(sp_.mode === "cut" ? "make anchored" : "make straight cut", "", () => op({ op: "split_mode", split: sp_.id, mode: sp_.mode === "cut" ? "anchored" : "cut" })),
@@ -1090,9 +1110,9 @@ function buildPlanner(node) {
         // the takes list: chosen radio, ▶ in context, use this prompt and seed, delete to trash
         const takes = (c.takes || []).slice();
         if (takes.length) {
-            // display-only rank: following first, then lost cuts (mouth shown, not ranked); never picks
-            const score = (t) => [-(t.scores?.pose_iou ?? -1), Object.values(t.scores?.cuts || {}).filter(v => v === "lost").length];
-            const ranked = takes.slice().sort((a, b) => { const x = score(a), y = score(b); return x[0] - y[0] || x[1] - y[1]; });
+            // display-only rank (the backend's swap_scores.rank_key): following first, then lost cuts; mouth shown,
+            // never ranked. Nothing picks a take.
+            const ranked = (st.rank || []).map(id => takes.find(t => t.id === id)).filter(Boolean);
             const tbl = el("div", { display: "flex", flexDirection: "column", gap: "2px", border: "1px solid #2b3040", borderRadius: "4px", padding: "3px" });
             for (const t of takes) {
                 const tr = row();
@@ -1104,9 +1124,19 @@ function buildPlanner(node) {
                 const rank = ranked.indexOf(t) + 1;
                 const eff = st.take === t.id;
                 const lineage = [t.pins?.start ? `← ${t.pins.start.take}` : "", t.pins?.end ? `→ ${t.pins.end.take}` : ""].filter(Boolean).join(" ") || "free";
+                const tf = (st.take_flags || {})[t.id] || {};
+                const tips = flagTips(sc);
+                const dots = el("span", { display: "inline-flex", gap: "2px" });
+                for (const k of ["F", "C", "M", ...(tf.scene === "amber" ? ["S"] : [])]) {
+                    const fk = { F: "following", C: "cuts", M: "mouth", S: "scene" }[k];
+                    const d = el("span", { color: flagColour(tf[fk]), fontWeight: "bold", fontFamily: "monospace" }, `●${k}`);
+                    d.title = tips[k];
+                    dots.append(d);
+                }
                 const info = el("span", { color: eff ? C.text : C.dim, fontFamily: "monospace" },
-                    `${t.id.split("-").pop()} · seed ${t.seed} · ${(t.created || "").replace("T", " ").slice(5, 16)} · F ${sc.pose_iou ?? "–"} · C ${sc.cuts ? Object.values(sc.cuts).join("/") : "–"} · M ${sc.mouth ?? "–"} · #${rank} · ${lineage}${eff && c.chosen !== t.id ? " · in use (unreviewed)" : ""}`);
-                tr.append(radio, info,
+                    `${t.id.split("-").pop()} · seed ${t.seed} · ${(t.created || "").replace("T", " ").slice(5, 16)} · ${SCORE_TXT(sc)} · #${rank || "–"} · ${lineage}${eff && c.chosen !== t.id ? " · in use (unreviewed)" : ""}`);
+                info.title = Object.values(tips).join("\n");
+                tr.append(radio, dots, info,
                     button("▶", "Play its review clip (the chunk ± 2 s with both joins as if chosen) in the player", () => playReview(c, t)),
                     button("use prompt + seed", "Load this take's prompt into the chunk and fix the seed to its seed", () => op({ op: "use_take", take: t.id })),
                     button("🗑", "Move this take into the job's trash/ (nothing is erased)", () => { if (confirm(`Move ${t.id} to the trash?`)) op({ op: "delete_take", take: t.id }); }));

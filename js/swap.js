@@ -43,20 +43,21 @@ const viewURL = (v, path) => v
     ? api.apiURL(`/view?filename=${encodeURIComponent(v.filename)}&subfolder=${encodeURIComponent(v.subfolder)}&type=${v.type}&t=${Date.now()}`)
     : api.apiURL(`/seamstitch/loader/view?filename=${encodeURIComponent(path)}`);
 
-// The split pill's colour rule (swap_plan.join_verdict; provisional until B3 fits it).
+// The split pill's colour: the backend's verdict (swap_scores.join_flags, fitted in B3); the rule below is only
+// the fallback for a take saved before B3, with the same thresholds.
 function joinVerdict(j) {
     if (!j || j.type === "straight" || j.type === "pending") return null;
+    if (j.verdict !== undefined) return j.verdict;
     const rank = { green: 0, amber: 1, red: 2 };
     let worst = j.type === "stale" ? "amber" : null;
     const up = (c) => { if (c && (worst == null || rank[c] > rank[worst])) worst = c; };
-    for (const k of ["frame_luma", "char_luma"]) {
-        const v = j[k]?.at_splice;
-        if (v != null) up(Math.abs(v) <= 1 ? "green" : Math.abs(v) <= 2 ? "amber" : "red");
-    }
-    up({ "seamless": "green", "soft bump": "amber", "hard cut": "red" }[j.join_verdict]);
+    const v = j.frame_luma?.at_splice;                 // the character's jump is shown, not judged (B3)
+    if (v != null) up(Math.abs(v) <= 1 ? "green" : Math.abs(v) <= 2 ? "amber" : "red");
+    if (j.join_ratio != null) up(j.join_ratio < 3 ? "green" : j.join_ratio < 5 ? "amber" : "red");
     return worst;
 }
-const followCol = (v) => v == null ? "none" : v >= 0.65 ? "green" : v >= 0.5 ? "amber" : "red";
+const followCol = (v) => v == null ? "none" : v >= 0.60 ? "green" : v >= 0.5 ? "amber" : "red";
+const flagCol = (f) => f || "none";
 
 // ---------------------------------------------------------------- the shared player and bar
 function player(node, minW, minH) {
@@ -171,8 +172,12 @@ function joinChip(j, name) {
     const fl = j.frame_luma?.at_splice, cl = j.char_luma?.at_splice;
     const t = j.type === "pending" ? `${name}: pending (no take next door)` : j.type === "straight" ? `${name}: straight cut` :
         `${name}: ${j.type}${j.override ? ` (${j.override})` : ""} · ${fl ?? "?"} / ${cl ?? "?"}${j.join_ratio != null ? ` · ${j.join_ratio}x` : ""}`;
+    const f = j.flags || {};
     return chip(t, v || (j.type === "straight" ? "grey" : "none"), `split ${j.split} at ${j.frame}, splice ${j.splice}, repair ${j.override || j.repair}. ` +
-        "Luma jump at the splice, frame / character (<= 1.0 green, <= 2.0 amber), and the motion ratio (Result Preview's). Provisional thresholds until B3.");
+        (f.verdict ? `colour ${f.colour ?? "–"}, motion ${f.motion ?? "–"}, following ${f.following ?? "–"}, lineage ${f.lineage ?? "–"}: the worst decides. ` : "") +
+        "Colour = the whole-frame luma jump at the splice (<= 1.0 / 2.0; the character's is shown, not judged: two SAM3 tracks disagree); " +
+        "motion = Result Preview's join ratio (< 3.0 / 5.0); following = pose IoU mean +-25 frames; " +
+        "lineage = linked or stale (design §4.5).");
 }
 const planners = (job) => (app.graph?._nodes || []).filter(n => n.type === "SeamStitchSwapPlanner" && n.ssPlanner && n.ssPlanner.job() === job);
 
@@ -198,11 +203,17 @@ function setupTake(node) {
             if (v) P.load(viewURL(v), { frames: win[1] - win[0] + 1, fps: d.fps, first: win[0], span: d.deliver, marks }, Math.max(0, (d.deliver?.[0] ?? win[0]) - win[0] - d.fps));
             P.chips.innerHTML = "";
             const sc = d.scores || {};
+            const q = d.quality || {};
             const cuts = sc.cuts ? Object.entries(sc.cuts) : [];
+            const mi = sc.mouth_info || {};
             P.chips.append(
-                chip(`following ${sc.pose_iou ?? "n/a"}${sc.pose_iou_p10 != null ? ` (p10 ${sc.pose_iou_p10})` : ""}`, followCol(sc.pose_iou), "Pose IoU, source vs output person masks (r10). >= 0.65 green, 0.50-0.65 amber. Provisional (B3)."),
-                chip(`cuts ${cuts.length ? cuts.map(([f, s]) => `${f} ${s}`).join(", ") : "n/a (B3)"}`, cuts.some(([, s]) => s === "lost") ? "red" : cuts.length ? "green" : "none", "Per confirmed cut inside the chunk: copied or lost (B3)."),
-                chip(`mouth ${sc.mouth ?? "n/a"}`, "grey", "Mouth sync: information only, never a gate (B3)."),
+                chip(`following ${sc.pose_iou ?? "n/a"}${sc.pose_iou_p10 != null ? ` (p10 ${sc.pose_iou_p10})` : ""}`, q.following ? flagCol(q.following) : followCol(sc.pose_iou),
+                    "Pose IoU, source vs output person masks (r10): mean >= 0.60 and p10 >= 0.45 green; < 0.50 / 0.30 red."),
+                chip(`cuts ${cuts.length ? cuts.map(([f, s]) => `${f} ${s}`).join(", ") : "none inside"}`, flagCol(q.cuts),
+                    "Per confirmed cut inside the chunk (scorer.cut_stats): copied >= 3.0 with spread <= 2, lost < 2.0, else unsure."),
+                chip(`mouth ${sc.mouth ?? "n/a"}${mi.face != null ? ` · face ${Math.round(100 * mi.face)}%` : ""}`, flagCol(q.mouth) === "none" ? "grey" : flagCol(q.mouth),
+                    `Mouth sync at the best lag within +-2 (lag ${mi.lag ?? "?"}), over the frames where both faces are found. Information only, never a gate.${mi.why ? " " + mi.why : ""}`),
+                ...(sc.scene ? [chip(`scene ${sc.scene.bg_psnr} dB`, flagCol(q.scene), "Background PSNR outside the person: amber under 15 dB (the room was rewritten). An alarm, never ranked.")] : []),
                 ...(d.joins || []).map((j) => joinChip(j, j.right_take === d.take ? "join in" : j.left_take === d.take ? "join out" : `${j.split} @${j.frame}`)));
             P.actions.innerHTML = "";
             P.actions.append(

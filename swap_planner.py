@@ -43,9 +43,11 @@ import torch
 
 try:
     from . import swap_plan as sp
+    from . import swap_scores as ss
     from . import timeline as tl
 except ImportError:  # imported as a top-level module (tests, tools)
     import swap_plan as sp
+    import swap_scores as ss
     import timeline as tl
 
 try:
@@ -486,6 +488,8 @@ def do_op(body, out_dir=None):
     if body.get("op") == "create":
         plan = create_job(job, body.get("source", ""), body.get("settings"), out_dir)
         return {"ok": True, "rev": plan["rev"], "plan": plan, "text": plan_text(plan)}
+    if body.get("op") == "rescore":
+        return do_rescore(body, out_dir)
     if body.get("op") == "source":
         def upd(p):
             if any(c.get("takes") for c in p.get("chunks", [])):
@@ -504,6 +508,32 @@ def do_op(body, out_dir=None):
     plan = sp.update_plan(pp, upd, body.get("rev"))
     return {"ok": True, "rev": plan["rev"], "result": out, "warnings": plan.get("warnings", []), "plan": plan,
             "text": plan_text(plan)}
+
+
+def do_rescore(body, out_dir=None):
+    """Recompute the scores of saved takes from their files (CPU, seconds per take; outside the
+    plan lock, which only guards each write): body take = one take, chunk = its takes, or neither =
+    every take of the job. Takes saved before B3 carry only pose IoU."""
+    try:
+        from . import swap_take as stk
+    except ImportError:
+        import swap_take as stk
+    jd, pp = job_paths(body.get("job", ""), out_dir)
+    plan = sp.load_plan(pp)
+    if body.get("take"):
+        ids = [body["take"]]
+    else:
+        ids = [t["id"] for c in plan.get("chunks", []) if not body.get("chunk") or c["id"] == body["chunk"]
+               for t in c.get("takes") or []]
+    done, failed = {}, {}
+    for tid in ids:
+        try:
+            done[tid] = stk.rescore_take(pp, tid, mouth=bool(body.get("mouth", True)))
+        except Exception as e:
+            failed[tid] = str(e)
+    plan = sp.load_plan(pp)
+    return {"ok": not failed, "rev": plan["rev"], "result": {"op": "rescore", "scored": sorted(done), "failed": failed},
+            "warnings": plan.get("warnings", []), "plan": plan, "text": plan_text(plan)}
 
 
 # ---------------------------------------------------------------------------
@@ -598,8 +628,13 @@ def chunk_status(plan, jd):
             d["failed"] = c.get("error") or "failed"
         if t is not None:
             d["scores"] = t.get("scores") or {}
+            d["flags"] = ss.chunk_flags(d["scores"])
             d["proxy"] = t.get("proxy")
             d["render"] = t.get("render")
+        # every take's flags, and the display-only order (following, then lost cuts; never a pick)
+        takes = c.get("takes") or []
+        d["take_flags"] = {x["id"]: ss.chunk_flags(x.get("scores")) for x in takes}
+        d["rank"] = [x["id"] for x in sorted(takes, key=ss.rank_key)]
         out.append(d)
     return out
 
@@ -614,10 +649,11 @@ def plan_view(job, out_dir=None):
     for j in joins:
         m = sp.join_measure(plan, j)
         j["measure"] = m
-        j["verdict"] = sp.join_verdict(j, m)
+        j["flags"] = sp.join_flags(j, m)
+        j["verdict"] = j["flags"]["verdict"]
     return {"path": pp, "job_dir": jd, "subfolder": os.path.relpath(jd, output_dir_or(out_dir)).replace("\\", "/"),
             "plan": plan, "joins": joins, "status": chunk_status(plan, jd), "warnings": plan.get("warnings", []),
-            "text": plan_text(plan)}
+            "quality": ss.legend(), "text": plan_text(plan)}
 
 
 def output_dir_or(out_dir):
