@@ -64,6 +64,11 @@ THRESHOLDS = {
     # scale, from the small content step on near-static frames that a level lock can't remove; nothing he
     # rejected was rejected for motion. A real source cut reads 5.4 (B1b, 250).
     "join_motion": {"green": 3.0, "amber": 5.0},
+    # was the person replaced at all? Mean abs RGB difference, source vs output, inside the source person mask
+    # (analysis size). Added in B5a: a 73-frame render handed back the source man and scored the round's best
+    # pose IoU (0.88), and 90 / 107-frame renders swapped only the head onto his t-shirt. Full-size fit on 9 takes:
+    # copy 17.5, head only 41-46, full 69-91. Following measures the outline, not who is inside it.
+    "replaced": {"green": 60.0, "amber": 30.0}, "replaced_min_px": 0.002,
 }
 
 GREEN, AMBER, RED, GREY = "green", "amber", "red", "grey"
@@ -337,6 +342,24 @@ def scene(src_thumbs, out_thumbs, src_masks, out_masks=None):
 
 
 # ---------------------------------------------------------------------------
+# replaced at all (B5a)
+# ---------------------------------------------------------------------------
+
+def replaced(src_thumbs, out_thumbs, src_masks):
+    """{person_diff (mean over frames), p10}: mean abs RGB difference inside the source person mask, per frame
+    with enough mask (THRESHOLDS["replaced_min_px"] of the frame); None when no frame qualifies. Thumbs and
+    masks at the analysis size."""
+    vals = []
+    for s_, o, m in zip(src_thumbs, out_thumbs, src_masks):
+        if m.mean() < THRESHOLDS["replaced_min_px"]:
+            continue
+        vals.append(float(np.abs(s_.astype(np.float32) - o.astype(np.float32))[m].mean()))
+    if not vals:
+        return None
+    return {"person_diff": round(float(np.mean(vals)), 2), "p10": round(float(np.percentile(vals, 10)), 2)}
+
+
+# ---------------------------------------------------------------------------
 # a whole take
 # ---------------------------------------------------------------------------
 
@@ -367,6 +390,9 @@ def score_frames(out_frames, src_frames=None, src_masks=None, out_masks=None, cu
         sc = scene(srcs, outs, sm, om)
         if sc:
             scores["scene"] = sc
+        rp = replaced(srcs, outs, sm)
+        if rp:
+            scores["replaced"] = rp
     if mouth:
         ok, why = (True, model_path) if model_path else mouth_available()
         if not ok:
@@ -424,12 +450,20 @@ def scene_flag(sc):
     return AMBER if sc["bg_psnr"] < THRESHOLDS["scene_db"] else GREEN
 
 
+def replaced_flag(rp):
+    """green / amber ("partly replaced") / red ("not replaced"); None without the source frames and mask."""
+    if not rp or rp.get("person_diff") is None:
+        return None
+    return _band(rp["person_diff"], THRESHOLDS["replaced"])
+
+
 def chunk_flags(scores):
-    """{following, cuts, mouth, scene}: colour per flag (None = not measured). Information for
+    """{following, cuts, mouth, scene, replaced}: colour per flag (None = not measured). Information for
     Kay; nothing reads them to choose."""
     s = scores or {}
     return {"following": following_flag(s), "cuts": cuts_flag(s.get("cuts")),
-            "mouth": mouth_flag(s.get("mouth")), "scene": scene_flag(s.get("scene"))}
+            "mouth": mouth_flag(s.get("mouth")), "scene": scene_flag(s.get("scene")),
+            "replaced": replaced_flag(s.get("replaced"))}
 
 
 def join_flags(j, m):
@@ -459,12 +493,14 @@ def join_verdict(j, m):
 
 
 def rank_key(take):
-    """Display-only order of a chunk's takes: following (pose IoU, higher first), then lost cuts
-    (fewer first). Mouth sync is shown, never ranked. Nothing picks a take from this."""
+    """Display-only order of a chunk's takes: a take not (or only partly) replaced last (B5a: a copy of the
+    source scores the best following), then following (pose IoU, higher first), then lost cuts (fewer
+    first). Mouth sync is shown, never ranked. Nothing picks a take from this."""
     s = take.get("scores") or {}
     pi = s.get("pose_iou")
     lost = sum(1 for v in (s.get("cuts") or {}).values() if v == "lost")
-    return (-(pi if pi is not None else -1.0), lost)
+    rep = {RED: 2, AMBER: 1}.get(replaced_flag(s.get("replaced")), 0)
+    return (rep, -(pi if pi is not None else -1.0), lost)
 
 
 def splice_jump(prev, cur, mask_prev=None, mask_cur=None):
@@ -489,6 +525,8 @@ def legend():
                               "Amber when any is lost or unsure",
                       "mouth": "best lag within +-2, frames with a face: >= 0.60 green, 0.25-0.60 amber, below grey "
                                "(information only)",
+                      "replaced": "colour difference, source vs output, inside the source person: >= 60 green, "
+                                  "30-60 amber (partly replaced), < 30 red (not replaced: the source came back)",
                       "scene": "background PSNR outside the person union: amber under 15 dB (an alarm, never ranked)",
                       "join": "the worst of colour (the whole-frame jump at the splice: <= 1.0 / 2.0; the character's "
                               "is shown, not judged), motion "

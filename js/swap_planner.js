@@ -133,6 +133,7 @@ function flagTips(sc) {
         M: sc.mouth != null ? `mouth sync ${sc.mouth} at lag ${mi.lag}, face on ${Math.round(100 * (mi.face || 0))}% of frames`
             + (halves ? ` (halves ${halves})` : "") + " - information only, never a gate"
             : `mouth sync n/a${mi.why ? `: ${mi.why}` : ""}`,
+        R: sc.replaced ? `replaced: colour difference inside the person ${sc.replaced.person_diff} (>= 60 green; 30-60 amber: partly replaced, e.g. only the head; < 30 red: not replaced, the source came back)` : "replaced n/a",
         S: sc.scene ? `scene: background ${sc.scene.bg_psnr} dB outside the person (amber under 15: the room was rewritten)` : "scene n/a",
     };
 }
@@ -883,9 +884,9 @@ function buildPlanner(node) {
             g.fillText(`${n}f · ${(n / S.fr).toFixed(2)}s`, x0 + 6 + 22 * U, BLOCK_Y + 9 * U);
             g.fillStyle = C.dim;
             g.fillText(`render ${c.length}f${fill_} · ${st.takes || 0} take${st.takes === 1 ? "" : "s"}${st.rendering ? " · rendering" : q ? " · queued" : ""}`, x0 + 6, BLOCK_Y + 22 * U);
-            // flag dots: F following, C cuts, M mouth (grey / amber / green: information only), S the scene alarm
+            // flag dots: F following, R replaced, C cuts, M mouth (grey / amber / green: information only), S the scene alarm
             const fl = st.flags || {};
-            [["F", flagColour(fl.following)], ["C", flagColour(fl.cuts)], ["M", flagColour(fl.mouth)],
+            [["F", flagColour(fl.following)], ["R", flagColour(fl.replaced)], ["C", flagColour(fl.cuts)], ["M", flagColour(fl.mouth)],
                 ...(fl.scene === "amber" ? [["S", C.amber]] : [])].forEach(([t, col], k) => {
                 const dx = x0 + 8 * U + k * 22 * U, dy = BLOCK_Y + 33 * U;
                 g.fillStyle = col; g.beginPath(); g.arc(dx, dy, 3.5 * U, 0, Math.PI * 2); g.fill();
@@ -1269,8 +1270,8 @@ ${P().subject_draft}`;
                 const tf = (st.take_flags || {})[t.id] || {};
                 const tips = flagTips(sc);
                 const dots = el("span", { display: "inline-flex", gap: "2px" });
-                for (const k of ["F", "C", "M", ...(tf.scene === "amber" ? ["S"] : [])]) {
-                    const fk = { F: "following", C: "cuts", M: "mouth", S: "scene" }[k];
+                for (const k of ["F", "R", "C", "M", ...(tf.scene === "amber" ? ["S"] : [])]) {
+                    const fk = { F: "following", R: "replaced", C: "cuts", M: "mouth", S: "scene" }[k];
                     const d = el("span", { color: flagColour(tf[fk]), fontWeight: "bold", fontFamily: "monospace" }, `●${k}`);
                     d.title = tips[k];
                     dots.append(d);
