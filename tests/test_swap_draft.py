@@ -658,3 +658,57 @@ def test_the_strip_gets_a_playable_copy_of_a_source_the_browser_cannot_decode(tm
     subprocess.run([tl._ffmpeg_exe(), "-v", "error", "-y", "-f", "lavfi", "-i", "testsrc=size=160x120:rate=25:duration=1",
                     "-c:v", "libx264", "-pix_fmt", "yuv420p", h264], check=True)
     assert spl.source_view({"source": {"path": h264, "fps": 25}}, jd) == h264
+
+
+# ---------------------------------------------------------------- B5b: B5a's drafter items
+
+OMNI_SUNG = ("transcript: [English] put the tray in now. [sings] La la la la la la... Cookies. [sings] La la la "
+            "la la la... Cookies. audio_events: A soft, low-pitched thud occurs at the start. A male voice sings a "
+            "simple, low, rhythmic melody, \"La la la la la la...\". A brief, high-pitched \"ding\" at the end.")
+
+
+def test_a_spoken_line_before_a_song_is_kept():
+    po = sd.parse_omni(OMNI_SUNG)
+    assert po["sung"] and po["spoken"] == "put the tray in now." and po["sung_words"].startswith("La la")
+    # the old forms still read the same
+    song = sd.parse_omni('transcript: [English] "and I will let go of the world" (sung) audio_events: piano')
+    assert song["sung"] and song["spoken"] == "" and song["sung_words"] == "and I will let go of the world"
+    both = sd.parse_omni("transcript: [English] Hi there. (singing) la la la la (speaks) Okay now. audio_events: hum")
+    assert both["spoken"] == "Hi there. Okay now." and both["sung_words"] == "la la la la"
+
+
+class SilentWhisper(FakeWhisper):
+    def words(self, audio16k, language=None):
+        return [], "en"
+
+
+def test_whisper_hearing_nothing_keeps_omnis_spoken_words(job):
+    # B5a: Whisper returned no words, Omni marked the stretch sung; the line was dropped
+    rep = _draft(job, omni_cls=FakeOmni(OMNI_SUNG), whisper=SilentWhisper(), mode="all (into the draft field)")
+    c0 = sp.load_plan(job["plan"])["chunks"][0]
+    d = c0.get("draft") or c0["prompt"]
+    assert "put the tray in now." in d and "<d>[English]put the tray in now.</d>" in d
+    assert "La la" not in d.split("overall_soundscape")[0].split("detailed_description")[-1] or "sings" in d
+    cid = c0["id"]
+    assert any("sung" in w for w in rep["chunks"][cid]["warnings"])
+    # six plain spoken words Whisper didn't hear are kept now, flagged; one or two Whisper words still drop them
+    rep = _draft(job, omni_cls=FakeOmni("transcript: [English] We open the box and look inside. audio_events: hum"),
+                 whisper=SilentWhisper(), mode="all (into the draft field)")
+    c0 = sp.load_plan(job["plan"])["chunks"][0]
+    assert "We open the box and look inside." in (c0.get("draft") or c0["prompt"])
+    assert any("Whisper heard nothing" in w for w in rep["chunks"][cid]["warnings"])
+    rep = _draft(job, omni_cls=FakeOmni("transcript: [English] We open the box and look inside. audio_events: hum"),
+                 whisper=FakeWhisper(), mode="all (into the draft field)")
+    assert any("likely invented" in w for w in rep["chunks"][cid]["warnings"])
+
+
+def test_the_subjects_pronoun_wins_in_a_caption():
+    she, he = sd.PRONOUNS["she"], sd.PRONOUNS["he"]
+    assert sd._third_to(she, "holds the knife near his mouth") == "holds the knife near her mouth"
+    assert sd._third_to(she, "turns the box in his hands, He looks at himself") == \
+        "turns the box in her hands, She looks at herself"
+    assert sd._third_to(he, "holds her phone; she smiles") == "holds his phone; he smiles"
+    assert sd._third_to(she, "rests her chin on her hand") == "rests her chin on her hand"
+    m = sd.merge_moments([(0.1, {"pose": "sitting on the floor", "look": "at his hands",
+                                 "hands": "holds a cone near his mouth"})], [], 25, "she")
+    assert " his " not in m and "near her mouth" in m and "at her hands" in m

@@ -484,8 +484,9 @@ function buildPlanner(node) {
             const r = await api.fetchApi("/seamstitch/swap/detect_cuts", { method: "POST", body: JSON.stringify({ job: job(), plan: true }) });
             const j = await r.json();
             if (j.error) throw new Error(j.error);
-            toast(j.kept_splits ? `${j.found.length} cuts found and confirmed; splits kept (chunks have prompts or takes): cuts ▾ → auto splits to re-place them`
-                : `${j.found.length} cuts, splits at ${(j.splits || []).join(" / ") || "none (one chunk)"}: review them (delete a wrong cut, drag or re-mode a split)`, "green");
+            const weak = (j.weak || []).length ? ` · ${j.weak.length} faint suggested cuts (scene 0.10-0.15, same-room jumps?) at ${j.weak.join(", ")}: check them by eye` : "";
+            toast((j.kept_splits ? `${j.found.length} cuts found and confirmed; splits kept (chunks have prompts or takes): cuts ▾ → auto splits to re-place them`
+                : `${j.found.length} cuts, splits at ${(j.splits || []).join(" / ") || "none (one chunk)"}: review them (delete a wrong cut, drag or re-mode a split)`) + weak, "green");
         } catch (e) { toast(`detect + plan: ${e.message || e}`, "red"); }
         await reload();
     }
@@ -496,7 +497,7 @@ function buildPlanner(node) {
             const r = await api.fetchApi("/seamstitch/swap/detect_cuts", { method: "POST", body: JSON.stringify({ job: job() }) });
             const j = await r.json();
             if (j.error) throw new Error(j.error);
-            toast(`detected ${j.found.length} cuts (${j.added.length} new suggestions): confirm, move or delete them`, "green");
+            toast(`detected ${j.found.length} cuts (${j.added.length} new suggestions)${(j.weak || []).length ? ` and ${j.weak.length} faint ones (scene 0.10-0.15)` : ""}: confirm, move or delete them`, "green");
         } catch (e) { toast(`detect cuts: ${e.message || e}`, "red"); }
         await reload();
     }
@@ -1094,7 +1095,7 @@ function buildPlanner(node) {
             if (!c) return;
             const r = row();
             r.append(el("span", { fontWeight: "bold" }, `cut at ${c.frame} (${(c.frame / S.fr).toFixed(2)}s)`),
-                el("span", { color: c.confirmed === false ? C.dim : C.green }, c.confirmed === false ? `suggested (${c.from})` : `confirmed (${c.from})`),
+                el("span", { color: c.confirmed === false ? C.dim : C.green }, c.confirmed === false ? `suggested (${c.from}${c.weak ? `, faint: scene ${c.score}` : ""})` : `confirmed (${c.from})`),
                 button(c.confirmed === false ? "confirm" : "unconfirm", "Only confirmed cuts drive the warnings, the fill and the lost-cut flag", () => op({ op: "confirm_cut", frame: c.frame, confirmed: c.confirmed === false })),
                 button("−1", "Move the cut a frame earlier", () => moveCut(c, c.frame - 1)),
                 button("+1", "Move the cut a frame later", () => moveCut(c, c.frame + 1)),

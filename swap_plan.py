@@ -101,6 +101,9 @@ def _settings(settings):
     return s
 
 
+SUGGEST_NEAR = 3       # a suggested cut this close to a straight split is worth a look
+
+
 def confirmed_cuts(cuts):
     """Frame numbers of the confirmed cuts (a cut at c: frame c is the first of a new shot).
     Accepts plan entries ({"frame", "confirmed"}) or bare ints (taken as confirmed)."""
@@ -112,6 +115,11 @@ def confirmed_cuts(cuts):
         else:
             out.append(int(c))
     return sorted(set(out))
+
+
+def suggested_cuts(cuts):
+    """Frame numbers of the unconfirmed (suggested) cuts."""
+    return sorted({int(c["frame"]) for c in cuts or [] if isinstance(c, dict) and c.get("confirmed", True) is False})
 
 
 def _norm_splits(splits):
@@ -210,6 +218,7 @@ def warnings(frames, splits, cuts=(), settings=None, chunks=None, keep=()):
     (§4.10) have no length warnings; a split between two kept chunks has none at all."""
     s = _settings(settings)
     cut_frames = confirmed_cuts(cuts)
+    sugg = suggested_cuts(cuts)
     chunks = chunks if chunks is not None else geometry(frames, splits, cuts, s, keep)
     out = []
     for i, c in enumerate(chunks):
@@ -256,6 +265,18 @@ def warnings(frames, splits, cuts=(), settings=None, chunks=None, keep=()):
                 else:
                     out.append({"split": sp.get("id"), "frame": J, "code": "no_cut",
                                 "text": f"straight split at {J}: visible jump, the source doesn't cut here"})
+        # an unconfirmed suggestion where it matters: inside an anchored overlap's guard, or a few frames off a
+        # straight split (B5a: an unconfirmed jump cut at 713 was copied 3 frames late). Confirm or delete it by eye.
+        if sp["mode"] == MODE_ANCHORED:
+            near = [x for x in sugg if lo <= x <= hi]
+            where = f"inside the overlap guard [{lo}, {hi}] of the anchored split at {J}"
+        else:
+            near = [x for x in sugg if 0 < abs(x - J) <= SUGGEST_NEAR] if not any(abs(x - J) <= 1 for x in cut_frames) else []
+            where = f"{SUGGEST_NEAR} frames or less from the straight split at {J}"
+        if near:
+            out.append({"split": sp.get("id"), "frame": J, "code": "suggested_cut", "cuts": near,
+                        "text": (f"suggested cut at {', '.join(map(str, near))} (not confirmed) {where}: check it by eye; "
+                                 f"confirm it (the split then warns or snaps) or delete it")})
     return out
 
 

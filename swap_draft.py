@@ -340,10 +340,60 @@ def parse_omni(text):
     sung = any(re.search(r"\bsung|singing|sings\b", n_, re.I) for n_ in notes) or bool(
         re.search(r"\b(sings|singing|song|lyrics|chant(s|ing)?)\b", ev, re.I)
         and not re.search(r"\b(speaks|speaking|says|talks|talking|conversation)\b", ev, re.I))
-    tr = re.sub(r"\([^)]*\)", " ", _BRACKET.sub(" ", tr))
-    # speaker labels: split, keep the label for each word
+    words, speakers, flags = [], [], []
+    for text, is_sung in _sung_marked(tr):
+        w_, s_ = _words_speakers(text)
+        words += w_
+        speakers += s_
+        flags += [is_sung] * len(w_)
+    if sung and not any(flags):
+        flags = [True] * len(words)           # sung, but no note says where: the whole transcript (as before)
+    wtext = " ".join(words)
+    speech = bool(wtext) and wtext.strip(" .").lower() not in ("none", "no speech", "n/a", "silence")
+    spoken = [(w, sp_) for w, sp_, f in zip(words, speakers, flags) if not f]
+    return {"language": lang, "words": wtext if speech else "", "speakers": speakers if speech else [],
+            "notes": notes, "events": ev, "speech": speech, "structured": structured, "sung": sung and speech,
+            "looping": is_looping(wtext),
+            # the parts: "put the tray in. [sings] La la la..." is a line, then a song (a spoken line lost in B5a)
+            "spoken": " ".join(w for w, _ in spoken) if speech else "",
+            "spoken_speakers": [sp_ for _, sp_ in spoken] if speech else [],
+            "sung_words": " ".join(w for w, f in zip(words, flags) if f) if speech else ""}
+
+
+_SUNG_NOTE = re.compile(r"(?i)\bsung|singing|sings\b")
+_SPOKEN_NOTE = re.compile(r"(?i)\b(speaks|speaking|says|spoken|talks|talking)\b")
+_NOTE = re.compile(r"\[[^\]]*\]|\([^)]*\)")
+
+
+def _sung_marked(tr):
+    """The transcript cut at its stage notes into [(text, sung)], notes removed. A sung note ("[sings]",
+    "(singing)") marks the text after it, up to a spoken note; a sung note with no text after it before the next
+    note ("... (sung)") marks the text before it instead."""
+    pieces, last, sung_next = [], 0, False
+    notes = list(_NOTE.finditer(tr))
+    for i, m in enumerate(notes):
+        pieces.append([tr[last:m.start()], sung_next])
+        note = m.group(0)[1:-1]
+        last = m.end()
+        if _SUNG_NOTE.search(note):
+            after = tr[last:notes[i + 1].start() if i + 1 < len(notes) else len(tr)]
+            if after.strip(" .,;:-*\"“”"):
+                sung_next = True
+            else:
+                for pc in reversed(pieces):
+                    if pc[0].strip(" .,;:-*\"“”"):
+                        pc[1] = True
+                        break
+        elif _SPOKEN_NOTE.search(note):
+            sung_next = False
+    pieces.append([tr[last:], sung_next])
+    return [(t, f) for t, f in pieces if t.strip()]
+
+
+def _words_speakers(text):
+    """Words, and the speaker label for each ("Man: What?" -> ["What?"], ["Man"])."""
     words, speakers = [], []
-    parts = _SPEAKER.split(" " + tr)
+    parts = _SPEAKER.split(" " + text)
     label = None
     for k, part in enumerate(parts):
         if k % 2 == 1:
@@ -354,11 +404,7 @@ def parse_omni(text):
             if w:
                 words.append(w)
                 speakers.append(label)
-    wtext = " ".join(words)
-    speech = bool(wtext) and wtext.strip(" .").lower() not in ("none", "no speech", "n/a", "silence")
-    return {"language": lang, "words": wtext if speech else "", "speakers": speakers if speech else [],
-            "notes": notes, "events": ev, "speech": speech, "structured": structured, "sung": sung and speech,
-            "looping": is_looping(wtext)}
+    return words, speakers
 
 
 def _norm_tok(w):
@@ -807,7 +853,19 @@ def _third_to(pr, t):
     t = re.sub(r"\b[Tt]he person\b", pr["subj"], t)
     t = re.sub(r"\btheir\b", pr["poss"], t)
     t = re.sub(r"\bthemselves\b", "herself" if pr["subj"] == "she" else "himself" if pr["subj"] == "he" else "themselves", t)
-    return re.sub(r"\bthey\b", pr["subj"], t)
+    t = re.sub(r"\bthey\b", pr["subj"], t)
+    # Qwen describes the source person ("near his mouth", "in his hands", B5a): the caption is about the main
+    # person, so the subject's pronoun wins
+    for a, b in _PRONOUN_SWAP[pr["subj"]]:
+        t = re.sub(rf"\b{a}\b", b, t)
+        t = re.sub(rf"\b{a.capitalize()}\b", b.capitalize(), t)
+    return t
+
+
+_PRONOUN_SWAP = {"she": [("himself", "herself"), ("his", "her"), ("him", "her"), ("he", "she")],
+                 "he": [("herself", "himself"), ("her", "his"), ("she", "he")],
+                 "they": [("himself", "themselves"), ("herself", "themselves"), ("his", "their"), ("him", "them"),
+                          ("her", "their"), ("he", "they"), ("she", "they")]}
 
 
 def _verb3(v, pr):
@@ -1619,16 +1677,28 @@ def run_draft(plan_file, *, sheet=None, mode=CHUNK_MODES[0], named=(), qwen_mode
             if words and is_looping(" ".join(w["word"] for w in words)):
                 ci["warnings"].append("Whisper repeated one phrase over and over: its words dropped")
                 words = []
+            if po is not None and po.get("sung") and po["words"]:
+                song = po.get("sung_words") or po["words"]
+                spoken = po.get("spoken") or ""
+                if spoken and not interjections_only(spoken):
+                    # a line, then a song (B5a): the line stays, the song goes into the soundscape
+                    ci["warnings"].append(f"part of the audio is sung ({song[:40]}...): into the soundscape; the "
+                                          f"spoken words kept as lines")
+                    po = dict(po, words=spoken, speakers=po.get("spoken_speakers") or [None] * len(spoken.split()))
+                else:
+                    ci["warnings"].append("the words are sung (a song, not lines she says): into the soundscape")
+                    po = dict(po, words="", speakers=[], speech=False)
+                    words = []                  # Whisper heard the same lyrics
             if po is not None and po["words"] and words is not None and len(words) <= 2 and \
                     len(po["words"].split()) >= 6:
-                ci["warnings"].append(f"Omni heard {len(po['words'].split())} words where Whisper heard "
-                                      f"{len(words)}: Omni's words dropped (likely invented)")
-                po = dict(po, words="", speakers=[])
-            if po is not None and po.get("sung") and po["words"]:
-                song = po["words"]
-                ci["warnings"].append("the words are sung (a song, not lines she says): into the soundscape")
-                po = dict(po, words="", speakers=[], speech=False)
-                words = []                  # Whisper heard the same lyrics
+                if not words and not is_looping(po["words"]):
+                    # Whisper can return nothing at all on a stretch Omni hears clearly (B5a 785-891)
+                    ci["warnings"].append(f"Whisper heard nothing; Omni's {len(po['words'].split())} spoken words "
+                                          f"kept without timings: check them against the clip")
+                else:
+                    ci["warnings"].append(f"Omni heard {len(po['words'].split())} words where Whisper heard "
+                                          f"{len(words)}: Omni's words dropped (likely invented)")
+                    po = dict(po, words="", speakers=[])
             if po is not None and not po["speech"] and not words:
                 lines, aligned = [], []
             elif po is not None and po["words"]:
