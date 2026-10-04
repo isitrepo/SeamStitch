@@ -446,6 +446,12 @@ def assemble(plan_file, hand_back=12, fmt="video/h264-mp4", crf=12, pix_fmt="yuv
                 continue
             lt, rh, lm, rm = lt[-nl:], rh[:n], lm[-nl:], rm[:n]
             split = splits.get(chunks[k + 1].get("left")) or {}
+            heading = (split.get("repair") or {}).get("heading") or sj.DEFAULT_HEADING
+            ratio = None
+            if heading == sj.HEADING_SOURCE:
+                kk = max(1, min(int(sj.HEADING_K), nl))
+                ratio = sj.source_ratios(sj.means(read_range(source, fr, 0, s - kk, s, (w, h))))
+            j["lock_heading"] = heading
             ma, mb = _mask_path(job, a), _mask_path(job, b)
             if lock_regions and (split.get("repair") or {}).get("regions", True) and ma and mb:
                 try:
@@ -454,8 +460,10 @@ def assemble(plan_file, hand_back=12, fmt="video/h264-mp4", crf=12, pix_fmt="yuv
                     lc, lb = sj.region_means(lt, [ml[f] for f in range(s - nl, s)])
                     rc, rb = sj.region_means(rh, [mr[f] for f in range(s, s + n)])
                     if np.isfinite(lc).all() and np.isfinite(lb).all() and np.isfinite(rc).all() and np.isfinite(rb).all():
-                        gch = sj.lock_gains(lc, rc, n, **j["lock_options"])
-                        gbg = sj.lock_gains(lb, rb, n, **j["lock_options"])
+                        hc = sj.source_heading(lc, ratio) if ratio is not None else None
+                        hb_ = sj.source_heading(lb, ratio) if ratio is not None else None
+                        gch = sj.lock_gains(lc, rc, n, heading=hc, **j["lock_options"])
+                        gbg = sj.lock_gains(lb, rb, n, heading=hb_, **j["lock_options"])
                         soft = [sj.soft_mask(mr[f], (w, h)) for f in range(s, s + n)]
                         # each region's mean lands exactly where its own lock puts it, feather included
                         solved = [sj.solve_field_gains(rh[i], mr[s + i], soft[i], rc[i] * gch[i], rb[i] * gbg[i])
@@ -468,7 +476,8 @@ def assemble(plan_file, hand_back=12, fmt="video/h264-mp4", crf=12, pix_fmt="yuv
                 except Exception as e:              # masks unreadable: the global lock
                     j["lock_mode_note"] = f"regional lock skipped: {e}"
             if j["soft"] is None:
-                j["gains"] = sj.lock_gains(lm, rm, n, **j["lock_options"])
+                j["gains"] = sj.lock_gains(lm, rm, n, heading=sj.source_heading(lm, ratio) if ratio is not None else None,
+                                           **j["lock_options"])
                 j["lock_mode"] = "global"
         elif j["repair"] == sp.REPAIR_FADE:
             f0, f1 = j["fade"]
@@ -608,7 +617,7 @@ def assemble(plan_file, hand_back=12, fmt="video/h264-mp4", crf=12, pix_fmt="yuv
                                            "lock_options", "original", "fade_dir")}
         if j["gains"] is not None:
             row["lock_gain_first"] = [round(float(x), 5) for x in j["gains"][0]]
-        for key in ("lock_mode", "lock_fit", "lock_mode_note"):
+        for key in ("lock_mode", "lock_fit", "lock_mode_note", "lock_heading"):
             if j.get(key) is not None:
                 row[key] = j[key]
         if j.get("gains_bg") is not None:

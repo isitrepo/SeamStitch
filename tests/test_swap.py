@@ -429,26 +429,38 @@ def test_assemble_forward_entry_exit_exact(job):
     ta = _add_take(job, 0, A, r[0])
     tb = _add_take(job, 1, B, r[1], start={"take": ta, "frames": [r[1][0], r[1][0] + 4]})
     tc = _add_take(job, 2, C, r[2], start={"take": tb, "frames": [r[2][0], r[2][0] + 4]})
-    rep = job["sa"].assemble(job["plan"], fmt="test/ffv1-8bit")
-    assert [j["type"] for j in rep["joins"]] == ["forward", "forward"]
-    out = _frames(rep["file"])
-    assert len(out) == job["N"] and rep["checks"]["frames_ok"] and rep["checks"]["audio_ok"]
-    assert rep["checks"]["audio"] == "copy"
-    # expected, from the join maths on the takes' own frames
-    exp = []
     at = lambda T, rr, f: T[f - rr[0]]  # noqa: E731
-    for f in range(0, 30):
-        exp.append(at(A, r[0], f))
-    g1 = sj.lock_gains(sj.means([at(A, r[0], f) for f in range(18, 30)]), sj.means([at(B, r[1], f) for f in range(30, 42)]), 12)
-    for f in range(30, 55):
-        x = at(B, r[1], f)
-        exp.append(sj.apply_gain(x, g1[f - 30]) if f - 30 < 12 else x)
-    g2 = sj.lock_gains(sj.means([at(B, r[1], f) for f in range(43, 55)]), sj.means([at(C, r[2], f) for f in range(55, 67)]), 12)
-    for f in range(55, 80):
-        x = at(C, r[2], f)
-        exp.append(sj.apply_gain(x, g2[f - 55]) if f - 55 < 12 else x)
-    bad = [f for f in range(job["N"]) if not np.array_equal(out[f], exp[f])]
-    assert bad == [], f"first mismatching output frame: {bad[:1]}"
+    src = job["src"]
+
+    def heading(lm, J, mode):       # the default (B5b): the left take's last 3 frames carried by the source's change
+        return sj.source_heading(lm, sj.source_ratios(sj.means(src[J - sj.HEADING_K:J + 1]))) if mode == "source" else None
+
+    for mode in ("source", "line"):  # "line": the port, per split (repair {"heading": "line"})
+        if mode == "line":
+            sp.update_plan(job["plan"], lambda q: [d.__setitem__("repair", {"heading": "line"}) for d in q["splits"]])
+        rep = job["sa"].assemble(job["plan"], fmt="test/ffv1-8bit")
+        assert [j["type"] for j in rep["joins"]] == ["forward", "forward"]
+        assert [j.get("lock_heading") for j in rep["joins"]] == [mode, mode]
+        out = _frames(rep["file"])
+        assert len(out) == job["N"] and rep["checks"]["frames_ok"] and rep["checks"]["audio_ok"]
+        assert rep["checks"]["audio"] == "copy"
+        # expected, from the join maths on the takes' own frames
+        exp = []
+        for f in range(0, 30):
+            exp.append(at(A, r[0], f))
+        lm = sj.means([at(A, r[0], f) for f in range(18, 30)])
+        g1 = sj.lock_gains(lm, sj.means([at(B, r[1], f) for f in range(30, 42)]), 12, heading=heading(lm, 30, mode))
+        for f in range(30, 55):
+            x = at(B, r[1], f)
+            exp.append(sj.apply_gain(x, g1[f - 30]) if f - 30 < 12 else x)
+        lm = sj.means([at(B, r[1], f) for f in range(43, 55)])
+        g2 = sj.lock_gains(lm, sj.means([at(C, r[2], f) for f in range(55, 67)]), 12, heading=heading(lm, 55, mode))
+        for f in range(55, 80):
+            x = at(C, r[2], f)
+            exp.append(sj.apply_gain(x, g2[f - 55]) if f - 55 < 12 else x)
+        bad = [f for f in range(job["N"]) if not np.array_equal(out[f], exp[f])]
+        assert bad == [], f"{mode}: first mismatching output frame: {bad[:1]}"
+    sp.update_plan(job["plan"], lambda q: [d.pop("repair", None) for d in q["splits"]])
 
     # re-roll the middle chunk two-sided: an entry fade at 30, an exit lock at C's end-pin start
     B2 = _clip(r[1][1] - r[1][0] + 1, 85, 0.2, seed=5)
@@ -468,15 +480,15 @@ def test_assemble_forward_entry_exit_exact(job):
     for f in range(30, e0):
         g = sj.decay_gain(ratio[-1], f - 30, 8)
         exp.append(sj.apply_gain(at(B2, r[1], f), g) if g is not None else at(B2, r[1], f))
-    g3 = sj.lock_gains(sj.means([at(B2, r[1], f) for f in range(e0 - 12, e0)]),
-                       sj.means([at(C, r[2], f) for f in range(e0, e0 + 8)]), 8)
+    lm = sj.means([at(B2, r[1], f) for f in range(e0 - 12, e0)])
+    g3 = sj.lock_gains(lm, sj.means([at(C, r[2], f) for f in range(e0, e0 + 8)]), 8, heading=heading(lm, e0, "source"))
     for f in range(e0, 80):
         x = at(C, r[2], f)
         exp.append(sj.apply_gain(x, g3[f - e0]) if f - e0 < 8 else x)
     bad = [f for f in range(job["N"]) if not np.array_equal(out[f], exp[f])]
     assert bad == [], f"first mismatching output frame: {bad[:1]}"
     plan = sp.load_plan(job["plan"])
-    assert len(plan["assembled"]) == 2 and plan["join_cache"]
+    assert len(plan["assembled"]) == 3 and plan["join_cache"]
     assert os.path.isfile(os.path.splitext(rep["file"])[0] + ".report.json")
 
 
@@ -601,3 +613,23 @@ def test_solved_field_gains_land_each_region_on_its_target():
     g = wgt[..., None] * gc + (1 - wgt[..., None]) * gb
     out = f.astype(np.float64) * g
     assert np.allclose(out[mask].mean(0), tc, atol=1e-6) and np.allclose(out[~mask].mean(0), tb, atol=1e-6)
+
+
+def test_the_lock_heading_follows_the_source_not_a_bent_line():
+    """B5b, 100d 406: the left take dips then brightens over its last frames (render flicker); a line through
+    its last 12 frames lands under its last frame and the lock steps the colour down. The source-carried
+    heading continues from the last frame as the source moves."""
+    left = np.array([[80.4 - 0.5 * min(k, 6) + 0.6 * max(0, k - 6)] * 3 for k in range(12)])   # dip, then rise
+    right = np.full((6, 3), 77.6)
+    line = sj.lock_gains(left, right, 6)
+    src = sj.lock_gains(left, right, 6, heading=sj.source_heading(left, [1.0, 1.0, 1.0]))
+    out_line, out_src = right[0] * line[0], right[0] * src[0]
+    assert abs(out_src[0] - left[-1][0]) < 1e-9                  # no step against a still source
+    assert out_line[0] < left[-1][0] - 0.5                         # the line's step down
+    assert np.allclose(src[-1], 1 + (src[0] - 1) / 6, atol=1e-9)   # the same ramp back to 1
+    # the source's own change is carried: a source brightening 2% at the splice brightens the target 2%
+    g = sj.lock_gains(left, right, 6, heading=sj.source_heading(left, [1.02, 1.02, 1.02]))
+    assert np.allclose(right[0] * g[0], left[-1] * 1.02)
+    # three frames, each carried by the source's change since: a still source averages the last three
+    k3 = sj.source_heading(left, sj.source_ratios(np.full((4, 3), 50.0)))
+    assert np.allclose(k3, left[-3:].mean(0)) and sj.HEADING_K == 3
