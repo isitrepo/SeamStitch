@@ -63,7 +63,8 @@ def test_hand_edited_plan_fills():
     assert [c["render"] for c in g] == [[0, 249], [250, 428], [429, 620], [593, 784], [785, 977]]
     assert [c["held"] for c in g] == [10, 13, 0, 0, 16]
     assert all((c["render"][1] - c["render"][0] + 1 + c["held"]) == c["length"] for c in g)
-    assert sp.warnings(978, splits, CUTS_978) == []
+    # its first render (0-249 + 10 held) is 260 frames: over the ceiling since B5a (226; 243 / 260 failed two-pass)
+    assert [(w["code"], w.get("chunk")) for w in sp.warnings(978, splits, CUTS_978)] == [("ceiling", 0)]
 
 
 def test_tail_fill_refused_when_a_cut_lies_in_the_extension():
@@ -95,6 +96,9 @@ def test_length_and_straight_split_warnings():
     assert sp.warnings(400, [{"frame": 200, "mode": "anchored"}], []) == []      # 209 and 226 frames
     w = sp.warnings(600, [{"frame": 300, "mode": "cut"}], [299])
     assert [x["code"] for x in w] == ["ceiling", "ceiling"]                       # 311 frames each
+    # B5a T-CEIL: 226 passed, 243 crashed and 260 failed (two-pass, at the refine)
+    assert sp.DEFAULT_SETTINGS["ceiling"] == 226
+    assert [x["code"] for x in sp.warnings(470, [{"frame": 226, "mode": "cut"}], [226])] == ["ceiling"]   # 226 / 244
 
 
 def test_geometry_rejects_bad_splits():

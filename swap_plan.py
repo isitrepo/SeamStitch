@@ -58,7 +58,7 @@ DEFAULT_SETTINGS = {
     "anchors": 5,             # pinned frames per side (5 or 22)
     "target_render": 209,     # auto-placement render length, on 17k+5
     "floor": 124,             # warning below (H3's trained minimum; 73 broke in CR-T1)
-    "ceiling": 260,           # warning above (the tested 1080p ceiling, T3)
+    "ceiling": 226,           # warning above: the longest two-pass render that passed (B5a T-CEIL: 243 crashed, 260 failed)
     "trained_max": 362,       # warning above (H3's trained range)
     "guard": 6,               # overlap guard either side of an anchored overlap (half T2's widest morph)
     "conform_to_24fps": True,
@@ -222,7 +222,7 @@ def warnings(frames, splits, cuts=(), settings=None, chunks=None, keep=()):
         if L > s["trained_max"]:
             out.append(dict(where, code="trained", text=f"render {L} frames is over H3's trained range ({s['trained_max']})"))
         elif L > s["ceiling"]:
-            out.append(dict(where, code="ceiling", text=f"render {L} frames is over the tested ceiling ({s['ceiling']})"))
+            out.append(dict(where, code="ceiling", text=f"render {L} frames is over the tested ceiling ({s['ceiling']}): two-pass renders crashed or failed at 243 and 260 frames (B5a), out of system RAM at the refine"))
     for i, c in enumerate(chunks[1:], start=1):
         sp = c["left"]
         J = sp["frame"]
