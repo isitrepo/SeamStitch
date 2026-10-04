@@ -1389,7 +1389,7 @@ ${P().subject_draft}`;
     // {a, b, url, t0} where t0 is the file time of frame a's start; url null = nothing to show.
     function segments() {
         if (!P()) return [];
-        const N = S.N, fr = S.fr, srcURL = fileURL(P().source.path);
+        const N = S.N, fr = S.fr, srcURL = fileURL(S.view?.source_view || P().source.path);   // a browser-playable copy when the codec isn't
         if (S.mode === "source") return [{ a: 0, b: N - 1, url: srcURL, t0: S.base, what: "source" }];
         if (S.mode === "full") {
             const a = P().assembled?.at(-1);
