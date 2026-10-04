@@ -529,7 +529,7 @@ In an edit of this video the person is replaced by a character, called "{subj}" 
 # asked only when a shot would be written as empty although a moment describes a pose or hands (below)
 RECHECK_INSTRUCTION = """This is one frame from a video. Is {who} in this frame at all, even partly: only the top of the head, the back, a shoulder, an arm or the hands, seen from above, from behind or turned away? Answer only "yes" or "no"."""
 
-WHO_INSTRUCTION = """These are {n} frames from one video clip. Who is the main person or character in it: the one most in focus, the largest, or the one doing the most? Prefer a person or a human-like character over an animal or a creature. Answer in a few words that tell them apart from anyone else in the clip, for example "a man in a black t-shirt", "a girl in a blue dress" or "a cartoon boy in a white hat". Answer "none" only if no person or character appears in any of the frames."""
+WHO_INSTRUCTION = """These are {n} frames from one video clip. Who is the main person or character in it: the one most in focus, the largest, or the one doing the most? Prefer a person or a human-like character over an animal or a creature. Answer in a few words that tell them apart from anyone else in the clip by how they look (build, hair, clothes), never by what they hold or do, which changes from shot to shot; for example "a man in a black t-shirt", "a girl in a blue dress" or "a cartoon boy in a white hat". Answer "none" only if no person or character appears in any of the frames."""
 
 SCENE_INSTRUCTION = """These are {n} frames from one clip of a video{talk}. Write exactly two labelled lines and nothing else:
 
@@ -743,6 +743,17 @@ def present(m):
     """Whether the main person is in a moment's frame (no answer: assume yes)."""
     v = (m.get("person") or "").lower()
     return not v.startswith("no")
+
+
+_ACTION = re.compile(r"(?i)(?:,\s*|\s+)(?:who is\s+|who's\s+|that is\s+)?\b(?!wearing\b)[a-z]+ing\b.*$")
+
+
+def who_lasting(who):
+    """The main person by what lasts: Qwen's "a bald man holding a knife" (100d chunk 1, B5a) made every later
+    question about a shot without the knife answer "no". Drops the first "-ing" clause on (holding, carrying,
+    sitting ...; "wearing" stays: clothes last) and anything after it."""
+    out = _ACTION.sub("", who or "").strip(" ,.")
+    return out if len(out.split()) >= 2 else (who or "")
 
 
 def _describes_someone(m):
@@ -1762,6 +1773,7 @@ def run_draft(plan_file, *, sheet=None, mode=CHUNK_MODES[0], named=(), qwen_mode
                 who = " ".join(re.sub(r"(?i)^\s*(main person|person|answer)\s*:\s*", "", wraw).split()).strip(' ."')
                 if who.lower().startswith(("none", "n/a", "no person", "no one")) or len(who) > 160:
                     who = ""
+                who = who_lasting(who)
                 if (plan.get("target") or "").strip():
                     who = plan["target"].strip()        # the job's "who to replace", set by hand, wins
                 ci["who"] = who
