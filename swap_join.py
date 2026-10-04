@@ -38,6 +38,17 @@ Two refinements from B1b's renders (Kay, 2026-10-03), on by default:
     uniform offset the two gains agree and it equals the global lock. This is obvpm's "local"
     option in its simplest, two-region form.
 
+The HEADING (B5b, 2026-10-05): where the left take is going, the level the right take's opening is
+locked to at the splice. As ported, a line through the left take's last 12 frames, one frame on; a
+render's own flicker bends that line (100d 406: c3 dips then brightens 2.5 levels over its last 7
+frames, the line lands ~1 level under its last frame, and the lock stepped the colour down: Kay saw it).
+Now, by default, the left take's last 3 frames, each carried by the source's own change to the splice,
+averaged: mean over i = 1..3 of L[J-i] * S[J] / S[J-i]. On the 7 lock joins on disk (frame means) the step
+error (max over R, G, B, against the source's step) fell from mean 0.70 / worst 1.63 to 0.36 / 0.66 (the
+last frame alone: 0.23 / 0.65); through the regional lock on 100d's 209 / 406 / 603 the frame step against
+the source's is 0.56 / 0.80 / 0.35 (as ported 0.54 / 1.40 / 0.45; the last frame alone put 603's room
+step at 1.31). heading="line" keeps the port.
+
 obvpm's lock extras, all OFF by default (T-JOIN measures them):
   gate   leave the join alone unless its step beats max(0.6, 3 x the left tail's local noise)
   clamp  clip gains to [1/1.06, 1.06] (MAX_GAIN)
@@ -60,6 +71,9 @@ MAX_GAIN = 1.06
 
 LUMA_BT709 = np.array([0.2126, 0.7152, 0.0722])
 CUT_STEP = 6.0      # a frame-to-frame mean-luma step this big inside a take's opening is a cut
+HEADING_SOURCE, HEADING_LINE = "source", "line"
+DEFAULT_HEADING = HEADING_SOURCE
+HEADING_K = 3       # the left take's last k frames, each carried by the source's change since, averaged
 FEATHER = 0.01      # the regional lock's mask feather: Gaussian sigma as a fraction of the width
 
 
@@ -100,16 +114,38 @@ def lock_report(left_means, right_means, frames=HAND_BACK):
             "step_bar": max(STEP_FLOOR, STEP_OVER_NOISE * local), "swing_bar": max(SWING_FLOOR, SWING_OVER_NOISE * local)}
 
 
-def lock_gains(left_means, right_means, frames=HAND_BACK, gate=False, clamp=False, swing=False):
+def source_heading(left_means, source_ratio):
+    """The left take's last frames carried by the source's own change to the splice, averaged: the default
+    heading (B5b). source_ratio: (k, 3) of S[J] / S[J-i] for i = k..1 (source_ratios), or one (3,) ratio
+    S[J] / S[J-1] for the last frame alone."""
+    lm = np.asarray(left_means, np.float64).reshape(-1, 3)
+    r = np.asarray(source_ratio, np.float64).reshape(-1, 3)
+    k = min(len(r), len(lm))
+    return (lm[-k:] * r[-k:]).mean(0)
+
+
+def source_ratio(src_before, src_at):
+    """S[J] / S[J-1] per channel from two source frames' channel means."""
+    return np.asarray(src_at, np.float64) / np.maximum(np.asarray(src_before, np.float64), 1e-3)
+
+
+def source_ratios(src_means):
+    """S[J] / S[J-i] for i = k..1, from the source's channel means over [J-k, J] (k + 1 frames)."""
+    sm = np.asarray(src_means, np.float64).reshape(-1, 3)
+    return sm[-1] / np.maximum(sm[:-1], 1e-3)
+
+
+def lock_gains(left_means, right_means, frames=HAND_BACK, gate=False, clamp=False, swing=False, heading=None):
     """Per-frame, per-channel gains (n, 3) for the right take's opening `frames` frames.
 
     left_means: channel means of the left take's frames up to the splice (its last FIT are
     used); right_means: of the right take's frames from the splice (its first `frames`).
-    With every option off this is seam_repair.lock_gains exactly. Returns all-ones when the
-    gate says the join has nothing to fix."""
+    heading: the level (3,) to lock to at the splice (source_heading); None = the port's line
+    through the left take's last FIT frames. With heading None and every option off this is
+    seam_repair.lock_gains exactly. Returns all-ones when the gate says the join has nothing to fix."""
     mx = np.asarray(left_means, np.float64)[-FIT:]
     b, s = line_fit(mx)
-    pred = b + s * len(mx)                       # the left take's heading, one frame past its end
+    pred = b + s * len(mx) if heading is None else np.asarray(heading, np.float64)   # the left take's heading
     my = np.asarray(right_means, np.float64)[:frames]
     yb, ys = line_fit(my)
     t = np.arange(len(my))[:, None]
