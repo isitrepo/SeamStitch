@@ -294,10 +294,33 @@ def to_mono_16k(wav, sr):
 _BRACKET = re.compile(r"\[([^\]]+)\]")
 
 
+_TIMESTAMP = re.compile(r"[\[(]?\s*\d{1,2}:\d{2}(?:[.:]\d{1,3})?\s*(?:-|–|to)\s*\d{1,2}:\d{2}(?:[.:]\d{1,3})?\s*[\])]?")
+_SPEAKER = re.compile(r"(?:^|(?<=[\s.!?\"”]))-?\s*(Man|Woman|Boy|Girl|Male|Female|Child|Narrator|Singer|Speaker\s*\d+|"
+                      r"Person\s*\d+|Voice\s*\d*)\s*:\s*")
+INTERJECTIONS = {"oh", "ah", "aah", "ahh", "yeah", "yea", "yes", "woo", "whoo", "wooo", "wow", "hey", "ha", "haha", "hahaha",
+                 "ho", "hoo", "yay", "mm", "mmm", "hmm", "ooh", "oo", "uh", "um", "huh", "whoa", "yo", "la", "na", "da",
+                 "ya", "eh", "oi", "hah", "hee", "aw", "aww", "boo", "yah", "ay", "ayy", "ole", "olé"}
+
+
+def is_looping(text, min_tokens=12, unique_ratio=0.3):
+    """A transcript that is mostly one phrase over and over (Omni's failure on drums, cheering and
+    instrumentals: "Oh, yeah!" x 100, "Pika..." x 100)."""
+    toks = [_norm_tok(w) for w in (text or "").split() if _norm_tok(w)]
+    return len(toks) >= min_tokens and len(set(toks)) / float(len(toks)) < unique_ratio
+
+
+def interjections_only(text):
+    """Only cheers and exclamations ("Woo!", "Oh, yeah", "Hey hey"): shouting, not lines anyone says."""
+    toks = [_norm_tok(w) for w in (text or "").split() if _norm_tok(w)]
+    return bool(toks) and all(t in INTERJECTIONS for t in toks)
+
+
 def parse_omni(text):
-    """Omni's answer to the node's default structured prompt -> {language, words (str), notes, events, speech}.
-    Tolerates the label-less form (the quoted words then)."""
-    t = " ".join((text or "").split())
+    """Omni's answer to the node's default structured prompt -> {language, words (str), speakers (one label or
+    None per word), notes, events, speech, structured, sung, looping}. Cleans what Omni wraps around the
+    words: markdown, timestamps, speaker labels (kept per word), "(sung)" and other stage notes. The
+    label-less form gives the quoted words and no events."""
+    t = " ".join((text or "").replace("**", " ").split())
     m = re.search(r"transcript\s*:\s*(.*?)\s*(?:audio[_ ]events\s*:\s*(.*))?$", t, re.I)
     structured = bool(m)
     if m:
@@ -310,14 +333,32 @@ def parse_omni(text):
     for b in _BRACKET.findall(tr):
         if lang is None and b.strip().istitle() and len(b.split()) == 1:
             lang = b.strip()
-        else:
+        elif not _TIMESTAMP.fullmatch(f"[{b}]"):
             notes.append(b.strip())
-    notes += [p.strip() for p in re.findall(r"\(([^)]*)\)", tr)]        # "(voice trails off)": a note, not words
-    tr = re.sub(r"\([^)]*\)", " ", tr)
-    words = " ".join(_BRACKET.sub(" ", tr).replace('"', " ").replace("“", " ").replace("”", " ").split())
-    speech = bool(words) and words.strip(" .").lower() not in ("none", "no speech", "n/a")
-    return {"language": lang, "words": words if speech else "", "notes": notes, "events": ev, "speech": speech,
-            "structured": structured}
+    tr = _TIMESTAMP.sub(" ", tr)
+    notes += [x.strip() for x in re.findall(r"\(([^)]*)\)", tr)]        # "(voice trails off)", "(sung)": notes
+    sung = any(re.search(r"\bsung|singing|sings\b", n_, re.I) for n_ in notes) or bool(
+        re.search(r"\b(sings|singing|song|lyrics|chant(s|ing)?)\b", ev, re.I)
+        and not re.search(r"\b(speaks|speaking|says|talks|talking|conversation)\b", ev, re.I))
+    tr = re.sub(r"\([^)]*\)", " ", _BRACKET.sub(" ", tr))
+    # speaker labels: split, keep the label for each word
+    words, speakers = [], []
+    parts = _SPEAKER.split(" " + tr)
+    label = None
+    for k, part in enumerate(parts):
+        if k % 2 == 1:
+            label = part.strip()
+            continue
+        for w in part.replace('"', " ").replace("“", " ").replace("”", " ").split():
+            w = w.strip("-*")
+            if w:
+                words.append(w)
+                speakers.append(label)
+    wtext = " ".join(words)
+    speech = bool(wtext) and wtext.strip(" .").lower() not in ("none", "no speech", "n/a", "silence")
+    return {"language": lang, "words": wtext if speech else "", "speakers": speakers if speech else [],
+            "notes": notes, "events": ev, "speech": speech, "structured": structured, "sung": sung and speech,
+            "looping": is_looping(wtext)}
 
 
 def _norm_tok(w):
@@ -330,7 +371,7 @@ def unstretch(words, longest=0.45, keep=0.4):
             for w in words or []]
 
 
-def align_words(omni_words, whisper_words):
+def align_words(omni_words, whisper_words, speakers=None):
     """Omni's tokens (as written, punctuation kept) with times from Whisper's words, by sequence
     alignment on the normalised tokens: matched tokens take their Whisper word's times, a replaced
     run spreads its Whisper span over Omni's tokens, an Omni-only token is interpolated between its
@@ -341,7 +382,8 @@ def align_words(omni_words, whisper_words):
     ww = [w for w in unstretch(whisper_words) if _norm_tok(w["word"])]
     a = [_norm_tok(t) for t in toks]
     b = [_norm_tok(w["word"]) for w in ww]
-    out = [{"word": t, "start": None, "end": None, "matched": False} for t in toks]
+    out = [{"word": t, "start": None, "end": None, "matched": False,
+            "speaker": (speakers[i] if speakers and i < len(speakers) else None)} for i, t in enumerate(toks)]
     for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(None, a, b, autojunk=False).get_opcodes():
         if tag == "equal":
             for k in range(i2 - i1):
@@ -383,6 +425,8 @@ def dialogue_lines(aligned, fps, n_frames, gap_s=0.8, comma_gap_s=0.25):
             e = cur[-1]["end"]
             text = " ".join(w["word"] for w in cur)
             d = {"text": text}
+            if cur[0].get("speaker"):
+                d["speaker"] = cur[0]["speaker"]
             if s is not None:
                 d.update(start=round(s, 3), end=round(e, 3),
                          frames=[max(0, min(n_frames - 1, int(round(s * fps)))),
@@ -397,7 +441,8 @@ def dialogue_lines(aligned, fps, n_frames, gap_s=0.8, comma_gap_s=0.25):
             break
         pause = (nxt["start"] - w["end"]) if (nxt.get("start") is not None and w.get("end") is not None) else 0.0
         word = w["word"].rstrip('"”')
-        if word.endswith((".", "?", "!", "…")) or pause >= gap_s or (word.endswith((",", ";", ":")) and pause >= comma_gap_s):
+        if word.endswith((".", "?", "!", "…")) or pause >= gap_s or (word.endswith((",", ";", ":")) and pause >= comma_gap_s) \
+                or nxt.get("speaker") != w.get("speaker"):
             close()
     close()
     return lines
@@ -465,22 +510,28 @@ sounds: ONE sentence: the sounds through the clip, in order{sounds_hint}."""
 # timeline: one full-size picture per moment, one sentence each; then the shot written from those
 # sentences as text (single images are this captioner's strength: ~1280 px each, where 16-24 frames
 # in one video call get ~460 px)
-MOMENT_INSTRUCTION = """This is one frame from a video of a person. Answer in exactly three short labelled lines and nothing else:
+MOMENT_INSTRUCTION = """This is one frame from a video. The main person in this video is {who}. Answer in exactly six short labelled lines and nothing else:
 
-pose: how they sit or stand and lean, in a few words (for example "leaning forward over the box").
-look: where they look: "at the camera", "down into the box", or "at the object in their hands".
-hands: what the hands do and hold, and where a held object is, as one full phrase with "a" and "the", starting with a verb (for example "holds a small black device with a red ring up beside the face with the right hand"). Name every object by what it looks like: colour, shape, size and any coloured parts. Never quote printed text or brand names."""
+person: "yes" if that main person is visible in this frame, otherwise "no".
+pose: how that person sits, stands or moves, in a few words (for example "kneeling on the grass").
+look: where that person looks: "at the camera", "down", "to the side", or at what (for example "at the object in their hands").
+hands: what that person's hands do and hold, and where a held object is, as one full phrase with "a" and "the", starting with a verb (for example "holds a small black device with a red ring up beside the face with the right hand"). Name every object by what it looks like: colour, shape, size and any coloured parts.
+others: anyone else in the frame and what they do, in a few words, or "none".
+frame: what the frame shows, in a few words.
+
+Describe only the main person in pose, look and hands, never anyone else. Never quote printed text or brand names."""
 
 COMPOSE_INSTRUCTION = """Here is what a person does in one continuous shot of a video ({secs:.1f} seconds), moment by moment{and_says}:
 {moments}
 
 In an edit of this video the person is replaced by a character, called "{subj}" below, who does exactly what the person does. Rewrite the moments as {n_sent} short sentences, present tense, in the same order: merge moments that repeat, give the same object the same name every time, and keep every object {subj} picks up, holds up, shows or puts down, where {subj} holds it, and where {subj} looks (say "looking at the camera" when the moments say so). An object that the moments name differently from one moment to the next keeps its most frequent name. {dialogue_rule}Use only what the moments say: add nothing. Don't mention times, moments, frames or "the person".{extra} Write only the sentences."""
 
-SCENE_INSTRUCTION = """This is one frame from a clip of a video. In the clip the person {activity}. Write exactly two labelled lines and nothing else:
+WHO_INSTRUCTION = """These are {n} frames from one video clip. Who is the main person or character in it: the one most in focus, the largest, or the one doing the most? Prefer a person or a human-like character over an animal or a creature. Answer in a few words that tell them apart from anyone else in the clip, for example "a man in a black t-shirt", "a girl in a blue dress" or "a cartoon boy in a white hat". Answer "none" only if no person or character appears in any of the frames."""
 
-video_1: ONE sentence: where the person is and what they sit or stand on, what is in front of them, the background and its colour, the light (hard or soft, and the side it comes from, judged by where the shadows fall), what the person is doing in the clip, and the camera: whether it looks down on the person from above, is level with them or looks up at them, and where the person's head sits in the frame (for example near the top edge). Don't describe the person's face, hair or clothes.
+SCENE_INSTRUCTION = """These are {n} frames from one clip of a video{talk}. Write exactly two labelled lines and nothing else:
+
+video_1: ONE sentence: where the main person is and what they sit or stand on, what is in front of them, the background and its colour, the light (hard or soft, and the side it comes from, judged by where the shadows fall), the visual style (for example live-action phone video, or 2D cartoon animation), what the main person is doing, and the camera: whether it looks down on them, is level with them or looks up at them, whether it moves, and where their head sits in the frame. Don't describe their face, hair or clothes.
 sounds: ONE sentence: the sounds through the clip, in order{sounds_hint}."""
-
 
 PRONOUNS = {"she": {"subj": "she", "Subj": "She", "poss": "her", "Poss": "Her", "does": "does", "moves": "moves",
                     "poses": "poses", "stays": "stays", "handles": "handles"},
@@ -672,14 +723,39 @@ def compose_instruction(*, moments, secs, lines_rel, fps, pronoun, extra=""):
 
 
 def parse_moment(text):
-    """A moment answer -> {pose, look, hands} (missing labels: the whole answer as hands)."""
+    """A moment answer -> {person, pose, look, hands, others, frame} (missing labels: the whole answer as hands)."""
     d = {}
-    for lab in ("pose", "look", "hands"):
+    for lab in ("person", "pose", "look", "hands", "others", "frame"):
         m = re.search(rf"(?im)^[ \t*-]*{lab}[ \t*]*:[ \t]*(.+)$", text or "")
         d[lab] = " ".join(m.group(1).split()).strip(" .*") if m else ""
     if not any(d.values()):
         d["hands"] = " ".join((text or "").split()).strip(" .")
+    for lab in ("pose", "look", "hands"):          # "none", "n/a": nothing to say
+        if d[lab].lower().strip(" .") in ("none", "n/a", "na", "-", "not visible", "unknown"):
+            d[lab] = ""
     return d
+
+
+def present(m):
+    """Whether the main person is in a moment's frame (no answer: assume yes)."""
+    v = (m.get("person") or "").lower()
+    return not v.startswith("no")
+
+
+def _hands_clause(hands, pr):
+    """A hands caption as a clause after the pronoun: "hold" -> "holds", "resting ..." -> "is resting ...";
+    empty when it says the hands hold nothing or can't be seen ("not visible holding anything")."""
+    h = hands.strip(" .")
+    low = h.lower()
+    if not h or low.startswith(("not ", "no ", "none", "nothing", "holds no", "holding no", "empty", "hands not",
+                               "hands are not", "both hands not")):
+        return ""
+    w = h.split()
+    if w[0].lower().endswith("ing"):
+        return f"{'are' if pr['subj'] == 'they' else 'is'} {h[0].lower() + h[1:]}"
+    if w[0].lower() in ("arms", "arm", "hands", "hand", "palms", "palm", "both", "left", "right", "fingers", "elbows"):
+        return f"{'have' if pr['subj'] == 'they' else 'has'} {pr['poss']} {h[0].lower() + h[1:]}"
+    return " ".join([_verb3(w[0].lower(), pr)] + w[1:])
 
 
 def _third_to(pr, t):
@@ -712,17 +788,25 @@ def merge_moments(moments, lines_rel, fps, pronoun, language="English", similar=
         if kind == "l":
             out.append(f"<Subject 1> (S1) says <d>[{language}]{x['text']}</d>")
             continue
-        hands = re.sub(r"\s*;\s*", ", and ", _third_to(pr, x.get("hands") or ""))
+        if not present(x):
+            continue                    # the main person isn't in this frame
+        hands = _hands_clause(re.sub(r"\s*;\s*", ", and ", _third_to(pr, x.get("hands") or "")), pr)
         look = _third_to(pr, (x.get("look") or "").lower().strip(" ."))
-        if hands:
-            w = hands.split()
-            hands = " ".join([_verb3(w[0].lower(), pr)] + w[1:])
         same = last_hands is not None and difflib.SequenceMatcher(None, hands.lower(), last_hands.lower()).ratio() >= similar
         if first:
             pose = _third_to(pr, x.get("pose") or "").strip(" .")
-            lead = f"{pr['Subj']} {pose}" if pose and pose.split()[0].endswith("s") else \
-                (f"{pr['Subj']} sits {pose}" if pose else pr["Subj"])
-            out.append(lead + (f" and {hands}" if hands else "") + (f", looking {look}" if look.startswith(("at", "down", "up", "into", "toward")) else "") + ".")
+            w0 = pose.split()[0].lower() if pose else ""
+            if not pose:
+                lead = pr["Subj"]
+            elif w0.endswith("ing") and w0 != "leaning":    # "sitting on the floor" -> "She is sitting ..."
+                lead = f"{pr['Subj']} {'are' if pr['subj'] == 'they' else 'is'} {pose}"
+            elif w0.endswith("s"):              # "sits on the floor ..."
+                lead = f"{pr['Subj']} {pose}"
+            else:                               # "leaning forward ...", "on the floor ..." -> "She sits leaning ..."
+                lead = f"{pr['Subj']} sits {pose}"
+            out.append(lead + (f" and {hands}" if hands else "")
+                       + (f", looking {look}" if look.startswith(("at", "down", "up", "into", "toward", "to the")) else "")
+                       + ".")
             first = False
         elif same:
             if look and look != last_look:
@@ -733,6 +817,26 @@ def merge_moments(moments, lines_rel, fps, pronoun, language="English", similar=
     untimed = [ln for ln in lines_rel if "frames" not in ln]
     out += [f"<Subject 1> (S1) says <d>[{language}]{ln['text']}</d>" for ln in untimed]
     return re.sub(r"\s+", " ", " ".join(out)).strip()
+
+
+def empty_shot(moments):
+    """A shot in which the main person never appears: what it shows, and that it stays as it is."""
+    seen = []
+    for _, m in moments:
+        f = (m.get("frame") or "").strip(" .")
+        if f and all(difflib.SequenceMatcher(None, f.lower(), x.lower()).ratio() < 0.7 for x in seen):
+            seen.append(f)
+    what = "; then ".join(seen[:3]) or "the scene"
+    return f"No one is replaced in this shot: {what[0].lower() + what[1:]}. It stays exactly as in <Video 1>."
+
+
+def gender_of(text):
+    t = " " + (text or "").lower() + " "
+    if re.search(r"\b(woman|girl|lady|female|she|her|mother|princess)\b", t):
+        return "f"
+    if re.search(r"\b(man|boy|gentleman|male|he|his|father|guy)\b", t):
+        return "m"
+    return None
 
 
 def tidy_shots(blocks):
@@ -928,7 +1032,7 @@ def _cuts_phrase(n_cuts):
     return {0: "", 1: "the jump cut, ", 2: "both jump cuts, "}.get(n_cuts, f"all {n_cuts} jump cuts, ")
 
 
-def fill_ref2va(*, subject, video_1, shots, sounds, n_shots, dialogue, audio, pronoun):
+def fill_ref2va(*, subject, video_1, shots, sounds, n_shots, dialogue, audio, pronoun, who=None, others=False):
     """The six sections, filled from the job's subject and Qwen's three parts (design §4.6)."""
     pr = PRONOUNS[pronoun]
     name = subject_name(subject)
@@ -936,11 +1040,14 @@ def fill_ref2va(*, subject, video_1, shots, sounds, n_shots, dialogue, audio, pr
     cp = _cuts_phrase(n_cuts)
     tag = "[video editing + reference generation" + (" + audio reuse]" if audio else "]")
     v1 = video_1 or "the source video, with a person in it."
-    summary = (f"{tag} The target video is an edited version of <Video 1> in which the person is replaced by "
+    the_person = f"the main person ({who})" if who else "the person"
+    summary = (f"{tag} The target video is an edited version of <Video 1> in which {the_person} is replaced by "
                f"<Subject 1>, the {name} styled from <Picture 1>. Everything else in <Video 1> is kept exactly: every "
                f"movement, lean, reach, hand position, head turn, mouth movement and expression timing, {cp}the camera "
                f"framing, the background, the lighting and shadows, and every object {pr['subj']} {pr['handles']}. The edit "
-               f"runs continuously from the first frame to the last without deviation.")
+               f"runs continuously from the first frame to the last without deviation."
+               + (" Everyone else in <Video 1> keeps exactly their own appearance and movements: only the main person "
+                  "is replaced." if others else ""))
     ret = [f"<Subject 1> (appears throughout): partially_preserved - {pr['poss']} face, hair, costume and accessories "
            f"from <Picture 1> are retained; {pr['poss']} body position, lean, pose, arm and hand actions, head "
            f"direction and how much of {pr['poss']} head is in frame, mouth movements and timing from <Video 1> are "
@@ -1126,11 +1233,18 @@ class QwenRunner:
         self.node.load_model(self.model, self.quant, self.attention, False, "auto", True)
 
     def ask(self, prompt, image=None, video=None, max_tokens=2048, frame_count=16):
+        """One question to the loaded model through the node's own generate() (what its run() calls after
+        loading). run() re-resolves the attention backend and logs it on every call (two console lines per
+        question, ~17 questions a chunk with the timeline template), so it's used only to load."""
         s = QWEN_SAMPLING
-        out = self.node.run(self.model, self.quant, "", prompt, image, video, frame_count, max_tokens,
-                            s["temperature"], s["top_p"], s["num_beams"], s["repetition_penalty"], s["seed"], True,
-                            self.attention, False, "auto")
-        return out[0] if isinstance(out, (tuple, list)) else str(out)
+        if getattr(self.node, "model", None) is None or not hasattr(self.node, "generate"):
+            out = self.node.run(self.model, self.quant, "", prompt, image, video, frame_count, max_tokens,
+                                s["temperature"], s["top_p"], s["num_beams"], s["repetition_penalty"], s["seed"], True,
+                                self.attention, False, "auto")
+            return out[0] if isinstance(out, (tuple, list)) else str(out)
+        torch.manual_seed(s["seed"])
+        return self.node.generate(prompt, image, video, frame_count, max_tokens, s["temperature"], s["top_p"],
+                                  s["num_beams"], s["repetition_penalty"], video_frame_size="auto")
 
     def close(self):
         try:
@@ -1454,10 +1568,28 @@ def run_draft(plan_file, *, sheet=None, mode=CHUNK_MODES[0], named=(), qwen_mode
             po = omni_parsed.get(c["id"])
             words, wlang = whisper_words.get(c["id"], (None, None))
             lang = (po or {}).get("language") or LANGS.get(wlang or "", None) or "English"
-            if po is not None and not po["speech"]:
+            song = cheer = ""
+            if po is not None and po.get("looping"):
+                ci["warnings"].append("Omni repeated one phrase over and over (a loop on music, drums or cheering): its "
+                                      "words dropped")
+                po = dict(po, words="", speech=bool(words), speakers=[])
+            if words and is_looping(" ".join(w["word"] for w in words)):
+                ci["warnings"].append("Whisper repeated one phrase over and over: its words dropped")
+                words = []
+            if po is not None and po["words"] and words is not None and len(words) <= 2 and \
+                    len(po["words"].split()) >= 6:
+                ci["warnings"].append(f"Omni heard {len(po['words'].split())} words where Whisper heard "
+                                      f"{len(words)}: Omni's words dropped (likely invented)")
+                po = dict(po, words="", speakers=[])
+            if po is not None and po.get("sung") and po["words"]:
+                song = po["words"]
+                ci["warnings"].append("the words are sung (a song, not lines she says): into the soundscape")
+                po = dict(po, words="", speakers=[], speech=False)
+                words = []                  # Whisper heard the same lyrics
+            if po is not None and not po["speech"] and not words:
                 lines, aligned = [], []
             elif po is not None and po["words"]:
-                aligned = align_words(po["words"], words) if words else []
+                aligned = align_words(po["words"], words, po.get("speakers")) if words else []
                 lines = dialogue_lines(aligned, fps, ci["n"]) if words else lines_from_text(po["words"])
                 if not words and (wh is not None or word_timings):
                     ci["warnings"].append("no word timings: the lines go to Qwen without frames")
@@ -1469,8 +1601,13 @@ def run_draft(plan_file, *, sheet=None, mode=CHUNK_MODES[0], named=(), qwen_mode
                     ci["warnings"].append("dialogue from Whisper alone (no Omni words)")
             else:
                 lines, aligned = [], []
+            said = " ".join(ln["text"] for ln in lines)
+            if lines and interjections_only(said):
+                cheer = said
+                ci["warnings"].append(f"only cheers or exclamations heard ({said[:60]}): into the soundscape, not lines")
+                lines = []
             ci.update(lines=lines, language=lang, events=(po or {}).get("events") or "",
-                      notes=(po or {}).get("notes") or [])
+                      notes=(po or {}).get("notes") or [], song=song, cheer=cheer)
             if words is not None or po is not None:
                 _write_json(os.path.join(ci["dir"], "whisper.json"),
                             {"language": wlang, "words": words or [], "aligned": aligned, "lines": lines,
@@ -1576,29 +1713,61 @@ def run_draft(plan_file, *, sheet=None, mode=CHUNK_MODES[0], named=(), qwen_mode
                 log += ["==== chunk: instruction ====", cinstr, "", "==== chunk: Qwen ====", craw, ""]
                 parts = parse_qwen(craw + "\nshots:\n" + "\n".join(blocks), len(ci["shots"]), ci["language"])
             elif timeline:
-                # one full-size picture per moment, a sentence each; each shot written from its sentences
+                # the scene first (it names the main person every caption is about), from 3 frames
                 k_sh = len(ci["shots_rel"])
-                blocks = []
+                sidx = sorted({0, ci["n"] // 2, ci["n"] - 1})
+                talk = ", in which someone speaks" if ci["lines"] else ""
+                sinstr = SCENE_INSTRUCTION.format(n=len(sidx), talk=talk,
+                                                  sounds_hint=_sounds_hint(ci["events"], ci["lines"]))
+                craw = qwen.ask(sinstr, video=decode_sampled(path, fps, r0, sidx, max_side=1280), max_tokens=384,
+                                frame_count=len(sidx))
+                log += ["==== scene: instruction ====", sinstr, "", "==== scene: Qwen ====", craw, ""]
+                widx = sample_indices(ci["n"], 5)
+                wraw = qwen.ask(WHO_INSTRUCTION.format(n=len(widx)), video=decode_sampled(path, fps, r0, widx,
+                                                                                          max_side=1280),
+                                max_tokens=64, frame_count=len(widx))
+                log += ["==== who: Qwen ====", wraw, ""]
+                who = " ".join(re.sub(r"(?i)^\s*(main person|person|answer)\s*:\s*", "", wraw).split()).strip(' ."')
+                if who.lower().startswith(("none", "n/a", "no person", "no one")) or len(who) > 160:
+                    who = ""
+                if (plan.get("target") or "").strip():
+                    who = plan["target"].strip()        # the job's "who to replace", set by hand, wins
+                ci["who"] = who
+                # lines from a voice that isn't the main person's (Omni's speaker labels): off camera
+                g_who = gender_of(who)
+                offscreen = [ln for ln in ci["lines"] if ln.get("speaker") and g_who and gender_of(ln["speaker"])
+                             and gender_of(ln["speaker"]) != g_who]
+                if offscreen:
+                    ci["lines"] = [ln for ln in ci["lines"] if ln not in offscreen]
+                    ci["offscreen"] = offscreen
+                    ci["warnings"].append(f"{len(offscreen)} line(s) by another voice ({offscreen[0]['speaker']}): "
+                                          f"into the soundscape, not hers")
+                blocks, others = [], []
                 for i, sh in enumerate(ci["shots_rel"]):
                     mf = moment_frames(sh, fps)
                     pics = decode_sampled(path, fps, r0, mf, max_side=1280)
                     moments = []
+                    minstr = MOMENT_INSTRUCTION.format(who=who or "the person most in focus")
                     for f, pic in zip(mf, pics):
-                        mraw = qwen.ask(MOMENT_INSTRUCTION, image=pic[None], max_tokens=200)
+                        mraw = qwen.ask(minstr, image=pic[None], max_tokens=240)
                         moments.append(((f - sh[0]) / float(fps), parse_moment(mraw)))
+                    others += [m["others"] for _, m in moments if m.get("others") and
+                               m["others"].lower().strip(" .") not in ("none", "no one", "nobody", "n/a")]
                     said = lines_in_shot(ci["lines"], sh, k_sh, i)
                     rel = [dict(ln, frames=[ln["frames"][0] - sh[0], ln["frames"][1] - sh[0]]) if "frames" in ln else ln
                            for ln in said]
-                    body = merge_moments(moments, rel, fps, pronoun, ci["language"])
+                    if not any(present(m) for _, m in moments):
+                        body = empty_shot(moments)          # she isn't in it: no lines of hers either
+                        ci.setdefault("offscreen", []).extend(said)
+                        ci["lines"] = [ln for ln in ci["lines"] if ln not in said]
+                        ci.setdefault("empty_shots", []).append(i)
+                    else:
+                        body = merge_moments(moments, rel, fps, pronoun, ci["language"])
                     log += [f"==== shot {i + 1}: moments (frames {[r0 + f for f in mf]}) ====",
                             "\n".join(f"{t:.1f} s: {json.dumps(m, ensure_ascii=False)}" for t, m in moments), "",
                             f"==== shot {i + 1}: merged ====", body, ""]
                     blocks.append(f"[Shot {i + 1}] {body}")
-                mid = decode_sampled(path, fps, r0, [ci["n"] // 2], max_side=1280)
-                activity = ("talks while " if ci["lines"] else "is ") + "handling what is in front of them"
-                sinstr = SCENE_INSTRUCTION.format(activity=activity, sounds_hint=_sounds_hint(ci["events"], ci["lines"]))
-                craw = qwen.ask(sinstr, image=mid, max_tokens=384)
-                log += ["==== scene: instruction ====", sinstr, "", "==== scene: Qwen ====", craw, ""]
+                ci["others"] = bool(others)
                 parts = parse_qwen(craw + "\nshots:\n" + "\n".join(blocks), len(ci["shots"]), ci["language"], cap=24)
             t_draft = round(time.time() - t, 2)
             stages["qwen_s"][c["id"]] = {"objects": t_obj, "draft": t_draft}
@@ -1607,7 +1776,7 @@ def run_draft(plan_file, *, sheet=None, mode=CHUNK_MODES[0], named=(), qwen_mode
             # each shot carries exactly its own lines, in the transcription's words
             k_sh, added = len(ci["shots_rel"]), 0
             for i in range(min(k_sh, len(parts["shots"]))):
-                said = lines_in_shot(ci["lines"], ci["shots_rel"][i], k_sh, i)
+                said = [] if i in ci.get("empty_shots", []) else lines_in_shot(ci["lines"], ci["shots_rel"][i], k_sh, i)
                 parts["shots"][i], n_add = place_dialogue(parts["shots"][i], said, ci["language"])
                 added += n_add
             if added:
@@ -1620,12 +1789,23 @@ def run_draft(plan_file, *, sheet=None, mode=CHUNK_MODES[0], named=(), qwen_mode
                 parts["sounds"] = neutral_events(ci["events"])
                 parts["warnings"] = [w for w in parts["warnings"] if "sounds" not in w] + [
                     "Qwen gave no sounds line: Omni's audio events used"]
+            extra_sounds = []
+            if ci.get("song"):
+                extra_sounds.append(f'a voice sings "{ci["song"][:160]}"')
+            if ci.get("cheer"):
+                extra_sounds.append(f'voices shout "{ci["cheer"][:80]}"')
+            for ln in ci.get("offscreen", []):
+                extra_sounds.append(f'{("a " + ln["speaker"].lower() + "\'s voice") if ln.get("speaker") else "a voice"} '
+                                    f'off camera says "{ln["text"]}"')
+            if extra_sounds:
+                parts["sounds"] = parts["sounds"].rstrip(" .") + "; " + "; ".join(extra_sounds) + "."
             drafted_objects[c["id"]] = objs["objects"]
             ci["warnings"] += parts["warnings"]
             if objs["person"] is False:
                 ci["warnings"].append("Qwen saw no person in this chunk")
             text = fill_ref2va(subject=subject, video_1=parts["video_1"], shots=parts["shots"], sounds=parts["sounds"],
-                               n_shots=len(ci["shots"]), dialogue=bool(ci["lines"]), audio=audio_ok, pronoun=pronoun)
+                               n_shots=len(ci["shots"]), dialogue=bool(ci["lines"]), audio=audio_ok, pronoun=pronoun,
+                               who=ci.get("who"), others=ci.get("others", False))
             parse_sections(text)            # the template must parse into the six sections
             drafted_shots[c["id"]] = parts["shots"]
             props = prop_check(parts["shots"], objs["objects"], prev_shots)

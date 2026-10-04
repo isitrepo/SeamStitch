@@ -265,6 +265,9 @@ def apply_op(plan, body):
                         c[k] = c[k].replace(old, plan["subject"])
                         n += 1
         res["subject_replaced_in"] = n
+    elif op == "set_target":
+        # who in the source is replaced (the drafter's main person), when its own pick is wrong; "" = let it pick
+        plan["target"] = (body.get("target") or "").strip()
     elif op == "adopt_subject_draft":
         if not (plan.get("subject_draft") or "").strip():
             raise sp.PlanError("there's no subject draft to adopt")

@@ -463,8 +463,8 @@ def test_timeline_moments_merge_into_a_shot_with_the_lines_at_their_times():
     assert sd.moment_frames((0, 12), 25) == [2, 10]
     m = sd.parse_moment("pose: leaning forward over the box\nlook: at the camera\n"
                         "hands: holds a small white card up toward the camera with the right hand")
-    assert m == {"pose": "leaning forward over the box", "look": "at the camera",
-                 "hands": "holds a small white card up toward the camera with the right hand"}
+    assert m == {"person": "", "pose": "leaning forward over the box", "look": "at the camera",
+                 "hands": "holds a small white card up toward the camera with the right hand", "others": "", "frame": ""}
     moments = [(0.1, {"pose": "leaning forward over the box", "look": "down into the box",
                       "hands": "reaches into the box"}),
                (0.6, {"pose": "", "look": "at the camera", "hands": "holds a small white card up toward the camera"}),
@@ -485,3 +485,121 @@ def test_low_memory_before_qwen_is_reported(job, monkeypatch):
     rep = _draft(job)
     assert rep["ram_gb_before_qwen"]["available"] == 6.0
     assert any("low memory before Qwen" in w for w in rep["warnings"])
+
+
+def test_a_shot_opens_with_a_grammatical_pose():
+    m = lambda pose: sd.merge_moments([(0.1, {"pose": pose, "look": "at the camera", "hands": "holds a card"})], [], 25, "she")  # noqa: E731
+    assert m("sitting on the floor leaning against the wall").startswith("She is sitting on the floor leaning against the wall and holds")
+    assert m("leaning forward over the box").startswith("She sits leaning forward over the box and holds")
+    assert m("stands by a window").startswith("She stands by a window and holds")
+    assert m("dancing on the grass").startswith("She is dancing on the grass and holds")
+
+
+def test_qwen_loads_once_then_asks_through_generate(monkeypatch):
+    calls = []
+
+    class Node:
+        model = None
+
+        def load_model(self, *a):
+            calls.append("load")
+            self.model = object()
+
+        def run(self, *a):
+            calls.append("run")
+            return ("via run",)
+
+        def generate(self, prompt, *a, **k):
+            calls.append("generate")
+            return "via generate"
+
+        def clear(self):
+            self.model = None
+
+    r = sd.QwenRunner.__new__(sd.QwenRunner)
+    r.node, r.model, r.quant, r.attention = Node(), "m", "None (FP16)", "auto"
+    r.load()
+    assert r.ask("q1") == "via generate" and r.ask("q2") == "via generate"
+    assert calls == ["load", "generate", "generate"]
+
+
+
+# ---------------------------------------------------------------- other content (B4 content tests: phone, dance, cartoon)
+
+def test_omni_loops_songs_speakers_and_wrappers():
+    loop = sd.parse_omni("transcript: [English] " + "Oh, yeah! " * 40 + "audio_events: drums")
+    assert loop["looping"] and sd.is_looping("Pika... " * 30) and not sd.is_looping("What have we got here? Link app.")
+    song = sd.parse_omni('transcript: [English] "and I will let go of the world" (sung) audio_events: A male voice sings, '
+                         'with a piano.')
+    assert song["sung"] and song["words"] == "and I will let go of the world"
+    cartoon = sd.parse_omni("**Transcript:** [English] Adventure time! **Audio Events:** - A male voice sings the phrase.")
+    assert cartoon["words"] == "Adventure time!" and cartoon["sung"] and cartoon["structured"]
+    talk = sd.parse_omni('transcript: [English] - [00:00-00:02] Man: "Oh." - [00:02-00:03] Man: "What?" - [00:04-00:05] '
+                         'Woman: "What\'s the date today?" audio_events: - a hum')
+    assert talk["words"] == "Oh. What? What's the date today?" and not talk["sung"]
+    assert talk["speakers"] == ["Man", "Man", "Woman", "Woman", "Woman", "Woman"]
+    ts = sd.parse_omni("transcript: [English] [00:00.000 - 00:03.120] And it's me... [00:03.120 - 00:04.520] ...again "
+                       "audio_events: a squeak")
+    assert ts["words"] == "And it's me... ...again"
+    assert sd.interjections_only("Wow! Woo! Woo! Oh, yeah!") and not sd.interjections_only("Oh, what's that?")
+
+
+def test_speakers_reach_the_lines_and_split_them():
+    words = [{"word": w, "start": i * 0.4, "end": i * 0.4 + 0.3} for i, w in enumerate(["Oh.", "What?", "What's", "the",
+                                                                                     "date", "today?"])]
+    al = sd.align_words("Oh. What? What's the date today?", words, ["Man", "Man", "Woman", "Woman", "Woman", "Woman"])
+    lines = sd.dialogue_lines(al, 25, 100)
+    assert [(ln["text"], ln.get("speaker")) for ln in lines] == [("Oh.", "Man"), ("What?", "Man"),
+                                                                  ("What's the date today?", "Woman")]
+    assert sd.gender_of("a woman with long brown hair") == "f" and sd.gender_of("a shirtless dancer") is None
+
+
+def test_moments_without_the_main_person_and_empty_hands():
+    pr = sd.PRONOUNS["she"]
+    assert sd._hands_clause("not visible holding anything", pr) == ""
+    assert sd._hands_clause("resting flat on the table", pr) == "is resting flat on the table"
+    assert sd._hands_clause("hold a torch", pr) == "holds a torch"
+    moments = [(0.1, {"person": "no", "frame": "a snowy mountain range under a blue sky"}),
+               (0.6, {"person": "no", "frame": "snowy mountains under a blue sky"}),
+               (1.1, {"person": "no", "frame": "a penguin on the snow"})]
+    assert sd.empty_shot(moments) == ("No one is replaced in this shot: a snowy mountain range under a blue sky; then a "
+                                      "penguin on the snow. It stays exactly as in <Video 1>.")
+    mixed = [(0.1, {"person": "no", "hands": "holds a drum"}), (0.6, {"person": "yes", "pose": "spinning on the grass",
+                                                                     "hands": "twirls a flaming torch", "look": "down"})]
+    assert sd.merge_moments(mixed, [], 25, "she") == "She is spinning on the grass and twirls a flaming torch, looking down."
+
+
+def test_the_summary_names_the_main_person_and_keeps_everyone_else():
+    t = sd.fill_ref2va(subject=SUBJECT, video_1="a garden.", shots=["[Shot 1] She dances."], sounds="drums", n_shots=1,
+                       dialogue=False, audio=True, pronoun="she", who="a shirtless dancer in a red sarong", others=True)
+    s = sd.parse_sections(t)["summary"]
+    assert "the main person (a shirtless dancer in a red sarong) is replaced by <Subject 1>" in s
+    assert "Everyone else in <Video 1> keeps exactly their own appearance and movements" in s
+
+
+def test_looping_omni_and_a_song_never_become_her_lines(job):
+    rep = _draft(job, omni_cls=FakeOmni("transcript: [English] " + "Pika... " * 40 + "audio_events: music"),
+                 whisper=FakeWhisper())
+    cid = sp.load_plan(job["plan"])["chunks"][0]["id"]
+    assert any("a loop" in w for w in rep["chunks"][cid]["warnings"])
+    sung = FakeOmni('transcript: [English] "Hello there." (sung) audio_events: A male voice sings over a ukulele.')
+    rep = _draft(job, omni_cls=sung, mode="all (into the draft field)")
+    c0 = sp.load_plan(job["plan"])["chunks"][0]
+    d = c0.get("draft") or c0["prompt"]
+    assert "<d>" not in d and 'a voice sings "Hello there."' in d
+
+
+
+def test_more_poses_and_body_part_hands_read_as_sentences():
+    m = lambda pose, hands: sd.merge_moments([(0.1, {"pose": pose, "look": "", "hands": hands})], [], 25, "she")  # noqa: E731
+    assert m("riding atop a yellow creature", "").startswith("She is riding atop a yellow creature")
+    assert m("leaning on the table", "").startswith("She sits leaning on the table")
+    assert sd._hands_clause("arms outstretched upward with palms open", sd.PRONOUNS["she"]) ==         "has her arms outstretched upward with palms open"
+
+
+def test_the_job_can_name_who_is_replaced():
+    p = _plan978()
+    spl.apply_op(p, {"op": "set_target", "target": "  the boy in the white hat  "})
+    assert p["target"] == "the boy in the white hat"
+    spl.apply_op(p, {"op": "set_target", "target": ""})
+    assert p["target"] == ""
