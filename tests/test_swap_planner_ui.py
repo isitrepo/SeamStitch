@@ -247,3 +247,37 @@ def test_mark_run_caches_a_mask_that_the_render_run_reuses(nodes):
     r = spl.do_op({"job": "t", "op": "delete_mask", "mask": "m001"}, str(nodes["dir"].parent.parent))
     assert not r["plan"]["masks"] and r["plan"]["trash"][-1]["kind"] == "mask"
     assert os.path.isfile(os.path.join(nodes["dir"], r["plan"]["trash"][-1]["trash"], "mask.mkv"))
+
+
+def test_weak_scene_hits_come_in_as_faint_suggestions_only():
+    # 100d's scores over 0.10 (ffmpeg scene, B5b): the six same-room jump cuts B5a found by eye read 0.10-0.14;
+    # 903 is the 902 cut read a second time
+    scored = [(96, 0.264), (131, 0.120), (155, 0.221), (186, 0.216), (250, 0.202), (349, 0.575), (385, 0.279),
+              (413, 0.181), (429, 0.224), (448, 0.118), (669, 0.119), (713, 0.104), (764, 0.134), (785, 0.187),
+              (850, 0.119), (902, 0.471), (903, 0.112), (939, 0.192)]
+    strong, weak = spl.split_scenes(scored)
+    assert strong == CUTS_978
+    assert [f for f, _ in weak] == [131, 448, 669, 713, 764, 850]
+    p = _plan978(cuts=())
+    res = spl.detect_and_plan(p, strong, weak)
+    assert res["splits"] == [209, 406, 603, 815]                     # weak hits never move the auto splits
+    sug = [c for c in p["cuts"] if not c["confirmed"]]
+    assert [c["frame"] for c in sug] == [131, 448, 669, 713, 764, 850] and all(c["weak"] for c in sug)
+    assert sug[3]["score"] == 0.104
+    # a re-detect replaces the old suggestions and leaves the confirmed cuts alone
+    spl.merge_detected(p, strong, weak=weak[:2])
+    assert [c["frame"] for c in p["cuts"] if not c["confirmed"]] == [131, 448]
+    assert [c["frame"] for c in p["cuts"] if c["confirmed"]] == CUTS_978
+
+
+def test_a_split_near_an_unconfirmed_cut_says_so():
+    p = _plan978()
+    spl.apply_op(p, {"op": "add_cut", "frame": 713, "from": "detected", "confirmed": False})
+    spl.apply_op(p, {"op": "add_cut", "frame": 448, "from": "detected", "confirmed": False})
+    spl.apply_op(p, {"op": "add_split", "frame": 715, "mode": "cut"})       # 2 frames off the suggestion
+    spl.apply_op(p, {"op": "add_split", "frame": 455, "mode": "anchored"})  # overlap 443-454 holds 448
+    w = [x for x in sp.warnings(978, p["splits"], p["cuts"], p["settings"]) if x["code"] == "suggested_cut"]
+    assert [(x["frame"], x["cuts"]) for x in w] == [(455, [448]), (715, [713])]
+    spl.apply_op(p, {"op": "confirm_cut", "frame": 448, "confirmed": True})
+    codes = {(x.get("frame"), x["code"]) for x in sp.warnings(978, p["splits"], p["cuts"], p["settings"])}
+    assert (455, "guard") in codes and (455, "suggested_cut") not in codes

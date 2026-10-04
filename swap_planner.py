@@ -25,7 +25,7 @@ The routes edit the plan off the queue (js/swap_planner.js is their UI):
                                              splits (auto too), prompts, drafts, options, seed
                                              mode, choose / delete / restore / reuse a take,
                                              render failures, masks
-    POST /seamstitch/swap/detect_cuts        ffmpeg scene > 0.15, merged as suggested cuts
+    POST /seamstitch/swap/detect_cuts        ffmpeg scene > 0.15, merged as suggested cuts (0.10-0.15: faint)
 """
 
 import hashlib
@@ -79,6 +79,10 @@ RETURN_NAMES = ("chunk", "images", "audio", "prompt", "seed", "length", "start_p
 OUT_DRAFT, OUT_ASSEMBLE = 13, 14
 OUT_MARK_CHUNK, OUT_MARK_IMAGES, OUT_SOURCE_MASK, OUT_HAS_MASK = 15, 16, 17, 18
 SCENE_THRESHOLD = 0.15           # ffmpeg scene score (> 0.15 found every cut of the 978-frame test clip)
+# same-room jump cuts score lower: 100d's 131, 448, 669, 713, 764 and 850 read 0.10-0.14 (B5a); they come in as
+# faint suggestions only (never confirmed by "detect + plan"), for Kay to confirm or delete by eye
+WEAK_THRESHOLD = 0.10
+WEAK_NEAR = 2                    # a weak hit this close to a stronger one is the same cut, read twice (100d: 902 / 903)
 
 # widget name -> plan setting
 WIDGET_SETTINGS = {"target_render_frames": "target_render", "overlap_frames": "overlap", "anchor_frames": "anchors",
@@ -566,27 +570,51 @@ FILE_OPS = {"delete_take": _op_delete_take, "restore_take": _op_restore_take, "u
 # splits from them in one step, for one review; "detect" alone adds faint suggestions
 # ---------------------------------------------------------------------------
 
-def detect_cuts(path, fps, threshold=SCENE_THRESHOLD):
-    """ffmpeg's scene score > threshold, as source frame numbers (frame c = the first of a new shot)."""
+def detect_scenes(path, fps, low=WEAK_THRESHOLD):
+    """ffmpeg's scene score for every frame scoring > low, as [(frame, score)] (frame c = the first of a new shot)."""
     ff = tl._ffmpeg_exe()
     p = subprocess.run([ff, "-hide_banner", "-nostats", "-i", path, "-an", "-vf",
-                        f"select='gt(scene,{float(threshold)})',showinfo", "-f", "null", "-"],
+                        f"select='gt(scene,{float(low)})',metadata=print:key=lavfi.scene_score", "-f", "null", "-"],
                        capture_output=True)
     if p.returncode != 0:
         raise PlannerError(f"cut detection failed: {p.stderr.decode(errors='replace')[-600:]}")
     base = float(tl.probe(path, fps).get("base_time") or 0.0)
-    out = []
-    for m in re.finditer(r"pts_time:\s*([0-9.]+)", p.stderr.decode(errors="replace")):
-        f = int(round((float(m.group(1)) - base) * float(fps)))
-        if f > 0 and f not in out:
-            out.append(f)
-    return sorted(out)
+    out, t = {}, None
+    for line in p.stderr.decode(errors="replace").splitlines():
+        m = re.search(r"pts_time:\s*([0-9.]+)", line)
+        if m:
+            t = float(m.group(1))
+            continue
+        m = re.search(r"lavfi\.scene_score=([0-9.]+)", line)
+        if m and t is not None:
+            f = int(round((t - base) * float(fps)))
+            if f > 0:
+                out[f] = max(out.get(f, 0.0), float(m.group(1)))
+            t = None
+    return sorted(out.items())
 
 
-def merge_detected(plan, found, confirmed=False):
+def split_scenes(scored, threshold=SCENE_THRESHOLD, low=WEAK_THRESHOLD, near=WEAK_NEAR):
+    """(cuts, weak): frames over `threshold`, and frames in (low, threshold] not within `near` frames of a
+    stronger hit (a cut read on two neighbouring frames is one cut)."""
+    strong = [f for f, sc in scored if sc > threshold]
+    weak = []
+    for f, sc in scored:
+        if low < sc <= threshold and not any(abs(f - g) <= near and sg > sc for g, sg in scored if g != f):
+            weak.append((f, round(sc, 3)))
+    return strong, weak
+
+
+def detect_cuts(path, fps, threshold=SCENE_THRESHOLD):
+    """ffmpeg's scene score > threshold, as source frame numbers (frame c = the first of a new shot)."""
+    return split_scenes(detect_scenes(path, fps, min(threshold, WEAK_THRESHOLD)), threshold)[0]
+
+
+def merge_detected(plan, found, confirmed=False, weak=()):
     """Detected cuts in, as suggestions (or confirmed). Confirmed or hand-placed cuts stay; earlier
     unconfirmed suggestions are replaced; a detection on a frame that already has a cut is skipped
-    (confirmed=True confirms a suggestion already there)."""
+    (confirmed=True confirms a suggestion already there). `weak`: [(frame, score)] under the threshold, always
+    added as suggestions with their score, never confirmed here."""
     keep = [c for c in plan.get("cuts", []) if c.get("confirmed", True) or c.get("from") != "detected"
             or (confirmed and c["frame"] in found)]
     if confirmed:
@@ -595,16 +623,20 @@ def merge_detected(plan, found, confirmed=False):
                 c["confirmed"] = True
     have = {c["frame"] for c in keep}
     added = [f for f in found if f not in have]
-    plan["cuts"] = sorted(keep + [{"frame": f, "from": "detected", "confirmed": bool(confirmed)} for f in added],
-                          key=lambda c: c["frame"])
+    new = [{"frame": f, "from": "detected", "confirmed": bool(confirmed)} for f in added]
+    have |= set(added)
+    new += [{"frame": int(f), "from": "detected", "confirmed": False, "weak": True, "score": float(sc)}
+            for f, sc in weak if int(f) not in have]
+    plan["cuts"] = sorted(keep + new, key=lambda c: c["frame"])
     sp.rebuild_chunks(plan)
     return added
 
 
-def detect_and_plan(plan, found):
+def detect_and_plan(plan, found, weak=()):
     """One step: the detected cuts confirmed, then the auto splits placed from every confirmed cut.
-    Splits are only replaced while no chunk has a prompt or a take; otherwise they're kept."""
-    added = merge_detected(plan, found, confirmed=True)
+    Splits are only replaced while no chunk has a prompt or a take; otherwise they're kept. Weak hits come in
+    as suggestions only, so they never move the auto splits until Kay confirms them."""
+    added = merge_detected(plan, found, confirmed=True, weak=weak)
     busy = any(c.get("takes") or (c.get("prompt") or "").strip() for c in plan.get("chunks", []) if not sp.is_kept(c))
     res = {"added": added, "splits": None, "kept_splits": busy}
     if not busy:
@@ -616,13 +648,15 @@ def do_detect_cuts(body, out_dir=None):
     jd, pp = job_paths(body.get("job", ""), out_dir)
     plan = sp.load_plan(pp)
     src = plan["source"]
-    found = detect_cuts(src["path"], int(round(float(src["fps"]))), float(body.get("threshold", SCENE_THRESHOLD)))
+    thr = float(body.get("threshold", SCENE_THRESHOLD))
+    low = float(body.get("weak_threshold", WEAK_THRESHOLD))
+    found, weak = split_scenes(detect_scenes(src["path"], int(round(float(src["fps"]))), min(thr, low)), thr, low)
     out = {"added": [], "splits": None, "kept_splits": False}
     if body.get("plan"):
-        plan = sp.update_plan(pp, lambda p: out.update(detect_and_plan(p, found)), body.get("rev"))
+        plan = sp.update_plan(pp, lambda p: out.update(detect_and_plan(p, found, weak)), body.get("rev"))
     else:
-        plan = sp.update_plan(pp, lambda p: out["added"].extend(merge_detected(p, found)), body.get("rev"))
-    return dict(out, ok=True, found=found, rev=plan["rev"])
+        plan = sp.update_plan(pp, lambda p: out["added"].extend(merge_detected(p, found, weak=weak)), body.get("rev"))
+    return dict(out, ok=True, found=found, weak=[f for f, _ in weak], rev=plan["rev"])
 
 
 def list_jobs(out_dir=None):
