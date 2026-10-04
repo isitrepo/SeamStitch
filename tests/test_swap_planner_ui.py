@@ -23,14 +23,14 @@ from test_swap_nodes import _plan978, _run, nodes  # noqa: E402,F401
 def test_auto_splits_op_gives_the_signed_off_plan_and_guards_edits():
     p = _plan978()
     res = spl.apply_op(p, {"op": "auto_splits"})
-    assert res["splits"] == [209, 406, 603, 815]
-    assert [c["length"] for c in p["chunks"]] == [209, 209, 209, 226, 175]
-    assert all(s["mode"] == "anchored" for s in p["splits"])
+    assert res["splits"] == [209, 406, 603, 785] and res["straight"] == [785]      # B5b: the 209 ceiling
+    assert [c["length"] for c in p["chunks"]] == [209, 209, 209, 209, 209]
+    assert [s["mode"] for s in p["splits"]] == ["anchored", "anchored", "anchored", "cut"]
     spl.apply_op(p, {"op": "set_prompt", "chunk": p["chunks"][1]["id"], "prompt": "x"})
     with pytest.raises(sp.PlanError, match="force"):
         spl.apply_op(p, {"op": "auto_splits"})
     spl.apply_op(p, {"op": "auto_splits", "force": True})
-    assert [s["frame"] for s in p["splits"]] == [209, 406, 603, 815]
+    assert [s["frame"] for s in p["splits"]] == [209, 406, 603, 785]
     # suggested (unconfirmed) cuts don't drive placement: without the cut at 785, no nudge
     q = _plan978(cuts=())
     for f in CUTS_978:
@@ -38,7 +38,7 @@ def test_auto_splits_op_gives_the_signed_off_plan_and_guards_edits():
     assert spl.apply_op(q, {"op": "auto_splits"})["splits"] == [209, 406, 603, 800]
     spl.apply_op(q, {"op": "confirm_cuts"})
     assert all(c["confirmed"] for c in q["cuts"])
-    assert spl.apply_op(q, {"op": "auto_splits"})["splits"] == [209, 406, 603, 815]
+    assert spl.apply_op(q, {"op": "auto_splits"})["splits"] == [209, 406, 603, 785]
 
 
 def test_detected_cuts_merge_as_suggestions():
@@ -64,7 +64,7 @@ def test_detect_and_plan_is_one_step_and_keeps_worked_splits():
     spl.apply_op(p, {"op": "add_cut", "frame": 785, "from": "detected", "confirmed": False})
     res = spl.detect_and_plan(p, CUTS_978)
     assert all(c["confirmed"] for c in p["cuts"]) and [c["frame"] for c in p["cuts"]] == CUTS_978
-    assert res["splits"] == [209, 406, 603, 815] and not res["kept_splits"]
+    assert res["splits"] == [209, 406, 603, 785] and not res["kept_splits"]
     spl.apply_op(p, {"op": "set_prompt", "chunk": p["chunks"][1]["id"], "prompt": "x"})
     spl.apply_op(p, {"op": "move_split", "split": p["splits"][0]["id"], "to": 200})
     res = spl.detect_and_plan(p, CUTS_978 + [500])
@@ -260,7 +260,7 @@ def test_weak_scene_hits_come_in_as_faint_suggestions_only():
     assert [f for f, _ in weak] == [131, 448, 669, 713, 764, 850]
     p = _plan978(cuts=())
     res = spl.detect_and_plan(p, strong, weak)
-    assert res["splits"] == [209, 406, 603, 815]                     # weak hits never move the auto splits
+    assert res["splits"] == [209, 406, 603, 785]                     # weak hits never move the auto splits
     sug = [c for c in p["cuts"] if not c["confirmed"]]
     assert [c["frame"] for c in sug] == [131, 448, 669, 713, 764, 850] and all(c["weak"] for c in sug)
     assert sug[3]["score"] == 0.104

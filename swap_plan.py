@@ -58,7 +58,8 @@ DEFAULT_SETTINGS = {
     "anchors": 5,             # pinned frames per side (5 or 22)
     "target_render": 209,     # auto-placement render length, on 17k+5
     "floor": 124,             # warning below (H3's trained minimum; 73 broke in CR-T1)
-    "ceiling": 226,           # warning above: the longest two-pass render that passed (B5a T-CEIL: 243 crashed, 260 failed)
+    "ceiling": 209,           # warning above: two-pass renders over 209 aren't safe on 64 GB RAM (B5a: 243 crashed, 260
+                              # failed; B5b: 226 failed, then crashed ComfyUI; 209 ran 30+ times)
     "trained_max": 362,       # warning above (H3's trained range)
     "guard": 6,               # overlap guard either side of an anchored overlap (half T2's widest morph)
     "conform_to_24fps": True,
@@ -231,7 +232,7 @@ def warnings(frames, splits, cuts=(), settings=None, chunks=None, keep=()):
         if L > s["trained_max"]:
             out.append(dict(where, code="trained", text=f"render {L} frames is over H3's trained range ({s['trained_max']})"))
         elif L > s["ceiling"]:
-            out.append(dict(where, code="ceiling", text=f"render {L} frames is over the tested ceiling ({s['ceiling']}): two-pass renders crashed or failed at 243 and 260 frames (B5a), out of system RAM at the refine"))
+            out.append(dict(where, code="ceiling", text=f"render {L} frames is over the tested ceiling ({s['ceiling']}): two-pass renders failed or crashed ComfyUI at 226 (B5b), 243 and 260 frames (B5a), at the 1 MP refine (system RAM)"))
     for i, c in enumerate(chunks[1:], start=1):
         sp = c["left"]
         J = sp["frame"]
@@ -320,41 +321,53 @@ def clearance(frames, splits, cuts, settings, split_id, keep=()):
     return found
 
 
-def auto_splits(frames, cuts=(), settings=None, max_shift=None):
-    """Anchored split frames for target-length renders: the first at target_render, then every
-    target_render - overlap. A last chunk whose render would fall under the floor merges into
-    the one before. An anchored split whose overlap guard holds a cut (checked AFTER the fill,
+def auto_splits(frames, cuts=(), settings=None, max_shift=None, with_modes=False):
+    """Split frames for target-length renders: the first at target_render, then every
+    target_render - overlap (anchored). A last chunk whose render would fall under the floor merges
+    into the one before. An anchored split whose overlap guard holds a cut (checked AFTER the fill,
     since a head fill lengthens the overlap) is nudged forward, else backward, by the smallest
     shift that clears it without fouling an earlier split's guard; the splits after it are
-    re-placed from its new position."""
+    re-placed from its new position. If that nudge leaves a render over the ceiling and a straight
+    cut on the cut in the guard doesn't (B5b: 100d's nudge to 815 made a 226-frame render, which
+    failed and then crashed ComfyUI), the split becomes a straight cut there instead, and the
+    splits after it are placed from the cut (its chunk renders from the cut: no overlap).
+    Returns the frames; with_modes=True, [(frame, mode)]."""
     s = _settings(settings)
     n_src = int(frames)
     cut_frames = confirmed_cuts(cuts)
     target, ov, guard = int(s["target_render"]), int(s["overlap"]), int(s["guard"])
     step = target - ov
     max_shift = int(max_shift if max_shift is not None else step // 2)
+    straight = set()                    # split frames made straight cuts
 
-    def chain(prefix, J):
+    def chain(prefix, J, cut=False):
         out = list(prefix)
+        if J < n_src:
+            out.append(J)
+            J += target if cut else step
         while J < n_src:
             out.append(J)
             J += step
         # merge an under-floor last chunk into the one before
-        if out and len(out) > len(prefix):
+        if out and len(out) > len(prefix) + (1 if cut else 0):
             last = out[-1]
             if snap_up(n_src - (last - ov)) < s["floor"]:
                 out.pop()
         return out
 
-    def chunks_of(js):
-        return geometry(n_src, [{"id": f"s{i + 1}", "frame": j, "mode": MODE_ANCHORED} for i, j in enumerate(js)],
-                        cut_frames, s)
+    def chunks_of(js, extra=()):
+        st = straight | set(extra)
+        return geometry(n_src, [{"id": f"s{i + 1}", "frame": j, "mode": MODE_CUT if j in st else MODE_ANCHORED}
+                                for i, j in enumerate(js)], cut_frames, s)
+
+    def over(ch, upto):
+        return any(c["length"] > s["ceiling"] for c in ch[:upto + 1])
 
     js = chain([], target) if target < n_src else []
     k = 0
     while k < len(js):
         ch = chunks_of(js)
-        if _guard_clear(ch, k + 1, cut_frames, guard):
+        if js[k] in straight or _guard_clear(ch, k + 1, cut_frames, guard):
             k += 1
             continue
         best = None
@@ -374,10 +387,19 @@ def auto_splits(frames, cuts=(), settings=None, max_shift=None):
                     break
             if best is not None:
                 break
+        if best is not None and over(chunks_of(best), k + 1):
+            lo_g = ch[k + 1]["render"][0] - guard
+            inside = [c for c in cut_frames if lo_g <= c <= js[k] + guard and (k == 0 or c > js[k - 1])]
+            if inside:
+                c0 = min(inside, key=lambda c: abs(c - js[k]))
+                alt = chain(js[:k], c0, cut=True)
+                if not over(chunks_of(alt, [c0]), k + 1):
+                    best = alt
+                    straight.add(c0)
         if best is not None:
             js = best
         k += 1
-    return js
+    return [(j, MODE_CUT if j in straight else MODE_ANCHORED) for j in js] if with_modes else js
 
 
 # ---------------------------------------------------------------------------

@@ -320,17 +320,18 @@ def apply_op(plan, body):
         if f0 <= n - 1:
             spans.append((f0, n - 1))
         cut_frames = sp.confirmed_cuts(plan.get("cuts"))
-        frames = []
+        placed = []
         for a, b in spans:
             rel = [c - a for c in cut_frames if a < c <= b]
-            frames += [a + x for x in sp.auto_splits(b - a + 1, rel, plan.get("settings"))]
+            placed += [(a + x, m) for x, m in sp.auto_splits(b - a + 1, rel, plan.get("settings"), with_modes=True)]
         plan["splits"] = sorted(keep_splits.values(), key=lambda d: d["frame"])
         plan["chunks"] = kept
         have = {d["frame"] for d in plan["splits"]}
-        for f in frames:
+        for f, m in placed:
             if f not in have:
-                sp.add_split(plan, f, sp.MODE_ANCHORED)
-        res["splits"] = frames
+                sp.add_split(plan, f, m)
+        res["splits"] = [f for f, _ in placed]
+        res["straight"] = [f for f, m in placed if m == sp.MODE_CUT]
         geo = True
     elif op == "adopt_draft":
         c = _chunk(plan, body["chunk"])
@@ -1161,9 +1162,10 @@ class SeamStitchSwapPlanner:
                     "Pins per side (clip anchors: 5 or 22)."}),
                 "floor_frames": ("INT", {"default": 124, "min": 5, "max": 1000, "step": 1, "tooltip":
                     "Warn below this render length (H3's trained minimum)."}),
-                "ceiling_frames": ("INT", {"default": 226, "min": 5, "max": 2000, "step": 1, "tooltip":
-                    "Warn above this render length: the longest two-pass render that passed on a 32 GB card with "
-                    "64 GB RAM (B5a: 243 crashed and 260 failed at the refine, out of system RAM)."}),
+                "ceiling_frames": ("INT", {"default": 209, "min": 5, "max": 2000, "step": 1, "tooltip":
+                    "Warn above this render length: two-pass renders over 209 frames failed or crashed ComfyUI at the "
+                    "1 MP refine on a 32 GB card with 64 GB RAM (B5b: 226 failed, then crashed; B5a: 243 crashed, 260 "
+                    "failed)."}),
                 "conform_to_24fps": ("BOOLEAN", {"default": True, "tooltip":
                     "The render's reference audio on H3's 24 fps clock (frames stay 1:1). Takes keep "
                     "the original audio."}),
@@ -1194,7 +1196,7 @@ class SeamStitchSwapPlanner:
         return h.hexdigest()
 
     def plan(self, job, source, target_render_frames=209, overlap_frames=12, anchor_frames=5, floor_frames=124,
-             ceiling_frames=226, conform_to_24fps=True, run="", ui_state=""):
+             ceiling_frames=209, conform_to_24fps=True, run="", ui_state=""):
         widgets = {"target_render_frames": target_render_frames, "overlap_frames": overlap_frames,
                    "anchor_frames": anchor_frames, "floor_frames": floor_frames, "ceiling_frames": ceiling_frames,
                    "conform_to_24fps": conform_to_24fps}

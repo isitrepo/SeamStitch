@@ -340,7 +340,7 @@ function buildPlanner(node) {
     const splits = () => P()?.splits || [];
     const cuts = () => P()?.cuts || [];
     const confirmed = () => cuts().filter(c => c.confirmed !== false).map(c => c.frame);
-    const settings = () => Object.assign({ overlap: 12, anchors: 5, target_render: 209, floor: 124, ceiling: 226, trained_max: 362, guard: 6, hand_back: 12 }, P()?.settings || {});
+    const settings = () => Object.assign({ overlap: 12, anchors: 5, target_render: 209, floor: 124, ceiling: 209, trained_max: 362, guard: 6, hand_back: 12 }, P()?.settings || {});
     const statusOf = (cid) => S.status.find(s => s.chunk === cid) || {};
     const chunkIndex = (cid) => chunks().findIndex(c => c.id === cid);
     const chunkAt = (f) => chunks().find(c => f >= c.deliver[0] && f <= c.deliver[1]);
