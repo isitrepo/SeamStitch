@@ -569,6 +569,17 @@ def test_moments_without_the_main_person_and_empty_hands():
     assert sd.merge_moments(mixed, [], 25, "she") == "She is spinning on the grass and twirls a flaming torch, looking down."
 
 
+def test_the_main_person_is_named_by_what_lasts():
+    # 100d chunk 1 (B5a): "a bald man holding a knife" -> every shot without the knife answered "no"
+    assert sd.who_lasting("a bald man holding a knife") == "a bald man"
+    assert sd.who_lasting("a woman, sitting at a table with a sign") == "a woman"
+    assert sd.who_lasting("a man wearing a black t-shirt") == "a man wearing a black t-shirt"
+    assert sd.who_lasting("a girl in a blue dress") == "a girl in a blue dress"
+    assert sd.who_lasting("a shirtless dancer in a red sarong") == "a shirtless dancer in a red sarong"
+    assert sd.who_lasting("dancing") == "dancing"            # nothing left to name them by: kept as it was
+    assert "never by what they hold or do" in sd.WHO_INSTRUCTION
+
+
 def test_a_no_that_describes_the_person_is_asked_again():
     # 100d 186-208 (B5a): "person: no" three times, each with a pose and the hands -> written as an empty shot
     asked = []
