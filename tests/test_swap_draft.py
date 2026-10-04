@@ -603,3 +603,25 @@ def test_the_job_can_name_who_is_replaced():
     assert p["target"] == "the boy in the white hat"
     spl.apply_op(p, {"op": "set_target", "target": ""})
     assert p["target"] == ""
+
+
+def test_the_strip_gets_a_playable_copy_of_a_source_the_browser_cannot_decode(tmp_path):
+    import subprocess
+    import av
+    import timeline as tl
+    src = str(tmp_path / "phone.mp4")
+    subprocess.run([tl._ffmpeg_exe(), "-v", "error", "-y", "-f", "lavfi", "-i", "testsrc=size=160x120:rate=30:duration=1",
+                    "-c:v", "mpeg4", src], check=True)
+    jd = str(tmp_path / "job")
+    plan = {"source": {"path": src, "fps": 30}}
+    assert spl.video_codec(src) == "mpeg4"
+    view = spl.source_view(plan, jd)
+    assert view.endswith("cache/source_view.mp4")
+    with av.open(view) as c:
+        v = c.streams.video[0]
+        assert v.codec_context.name == "h264" and sum(1 for _ in c.decode(v)) == 30
+    assert spl.source_view(plan, jd) == view                    # made once
+    h264 = str(tmp_path / "ok.mp4")
+    subprocess.run([tl._ffmpeg_exe(), "-v", "error", "-y", "-f", "lavfi", "-i", "testsrc=size=160x120:rate=25:duration=1",
+                    "-c:v", "libx264", "-pix_fmt", "yuv420p", h264], check=True)
+    assert spl.source_view({"source": {"path": h264, "fps": 25}}, jd) == h264

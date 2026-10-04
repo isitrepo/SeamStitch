@@ -825,6 +825,52 @@ def chunk_status(plan, jd):
     return out
 
 
+BROWSER_CODECS = {"h264", "vp8", "vp9", "av1"}      # what Chrome decodes in a <video>
+_CODEC_CACHE = {}
+
+
+def video_codec(path):
+    """The source's video codec name (PyAV), cached per file version; None when unreadable."""
+    try:
+        st = os.stat(path)
+    except OSError:
+        return None
+    key = (os.path.abspath(path), st.st_size, st.st_mtime_ns)
+    if key not in _CODEC_CACHE:
+        try:
+            import av
+            with av.open(path) as c:
+                _CODEC_CACHE[key] = c.streams.video[0].codec_context.name
+        except Exception:
+            _CODEC_CACHE[key] = None
+    return _CODEC_CACHE[key]
+
+
+def source_view(plan, jd):
+    """What the strip plays for the source: the source itself when the browser can decode its video, else
+    an H.264 copy in the job's cache/ at the plan's frame rate (the frames the Planner counts), made once and
+    remade when the source changes. A 2007 phone clip in MPEG-4 Part 2 played black in the strip."""
+    src = (plan.get("source") or {}).get("path") or ""
+    codec = video_codec(src)
+    if not src or codec is None or codec in BROWSER_CODECS:
+        return src
+    out = os.path.join(jd, "cache", "source_view.mp4")
+    if os.path.isfile(out) and os.path.getmtime(out) >= os.path.getmtime(src):
+        return out.replace("\\", "/")
+    os.makedirs(os.path.dirname(out), exist_ok=True)
+    fr = int(round(float(plan["source"]["fps"])))
+    tmp = out + ".part.mp4"
+    subprocess.run([tl._ffmpeg_exe(), "-v", "error", "-y", "-i", src, "-map", "0:v:0", "-map", "0:a:0?",
+                    "-vf", f"fps={fr},scale=out_color_matrix=bt709:out_range=tv,format=yuv420p",
+                    "-c:v", "libx264", "-crf", "18", "-preset", "fast", "-g", str(fr), "-colorspace", "bt709",
+                    "-color_primaries", "bt709", "-color_trc", "bt709", "-color_range", "tv",
+                    "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", tmp], check=True, capture_output=True)
+    os.replace(tmp, out)
+    _say(f"[SeamStitch] Swap Planner: {os.path.basename(src)} is {codec} (the browser can't play it): "
+         f"made a preview copy for the strip")
+    return out.replace("\\", "/")
+
+
 def plan_view(job, out_dir=None):
     jd, pp = job_paths(job, out_dir)
     plan = sp.load_plan(pp)
@@ -839,7 +885,15 @@ def plan_view(job, out_dir=None):
         j["verdict"] = j["flags"]["verdict"]
     return {"path": pp, "job_dir": jd, "subfolder": os.path.relpath(jd, output_dir_or(out_dir)).replace("\\", "/"),
             "plan": plan, "joins": joins, "status": chunk_status(plan, jd), "warnings": plan.get("warnings", []),
-            "quality": ss.legend(), "text": plan_text(plan)}
+            "quality": ss.legend(), "text": plan_text(plan), "source_view": _source_view_safe(plan, jd)}
+
+
+def _source_view_safe(plan, jd):
+    try:
+        return source_view(plan, jd)
+    except Exception as e:
+        _say(f"[SeamStitch] Swap Planner: no preview copy for the strip: {e}")
+        return (plan.get("source") or {}).get("path")
 
 
 def output_dir_or(out_dir):
