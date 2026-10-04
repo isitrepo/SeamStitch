@@ -684,9 +684,21 @@ function buildPlanner(node) {
         if (k) toast(`queued ${k} render${k === 1 ? "" : "s"} of chunk ${label(cid)}${n === 1 && fixed && !fresh ? ` (fixed seed ${c.seed_mode.fixed})` : ""}`, "green");
         refresh();
     }
-    async function queueDraft() {
+    // A draft run needs none of the render's models: ComfyUI drops them (and its cache, which holds them in
+    // RAM) before the run, as its own /free does, so Qwen, Omni and Whisper load into a clear machine. Only ComfyUI
+    // can drop its cache, between queue items: hence before queueing, not inside the node (B4: Qwen ran out of the
+    // paging file right after a render). The next render reloads its models, as it would anyway.
+    async function freeForDraft() {
+        try {
+            await api.fetchApi("/free", { method: "POST", headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ unload_models: true, free_memory: true }) });
+            await new Promise(r => setTimeout(r, 1500));     // the worker applies it when it's between items
+        } catch { }
+    }
+    async function queueDraft(chunk) {
         if (!P()) return;
-        await queueRun({ action: "draft" }, "draft");
+        await freeForDraft();
+        await queueRun(chunk ? { action: "draft", chunk } : { action: "draft" }, "draft");
     }
     function openMarkMenu(ev) {
         if (!P()) return;
@@ -1209,7 +1221,7 @@ function buildPlanner(node) {
             dv.title = `The draft:\n\n${c.draft.slice(0, 1500)}`;
             side.append(dv);
         }
-        side.append(button("redraft", "Queue a draft run of this chunk: SeamStitch Swap Draft Prompts drafts it into the prompt if that's empty, otherwise into the draft field (never over your prompt)", () => queueRun({ action: "draft", chunk: c.id }, "draft")));
+        side.append(button("redraft", "Queue a draft run of this chunk: SeamStitch Swap Draft Prompts drafts it into the prompt if that's empty, otherwise into the draft field (never over your prompt)", () => queueDraft(c.id)));
         pr.append(ta, side);
         selBox.append(pr);
 

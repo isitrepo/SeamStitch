@@ -478,3 +478,10 @@ def test_timeline_moments_merge_into_a_shot_with_the_lines_at_their_times():
     assert out.index("small white card") < out.index("<d>[English]What have we got here?</d>")
     assert "She holds a flat cream-and-yellow card at the chest, and she other hand" not in out
     assert "her other hand rests on her knee" in out and "holds a flat cream-and-yellow card" in out
+
+
+def test_low_memory_before_qwen_is_reported(job, monkeypatch):
+    monkeypatch.setattr(sd, "ram_gb", lambda: {"available": 6.0, "total": 64.0, "swap_free": 2.0})
+    rep = _draft(job)
+    assert rep["ram_gb_before_qwen"]["available"] == 6.0
+    assert any("low memory before Qwen" in w for w in rep["warnings"])

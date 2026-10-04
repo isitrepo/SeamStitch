@@ -166,6 +166,20 @@ def qwen_models():
 # VRAM: free memory between stages, and the device-wide peak (Omni is another process)
 # ---------------------------------------------------------------------------
 
+QWEN_RAM_GB = 24.0              # Qwen3-VL-8B FP16 staged through RAM (16 GB of weights) plus headroom
+
+
+def ram_gb():
+    """Available RAM and free swap (GB), or None without psutil."""
+    try:
+        import psutil
+        vm, sw = psutil.virtual_memory(), psutil.swap_memory()
+        return {"available": round(vm.available / 2 ** 30, 1), "total": round(vm.total / 2 ** 30, 1),
+                "swap_free": round(sw.free / 2 ** 30, 1)}
+    except Exception:
+        return None
+
+
 def free_vram_gb():
     try:
         if torch.cuda.is_available():
@@ -1464,6 +1478,12 @@ def run_draft(plan_file, *, sheet=None, mode=CHUNK_MODES[0], named=(), qwen_mode
 
         # 4. Qwen, loaded once: the subject, then each chunk
         stage("Qwen")
+        ram = ram_gb()
+        report["ram_gb_before_qwen"] = ram
+        if ram and ram["available"] is not None and ram["available"] + ram["swap_free"] < QWEN_RAM_GB:
+            warnings.append(f"low memory before Qwen ({ram['available']:.0f} GB RAM + {ram['swap_free']:.0f} GB swap free): "
+                            f"ComfyUI still holds the last render's models; the strip's draft buttons free them first "
+                            f"(queued another way: POST /free with free_memory, then queue the draft)")
         t = time.time()
         qwen.load()
         stages["qwen_load_s"] = round(time.time() - t, 2)
