@@ -209,6 +209,8 @@ function setupTake(node) {
             P.chips.append(
                 chip(`following ${sc.pose_iou ?? "n/a"}${sc.pose_iou_p10 != null ? ` (p10 ${sc.pose_iou_p10})` : ""}`, q.following ? flagCol(q.following) : followCol(sc.pose_iou),
                     "Pose IoU, source vs output person masks (r10): mean >= 0.60 and p10 >= 0.45 green; < 0.50 / 0.30 red."),
+                ...(sc.replaced ? [chip(`replaced ${sc.replaced.person_diff}`, flagCol(q.replaced),
+                    "Colour difference, source vs output, inside the source person: >= 60 green; 30-60 amber (partly replaced, e.g. only the head); < 30 red (not replaced: the source came back). Following measures the outline, not who is inside it.")] : []),
                 chip(`cuts ${cuts.length ? cuts.map(([f, s]) => `${f} ${s}`).join(", ") : "none inside"}`, flagCol(q.cuts),
                     "Per confirmed cut inside the chunk (scorer.cut_stats): copied >= 3.0 with spread <= 2, lost < 2.0, else unsure."),
                 chip(`mouth ${sc.mouth ?? "n/a"}${mi.face != null ? ` · face ${Math.round(100 * mi.face)}%` : ""}`, flagCol(q.mouth) === "none" ? "grey" : flagCol(q.mouth),

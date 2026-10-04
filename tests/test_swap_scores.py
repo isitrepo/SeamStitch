@@ -229,3 +229,33 @@ def test_score_frames_puts_it_together():
     assert s["pose_iou"] == 1.0 and s["frames"] == n
     assert set(s["cuts"]) == {"115"} and s["scene"]["bg_psnr"] > 100
     assert "mouth" not in s
+
+
+def test_replaced_tells_a_copy_from_a_replacement():
+    # B5a: a 73-frame render handed back the source man (pose IoU 0.88, the round's best); the flag reads the
+    # colours inside the source person, not the outline
+    h, w = ss.AN_H, ss.AN_W
+    rng = np.random.default_rng(0)
+    src = [rng.integers(0, 255, (h, w, 3), dtype=np.uint8) for _ in range(3)]
+    m = np.zeros((h, w), bool)
+    m[100:400, 300:600] = True
+    copy = [np.clip(s.astype(int) + 10, 0, 255).astype(np.uint8) for s in src]       # the source, re-rendered
+    new = [s.copy() for s in src]
+    for f in new:
+        f[m] = 255 - f[m]                                                           # someone else inside the outline
+    rc, rn = ss.replaced(src, copy, [m] * 3), ss.replaced(src, new, [m] * 3)
+    assert rc["person_diff"] < 30 and ss.replaced_flag(rc) == "red"
+    assert rn["person_diff"] >= 60 and ss.replaced_flag(rn) == "green"
+    assert ss.replaced_flag({"person_diff": 45.5}) == "amber"                       # head only (S1_107)
+    assert ss.replaced(src, copy, [np.zeros((h, w), bool)] * 3) is None             # nobody in the source
+    assert ss.chunk_flags({"replaced": rc})["replaced"] == "red" and ss.chunk_flags({})["replaced"] is None
+    sc, _ = ss.score_frames(copy, src, [m] * 3, [m] * 3, mouth=False)
+    assert sc["replaced"]["person_diff"] == rc["person_diff"]
+
+
+def test_a_take_that_was_not_replaced_ranks_last():
+    copy = {"id": "t1", "scores": {"pose_iou": 0.88, "replaced": {"person_diff": 17.5}}}
+    head = {"id": "t2", "scores": {"pose_iou": 0.82, "replaced": {"person_diff": 41.1}}}
+    full = {"id": "t3", "scores": {"pose_iou": 0.76, "replaced": {"person_diff": 73.0}}}
+    old = {"id": "t4", "scores": {"pose_iou": 0.70}}                                  # scored before B5a
+    assert [t["id"] for t in sorted([copy, head, full, old], key=ss.rank_key)] == ["t3", "t4", "t2", "t1"]
