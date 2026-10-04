@@ -569,6 +569,28 @@ def test_moments_without_the_main_person_and_empty_hands():
     assert sd.merge_moments(mixed, [], 25, "she") == "She is spinning on the grass and twirls a flaming torch, looking down."
 
 
+def test_a_no_that_describes_the_person_is_asked_again():
+    # 100d 186-208 (B5a): "person: no" three times, each with a pose and the hands -> written as an empty shot
+    asked = []
+
+    def ask(q, pic):
+        asked.append(pic)
+        return "Yes."
+    bent = [(t, {"person": "no", "pose": "sitting on floor leaning forward", "look": "down",
+                 "hands": "holds a knife near cardboard box with both hands"}) for t in (0.1, 0.4, 0.8)]
+    assert sd.recheck_absent(bent, ["p0", "p1", "p2"], "a bald man in a black t-shirt", ask) == 3
+    assert asked == ["p0", "p1", "p2"] and all(sd.present(m) for _, m in bent)
+    # an empty landscape describes no one: never asked, stays empty
+    asked.clear()
+    land = [(0.1, {"person": "no", "pose": "none visible", "hands": "none visible holding anything", "frame": "hills"})]
+    assert sd.recheck_absent(land, ["p0"], "a boy", ask) == 0 and asked == [] and not sd.present(land[0][1])
+    # a "no" that Qwen confirms stays a no; a shot with a "yes" is never re-asked
+    other = [(0.1, {"person": "no", "pose": "riding atop a yellow creature", "hands": ""})]
+    assert sd.recheck_absent(other, ["p0"], "a boy", lambda q, pic: "no") == 0 and not sd.present(other[0][1])
+    mixed = [(0.1, {"person": "yes"}), (0.6, {"person": "no", "pose": "kneeling"})]
+    assert sd.recheck_absent(mixed, ["p0", "p1"], "a boy", ask) == 0 and asked == []
+
+
 def test_the_summary_names_the_main_person_and_keeps_everyone_else():
     t = sd.fill_ref2va(subject=SUBJECT, video_1="a garden.", shots=["[Shot 1] She dances."], sounds="drums", n_shots=1,
                        dialogue=False, audio=True, pronoun="she", who="a shirtless dancer in a red sarong", others=True)
