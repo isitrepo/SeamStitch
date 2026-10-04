@@ -526,6 +526,9 @@ COMPOSE_INSTRUCTION = """Here is what a person does in one continuous shot of a 
 
 In an edit of this video the person is replaced by a character, called "{subj}" below, who does exactly what the person does. Rewrite the moments as {n_sent} short sentences, present tense, in the same order: merge moments that repeat, give the same object the same name every time, and keep every object {subj} picks up, holds up, shows or puts down, where {subj} holds it, and where {subj} looks (say "looking at the camera" when the moments say so). An object that the moments name differently from one moment to the next keeps its most frequent name. {dialogue_rule}Use only what the moments say: add nothing. Don't mention times, moments, frames or "the person".{extra} Write only the sentences."""
 
+# asked only when a shot would be written as empty although a moment describes a pose or hands (below)
+RECHECK_INSTRUCTION = """This is one frame from a video. Is {who} in this frame at all, even partly: only the top of the head, the back, a shoulder, an arm or the hands, seen from above, from behind or turned away? Answer only "yes" or "no"."""
+
 WHO_INSTRUCTION = """These are {n} frames from one video clip. Who is the main person or character in it: the one most in focus, the largest, or the one doing the most? Prefer a person or a human-like character over an animal or a creature. Answer in a few words that tell them apart from anyone else in the clip, for example "a man in a black t-shirt", "a girl in a blue dress" or "a cartoon boy in a white hat". Answer "none" only if no person or character appears in any of the frames."""
 
 SCENE_INSTRUCTION = """These are {n} frames from one clip of a video{talk}. Write exactly two labelled lines and nothing else:
@@ -740,6 +743,35 @@ def present(m):
     """Whether the main person is in a moment's frame (no answer: assume yes)."""
     v = (m.get("person") or "").lower()
     return not v.startswith("no")
+
+
+def _describes_someone(m):
+    """A moment whose pose or hands caption describes a body (not "none visible", "not visible ...")."""
+    for lab in ("pose", "hands"):
+        v = (m.get(lab) or "").lower().strip(" .")
+        if v and not v.startswith(("none", "no ", "not ", "nobody", "n/a", "nothing", "empty")):
+            return True
+    return False
+
+
+def recheck_absent(moments, pics, who, ask):
+    """Qwen can answer person "no" while describing that person's pose and hands: 100d 186-208, the man bent over
+    the box, seen from above (B5a; the shot was written as empty and H3 rendered an empty room). When no moment of
+    a shot says yes, each "no" moment that describes a pose or hands gets one single-purpose question on its own
+    picture (B4: those work where the six-line answer doesn't); a "yes" makes the moment present. Returns the
+    number of moments turned present. Moments that describe no one aren't asked (the empty landscapes)."""
+    if any(present(m) for _, m in moments):
+        return 0
+    n = 0
+    for k, (_, m) in enumerate(moments):
+        if not _describes_someone(m) or k >= len(pics):
+            continue
+        ans = (ask(RECHECK_INSTRUCTION.format(who=who or "the person most in focus"), pics[k]) or "").strip().lower()
+        m["rechecked"] = ans.strip(" .*\"'").startswith("yes")
+        if m["rechecked"]:
+            m["person"] = "yes"
+            n += 1
+    return n
 
 
 def _hands_clause(hands, pr):
@@ -1756,6 +1788,7 @@ def run_draft(plan_file, *, sheet=None, mode=CHUNK_MODES[0], named=(), qwen_mode
                     said = lines_in_shot(ci["lines"], sh, k_sh, i)
                     rel = [dict(ln, frames=[ln["frames"][0] - sh[0], ln["frames"][1] - sh[0]]) if "frames" in ln else ln
                            for ln in said]
+                    recheck_absent(moments, pics, who, lambda q, pic: qwen.ask(q, image=pic[None], max_tokens=8))
                     if not any(present(m) for _, m in moments):
                         body = empty_shot(moments)          # she isn't in it: no lines of hers either
                         ci.setdefault("offscreen", []).extend(said)
