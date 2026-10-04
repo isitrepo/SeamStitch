@@ -31,13 +31,25 @@ def test_snap_up_to_h3_grid():
 
 
 def test_auto_plan_978_frames():
-    js = sp.auto_splits(978, CUTS_978)
+    # B5b: the nudge to 815 makes a 226-frame render (over the 209 ceiling; it failed, then crashed ComfyUI), so
+    # the split becomes a straight cut on the cut at 785 instead: five 209-frame renders
+    js = sp.auto_splits(978, CUTS_978, with_modes=True)
+    assert js == [(209, "anchored"), (406, "anchored"), (603, "anchored"), (785, "cut")]
+    splits = [{"frame": f, "mode": m} for f, m in js]
+    g = sp.geometry(978, splits, CUTS_978)
+    assert [c["length"] for c in g] == [209, 209, 209, 209, 209]
+    assert g[3]["fill"] == {"kind": "head", "frames": 15} and g[3]["render"] == [576, 784]
+    assert g[4]["fill"] == {"kind": "hold", "frames": 16} and g[4]["render"] == [785, 977]
+    assert sp.warnings(978, splits, CUTS_978) == []
+    assert sp.auto_splits(978, CUTS_978) == [209, 406, 603, 785]
+    # with the old 226 ceiling the nudge stands (B1a's signed-off plan)
+    js = sp.auto_splits(978, CUTS_978, {"ceiling": 226})
     assert js == [209, 406, 603, 815]               # 815: nudged +15 off the cut at 785, after the head fill
     g = sp.geometry(978, js, CUTS_978)
     assert [c["length"] for c in g] == [209, 209, 209, 226, 175]
     assert sum(c["length"] for c in g) == 1028
     assert g[3]["fill"] == {"kind": "tail", "frames": 2} and g[3]["render"] == [591, 816]
-    assert sp.warnings(978, js, CUTS_978) == []
+    assert sp.warnings(978, js, CUTS_978, {"ceiling": 226}) == []
 
 
 def test_auto_plan_nudge_is_needed_without_it():
@@ -93,12 +105,14 @@ def test_length_and_straight_split_warnings():
         ("floor", 0), ("no_cut", 100), ("no_cut", 500), ("trained", 1), ("trained", 2)]
     # a cut one frame away is close enough
     assert not [x for x in sp.warnings(978, [{"frame": 97, "mode": "cut"}], CUTS_978) if x["code"] == "no_cut"]
-    assert sp.warnings(400, [{"frame": 200, "mode": "anchored"}], []) == []      # 209 and 226 frames
+    assert sp.warnings(400, [{"frame": 200, "mode": "anchored"}], [], {"ceiling": 226}) == []      # 209 and 226 frames
+    assert [x["code"] for x in sp.warnings(400, [{"frame": 200, "mode": "anchored"}], [])] == ["ceiling"]   # 226 > 209
     w = sp.warnings(600, [{"frame": 300, "mode": "cut"}], [299])
     assert [x["code"] for x in w] == ["ceiling", "ceiling"]                       # 311 frames each
-    # B5a T-CEIL: 226 passed, 243 crashed and 260 failed (two-pass, at the refine)
-    assert sp.DEFAULT_SETTINGS["ceiling"] == 226
-    assert [x["code"] for x in sp.warnings(470, [{"frame": 226, "mode": "cut"}], [226])] == ["ceiling"]   # 226 / 244
+    # B5a T-CEIL: 226 passed, 243 crashed and 260 failed; B5b: 226 failed, then crashed ComfyUI (two-pass, at the refine)
+    assert sp.DEFAULT_SETTINGS["ceiling"] == 209
+    assert [x["code"] for x in sp.warnings(418, [{"frame": 209, "mode": "cut"}], [209])] == []          # 209 / 209
+    assert [x["code"] for x in sp.warnings(470, [{"frame": 226, "mode": "cut"}], [226])] == ["ceiling", "ceiling"]   # 226 / 244
 
 
 def test_geometry_rejects_bad_splits():
