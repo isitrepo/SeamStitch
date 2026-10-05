@@ -794,9 +794,13 @@ def test_a_line_another_face_says_is_theirs_as_subject_2(monkeypatch):
     # with two others named, the talking face's place in frame picks the one described there (B7: c18)
     two = [("<Subject 2>", "a man laughing reclined on the same couch to the right"),
            ("<Subject 3>", "another person partially visible behind him near the back wall")]
-    assert sd.subject_at(0.8, two) == "<Subject 2>" and sd.subject_at(0.2, two) is None and sd.subject_at(None, two) is None
+    assert sd.subject_at(0.8, two) == "<Subject 2>" and sd.subject_at(0.2, two) == "<Subject 3>" and sd.subject_at(None, two) is None
     assert sd.subject_at(0.5, [("<Subject 2>", "a man in the middle"), ("<Subject 3>", "a woman on the left")]) == "<Subject 2>"
     assert sd.subject_at(0.8, [("<Subject 2>", "a man on the right"), ("<Subject 3>", "a woman to the right")]) is None
+    # this draft's own words (Qwen gave the man no side): the person described on the left is ruled out
+    assert sd.subject_at(0.68, [("<Subject 2>", "a man in blue jeans reclines beside her on the same couch"),
+                                ("<Subject 3>", "another person partially visible to the left wearing dark clothing")]) == "<Subject 2>"
+    assert sd.subject_at(0.68, [("<Subject 2>", "a man beside her"), ("<Subject 3>", "a waiter behind them")]) is None
     lines[1]["speaker_label"] = "<Subject 2>"
     sd.speaker_ids(lines)
     # a tag Qwen wrote as hers is put back as his where the words are his line
