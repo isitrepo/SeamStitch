@@ -370,3 +370,23 @@ def test_the_strip_marks_with_its_own_shot_list():
     assert src.count("function shotsOf(") == 1
     mark = src[src.index("async function markChunk("):src.index("function openMarkMenu(")]
     assert 'range: [s.a, s.b]' in mark
+
+
+def test_the_prompt_colours_each_tag(tmp_path):
+    # B7: Subject 1 yellow, Subject 2 green, Video blue, ... drawn behind the prompt box
+    import shutil
+    import subprocess
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node isn't installed")
+    src = open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "js", "swap_planner.js"), encoding="utf-8").read()
+    code = src[src.index("const PROMPT_TOKENS"):src.index("// A textarea drawn over its own coloured copy")]
+    js = tmp_path / "c.js"
+    js.write_text(code + "\nconsole.log(colourPrompt(process.argv[2]));", encoding="utf-8")
+    text = "summary:\n<Subject 1> (S1) and <Subject 2> in <Video 1> from <Picture 1>, <Audio 1>: [Shot 1] says <d>Hi & bye</d>."
+    out = subprocess.run([node, str(js), text], capture_output=True, text=True, check=True).stdout
+    assert '<span style="color:#facc15">&lt;Subject 1&gt;</span>' in out and '<span style="color:#facc15">(S1)</span>' in out
+    assert '<span style="color:#4ade80">&lt;Subject 2&gt;</span>' in out and '<span style="color:#60a5fa">&lt;Video 1&gt;</span>' in out
+    assert '<span style="color:#fb7185">&lt;Picture 1&gt;</span>' in out and '<span style="color:#c084fc">&lt;Audio 1&gt;</span>' in out
+    assert '<span style="color:#67e8f9">&lt;d&gt;Hi &amp; bye&lt;/d&gt;</span>' in out
+    assert 'font-weight:bold">[Shot 1]</span>' in out and 'font-weight:bold">summary:</span>' in out

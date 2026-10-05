@@ -585,10 +585,11 @@ RECHECK_INSTRUCTION = """This is one frame from a video. Is {who} in this frame 
 
 WHO_INSTRUCTION = """These are {n} frames from one video clip. Who is the main person or character in it: the one most in focus, the largest, or the one doing the most? Prefer a person or a human-like character over an animal or a creature. Answer in a few words that tell them apart from anyone else in the clip by how they look (build, hair, clothes), never by what they hold or do, which changes from shot to shot; for example "a man in a black t-shirt", "a girl in a blue dress" or "a cartoon boy in a white hat". Answer "none" only if no person or character appears in any of the frames."""
 
-SCENE_INSTRUCTION = """These are {n} frames from one clip of a video{talk}. Write exactly two labelled lines and nothing else:
+SCENE_INSTRUCTION = """These are {n} frames from one clip of a video{talk}. The main person is {who}. Write exactly three labelled lines and nothing else:
 
-video_1: ONE sentence: where the main person is and what they sit or stand on, what is in front of them, the background and its colour, the light (hard or soft, and the side it comes from, judged by where the shadows fall), the visual style (for example live-action phone video, or 2D cartoon animation), what the main person is doing, and the camera: whether it looks down on them, is level with them or looks up at them, whether it moves, and where their head sits in the frame. Don't describe their face, hair or clothes.
-sounds: ONE sentence: the sounds through the clip, in order{sounds_hint}."""
+video_1: ONE sentence about the main person, not anyone else: where the main person is and what they sit or stand on, what is in front of them, the background and its colour, the light (hard or soft, and the side it comes from, judged by where the shadows fall), the visual style (for example live-action phone video, or 2D cartoon animation), what the main person is doing, and the camera: whether it looks down on them, is level with them or looks up at them, whether it moves, and where their head sits in the frame. Don't describe their face, hair or clothes.
+sounds: ONE sentence: the sounds through the clip, in order{sounds_hint}.
+others: everyone else who appears in these frames, each in a few words by how they look and where they are in the frame (for example "a man in a striped jacket on the right"), separated by semicolons; or "none"."""
 
 PRONOUNS = {"she": {"subj": "she", "Subj": "She", "poss": "her", "Poss": "Her", "does": "does", "moves": "moves",
                     "poses": "poses", "stays": "stays", "handles": "handles"},
@@ -963,7 +964,7 @@ def tidy_shots(blocks):
 # parsing Qwen's answers
 # ---------------------------------------------------------------------------
 
-_LABEL = re.compile(r"(?im)^[ \t]*[*#>\- \t]*(video[_ ]?1|shots|sounds|name|appearance|pronoun|person|objects)"
+_LABEL = re.compile(r"(?im)^[ \t]*[*#>\- \t]*(video[_ ]?1|shots|sounds|name|appearance|pronoun|person|objects|others)"
                     r"[ \t]*\**[ \t]*:[ \t]*\**")
 
 
@@ -1155,8 +1156,8 @@ def fill_ref2va(*, subject, video_1, shots, sounds, n_shots, dialogue, audio, pr
                f"movement, lean, reach, hand position, head turn, mouth movement and expression timing, {cp}the camera "
                f"framing, the background, the lighting and shadows, and every object {pr['subj']} {pr['handles']}. The edit "
                f"runs continuously from the first frame to the last without deviation."
-               + (" Everyone else in <Video 1> keeps exactly their own appearance and movements: only the main person "
-                  "is replaced." if others else ""))
+               + (f" Everyone else in <Video 1>{f' ({others})' if isinstance(others, str) else ''} keeps exactly their own "
+                  f"appearance and movements: only the main person is replaced." if others else ""))
     ret = [f"<Subject 1> (appears throughout): partially_preserved - {pr['poss']} face, hair, costume and accessories "
            f"from <Picture 1> are retained; {pr['poss']} body position, lean, pose, arm and hand actions, head "
            f"direction and how much of {pr['poss']} head is in frame, mouth movements and timing from <Video 1> are "
@@ -1165,6 +1166,9 @@ def fill_ref2va(*, subject, video_1, shots, sounds, n_shots, dialogue, audio, pr
            f"fully_preserved - the shot structure{' and every jump cut' if n_cuts else ''}, the camera framing, the "
            f"background, the lighting and shadows, and every object the person handles are preserved in every frame "
            f"without deviation. Nothing new is added to the scene."]
+    if isinstance(others, str) and others:
+        ret.append(f"The other people in <Video 1> ({others}): fully_preserved - their appearance, positions and "
+                   f"movements stay exactly as they are.")
     if audio:
         ret.append("<Audio 1>: fully_copy - the original speech and room sound of <Video 1> are kept as they are"
                    + (f", and {pr['poss']} lip movements follow the speech." if dialogue else "."))
@@ -1854,11 +1858,6 @@ def run_draft(plan_file, *, sheet=None, mode=CHUNK_MODES[0], named=(), qwen_mode
                 k_sh = len(ci["shots_rel"])
                 sidx = sorted({0, ci["n"] // 2, ci["n"] - 1})
                 talk = ", in which someone speaks" if ci["lines"] else ""
-                sinstr = SCENE_INSTRUCTION.format(n=len(sidx), talk=talk,
-                                                  sounds_hint=_sounds_hint(ci["events"], ci["lines"]))
-                craw = qwen.ask(sinstr, video=decode_sampled(path, fps, r0, sidx, max_side=1280), max_tokens=384,
-                                frame_count=len(sidx))
-                log += ["==== scene: instruction ====", sinstr, "", "==== scene: Qwen ====", craw, ""]
                 widx = sample_indices(ci["n"], 5)
                 wraw = qwen.ask(WHO_INSTRUCTION.format(n=len(widx)), video=decode_sampled(path, fps, r0, widx,
                                                                                           max_side=1280),
@@ -1871,6 +1870,16 @@ def run_draft(plan_file, *, sheet=None, mode=CHUNK_MODES[0], named=(), qwen_mode
                 if sp.chunk_target(plan, c):
                     who = sp.chunk_target(plan, c)      # who to replace, set by hand (the chunk's, else the job's), wins
                 ci["who"] = who
+                # the scene knows who it's about (B7: a two-person shot's line was written around the man) and names
+                # everyone else, whom the prompt then keeps as they are
+                sinstr = SCENE_INSTRUCTION.format(n=len(sidx), talk=talk, who=who or "the person most in focus",
+                                                  sounds_hint=_sounds_hint(ci["events"], ci["lines"]))
+                craw = qwen.ask(sinstr, video=decode_sampled(path, fps, r0, sidx, max_side=1280), max_tokens=384,
+                                frame_count=len(sidx))
+                log += ["==== scene: instruction ====", sinstr, "", "==== scene: Qwen ====", craw, ""]
+                named = " ".join((_labelled(craw).get("others") or "").split()).strip(' ."')
+                if named.lower().startswith(("none", "no one", "nobody", "n/a")) or len(named) > 240:
+                    named = ""
                 # lines from a voice that isn't the main person's (Omni's speaker labels): off camera
                 g_who = gender_of(who)
                 offscreen = [ln for ln in ci["lines"] if ln.get("speaker") and g_who and gender_of(ln["speaker"])
@@ -1910,7 +1919,7 @@ def run_draft(plan_file, *, sheet=None, mode=CHUNK_MODES[0], named=(), qwen_mode
                             "\n".join(f"{t:.1f} s: {json.dumps(m, ensure_ascii=False)}" for t, m in moments), "",
                             f"==== shot {i + 1}: merged ====", body, ""]
                     blocks.append(f"[Shot {i + 1}] {body}")
-                ci["others"] = bool(others)
+                ci["others"] = named or bool(others)
                 parts = parse_qwen(craw + "\nshots:\n" + "\n".join(blocks), len(ci["shots"]), ci["language"], cap=24)
             t_draft = round(time.time() - t, 2)
             stages["qwen_s"][c["id"]] = {"objects": t_obj, "draft": t_draft}

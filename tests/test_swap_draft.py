@@ -738,3 +738,20 @@ def test_the_subjects_pronoun_wins_in_a_caption():
     m = sd.merge_moments([(0.1, {"pose": "sitting on the floor", "look": "at his hands",
                                  "hands": "holds a cone near his mouth"})], [], 25, "she")
     assert " his " not in m and "near her mouth" in m and "at her hands" in m
+
+
+def test_the_scene_knows_who_is_replaced_and_the_prompt_keeps_everyone_else():
+    # B7, a two-person shot: the scene line was written around the man while the woman was the one replaced
+    instr = sd.SCENE_INSTRUCTION.format(n=3, talk="", who="a woman in a red dress", sounds_hint="")
+    assert "The main person is a woman in a red dress." in instr and "\nothers: " in instr
+    ans = ("video_1: She sits on the left of a dark blue diner booth, a white cup in her hands.\nsounds: chatter.\n"
+           "others: a man in a striped jacket on the right")
+    assert sd._labelled(ans)["others"] == "a man in a striped jacket on the right"
+    t = sd.fill_ref2va(subject=SUBJECT, video_1="a diner booth.", shots=["[Shot 1] She sits."], sounds="chatter", n_shots=1,
+                       dialogue=False, audio=True, pronoun="she", who="a woman in a red dress",
+                       others="a man in a striped jacket on the right")
+    sec = sd.parse_sections(t)
+    assert "Everyone else in <Video 1> (a man in a striped jacket on the right) keeps exactly" in sec["summary"]
+    assert "The other people in <Video 1> (a man in a striped jacket on the right): fully_preserved" in sec["retention_analysis"]
+    src = open(sd.__file__, encoding="utf-8").read()
+    assert src.index('ci["who"] = who') < src.index("sinstr = SCENE_INSTRUCTION.format(")
