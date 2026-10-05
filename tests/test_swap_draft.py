@@ -755,3 +755,29 @@ def test_the_scene_knows_who_is_replaced_and_the_prompt_keeps_everyone_else():
     assert "The other people in <Video 1> (a man in a striped jacket on the right): fully_preserved" in sec["retention_analysis"]
     src = open(sd.__file__, encoding="utf-8").read()
     assert src.index('ci["who"] = who') < src.index("sinstr = SCENE_INSTRUCTION.format(")
+
+
+def test_a_line_another_face_says_is_theirs_as_subject_2(monkeypatch):
+    # B7, a two-person scene: every line went to her. Whose mouth moves decides (numbers like the measured ones).
+    import swap_scores as ss
+    assert ss.speaker_of([0.30, 0.31, 0.30, 0.32], [0.20, 0.38, 0.22, 0.40]) == "other"       # his mouth moves
+    assert ss.speaker_of([0.20, 0.27, 0.21, 0.28], [None, None, None, None]) == "target"      # hers, alone
+    assert ss.speaker_of([0.20, 0.23, 0.20, 0.24], [0.20, 0.22, 0.20, 0.23]) == "target"      # a close call stays hers
+    assert ss.speaker_of([None] * 4, [None] * 4) == "target"
+    lines = [{"text": "Okay, stop right there.", "frames": [0, 3]}, {"text": "What?", "frames": [4, 7]},
+             {"text": "Sounds good.", "frames": [2, 2]}, {"text": "untimed"}]
+    monkeypatch.setattr(ss, "face_mouths", lambda frames, masks, path, fps: (
+        [0.2, 0.27, 0.21, 0.28, 0.30, 0.31, 0.30, 0.32], [None, None, None, None, 0.20, 0.38, 0.22, 0.40]))
+    assert sd.attribute_lines(lines, [None] * 8, [None] * 8, "x.task", 24) == 1
+    assert [ln.get("by") for ln in lines] == [None, "other", None, None]
+    lines[1]["tag"] = "<Subject 2> (S2)"
+    # a tag Qwen wrote as hers is put back as his where the words are his line
+    block, added = sd.place_dialogue('She sits. <Subject 1> (S1) says <d>[English]What?</d> She looks up.', lines[1:2])
+    assert "<Subject 2> (S2) says <d>[English]What?</d>" in block and "(S1) says" not in block
+    t = sd.fill_ref2va(subject=SUBJECT, video_1="a couch.", shots=[block], sounds="room", n_shots=1, dialogue=True,
+                       audio=True, pronoun="she", who="a woman in a purple top", others="a man in a scarf on the right",
+                       second="a man in a scarf on the right")
+    sec = sd.parse_sections(t)
+    assert "<Subject 2> (S2) is a man in a scarf on the right, who keeps their own appearance and movements from <Video 1>." in sec["subject_definitions"]
+    assert "<Subject 2> (appears in <Video 1>): fully_preserved" in sec["retention_analysis"]
+    assert "Her lips move only with her own lines, and <Subject 2>'s with theirs" in sec["detailed_description"]
