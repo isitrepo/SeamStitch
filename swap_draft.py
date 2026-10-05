@@ -591,7 +591,7 @@ SCENE_INSTRUCTION = """These are {n} frames from one clip of a video{talk}. The 
 
 video_1: ONE sentence about the main person, not anyone else: where the main person is and what they sit or stand on, what is in front of them, the background and its colour, the light (hard or soft, and the side it comes from, judged by where the shadows fall), the visual style (for example live-action phone video, or 2D cartoon animation), what the main person is doing, and the camera: whether it looks down on them, is level with them or looks up at them, whether it moves, and where their head sits in the frame. Don't describe their face, hair or clothes.
 sounds: ONE sentence: the sounds through the clip, in order{sounds_hint}.
-others: everyone else who appears in these frames, each in a few words by how they look and where they are in the frame (for example "a man in a striped jacket on the right"), separated by semicolons; or "none"."""
+others: everyone else who appears in these frames, each in a few words by how they look and which side of the frame they are on, saying left, centre or right (for example "a man in a striped jacket on the right"), separated by semicolons; or "none"."""
 
 PRONOUNS = {"she": {"subj": "she", "Subj": "She", "poss": "her", "Poss": "Her", "does": "does", "moves": "moves",
                     "poses": "poses", "stays": "stays", "handles": "handles"},
@@ -913,14 +913,22 @@ def attribute_lines(lines, frames, masks, model_path, fps):
     return n
 
 
+_SIDES = {"left": ("left",), "right": ("right",), "centre": ("centre", "center", "middle")}
+
+
 def subject_at(x, people):
-    """The one subject whose description puts them where the talking face is ("on the right" for a face
-    right of centre), or None when none or several fit. people: [(label, description)]."""
+    """The subject the talking face is: the one described on its side of the frame ("on the right" for a
+    face right of centre), else the one left when those described on another side are ruled out; None when
+    none or several fit. people: [(label, description)]."""
     if x is None:
         return None
     side = "left" if x < 0.4 else "right" if x > 0.6 else "centre"
-    words = {"left": ("left",), "right": ("right",), "centre": ("centre", "center", "middle")}[side]
-    fit = [lab for lab, desc in people if any(re.search(rf"\b{w}\b", desc.lower()) for w in words)]
+
+    def sides(desc):
+        return {k for k, ws in _SIDES.items() if any(re.search(rf"\b{w}\b", desc.lower()) for w in ws)}
+    fit = [lab for lab, desc in people if side in sides(desc)]
+    if not fit:
+        fit = [lab for lab, desc in people if not sides(desc)]
     return fit[0] if len(fit) == 1 else None
 
 
@@ -1950,6 +1958,7 @@ def run_draft(plan_file, *, sheet=None, mode=CHUNK_MODES[0], named=(), qwen_mode
                     named = ""
                 # everyone else the scene names is a <Subject N> of their own (ref guide §2.3)
                 people = [x.strip(' .') for x in named.split(";") if x.strip(' .')][:3]
+                people = [x[0].lower() + x[1:] for x in people]
                 labels = [f"<Subject {k + 2}>" for k in range(len(people))]
                 # who says each line, when someone else is in the clip: whose mouth moves (the target's face is the
                 # one inside the chunk's cached mask). One other person speaks as their own subject; with more, as
