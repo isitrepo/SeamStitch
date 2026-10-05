@@ -1,0 +1,45 @@
+<svg width="620" height="349" viewBox="0 0 620 349" xmlns="http://www.w3.org/2000/svg" font-family="Segoe UI, Helvetica, Arial, sans-serif">
+<rect x="0" y="0" width="620" height="349" fill="#1a1a1a"/>
+<rect x="24" y="10" width="572" height="329" rx="10" fill="#2a2a2a" stroke="#454545" stroke-width="1.5"/>
+<path d="M 24 40 Q 24 10 34 10 L 586 10 Q 596 10 596 40 Z" fill="#2f6fa5"/>
+<text x="38" y="30" fill="#ffffff" font-size="14" font-weight="600">SeamStitch Swap Draft Prompts</text>
+<rect x="25" y="39" width="570" height="24" fill="#242424" opacity="0.4"/>
+<circle cx="24" cy="51.0" r="5.5" fill="#b0bec5" stroke="#1a1a1a" stroke-width="1.5"/>
+<text x="36" y="55.0" fill="#e8e8e8" font-size="12">draft_plan</text>
+<circle cx="596" cy="51.0" r="5.5" fill="#b0bec5" stroke="#1a1a1a" stroke-width="1.5"/>
+<text x="584" y="55.0" fill="#e8e8e8" font-size="12" text-anchor="end">report</text>
+<circle cx="24" cy="75.0" r="5.5" fill="#64b5f6" stroke="#1a1a1a" stroke-width="1.5"/>
+<text x="36" y="79.0" fill="#e8e8e8" font-size="12" font-style="italic">sheet</text>
+<line x1="34" y1="96" x2="586" y2="96" stroke="#454545" stroke-width="1"/>
+<rect x="34" y="99" width="552" height="19" rx="4" fill="#3a3a3a" stroke="#555" stroke-width="1"/>
+<text x="42" y="112" fill="#9a9a9a" font-size="11">chunks</text>
+<text x="578" y="112" fill="#e8e8e8" font-size="11" text-anchor="end">empty only</text>
+<rect x="25" y="120" width="570" height="24" fill="#242424" opacity="0.4"/>
+<rect x="34" y="123" width="552" height="19" rx="4" fill="#3a3a3a" stroke="#555" stroke-width="1"/>
+<text x="42" y="136" fill="#9a9a9a" font-size="11">qwen_model</text>
+<text x="578" y="136" fill="#e8e8e8" font-size="11" text-anchor="end">Qwen3-VL-8B-Unredacted-MAX (Captioner)</text>
+<rect x="34" y="147" width="552" height="19" rx="4" fill="#3a3a3a" stroke="#555" stroke-width="1"/>
+<text x="42" y="160" fill="#9a9a9a" font-size="11">quantization</text>
+<text x="578" y="160" fill="#e8e8e8" font-size="11" text-anchor="end">None (FP16)</text>
+<rect x="25" y="168" width="570" height="24" fill="#242424" opacity="0.4"/>
+<rect x="34" y="171" width="552" height="19" rx="4" fill="#3a3a3a" stroke="#555" stroke-width="1"/>
+<text x="42" y="184" fill="#9a9a9a" font-size="11">frames_per_chunk</text>
+<text x="578" y="184" fill="#e8e8e8" font-size="11" text-anchor="end">24</text>
+<rect x="34" y="195" width="552" height="19" rx="4" fill="#3a3a3a" stroke="#555" stroke-width="1"/>
+<text x="42" y="208" fill="#9a9a9a" font-size="11">transcribe</text>
+<text x="578" y="208" fill="#e8e8e8" font-size="11" text-anchor="end">True</text>
+<rect x="25" y="216" width="570" height="24" fill="#242424" opacity="0.4"/>
+<rect x="34" y="219" width="552" height="19" rx="4" fill="#3a3a3a" stroke="#555" stroke-width="1"/>
+<text x="42" y="232" fill="#9a9a9a" font-size="11">word_timings</text>
+<text x="578" y="232" fill="#e8e8e8" font-size="11" text-anchor="end">True</text>
+<rect x="34" y="243" width="552" height="19" rx="4" fill="#3a3a3a" stroke="#555" stroke-width="1"/>
+<text x="42" y="256" fill="#9a9a9a" font-size="11">template</text>
+<text x="578" y="256" fill="#e8e8e8" font-size="11" text-anchor="end">character replace (Ref2VA, timeline)</text>
+<rect x="25" y="264" width="570" height="24" fill="#242424" opacity="0.4"/>
+<rect x="34" y="267" width="552" height="19" rx="4" fill="#3a3a3a" stroke="#555" stroke-width="1"/>
+<text x="42" y="280" fill="#9a9a9a" font-size="11">extra_instructions</text>
+<text x="578" y="280" fill="#e8e8e8" font-size="11" text-anchor="end"></text>
+<rect x="34" y="291" width="552" height="19" rx="4" fill="#3a3a3a" stroke="#555" stroke-width="1"/>
+<text x="42" y="304" fill="#9a9a9a" font-size="11">max_tokens</text>
+<text x="578" y="304" fill="#e8e8e8" font-size="11" text-anchor="end">2048</text>
+</svg>
