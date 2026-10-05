@@ -295,8 +295,8 @@ _BRACKET = re.compile(r"\[([^\]]+)\]")
 
 
 _TIMESTAMP = re.compile(r"[\[(]?\s*\d{1,2}:\d{2}(?:[.:]\d{1,3})?\s*(?:-|–|to)\s*\d{1,2}:\d{2}(?:[.:]\d{1,3})?\s*[\])]?")
-_SPEAKER = re.compile(r"(?:^|(?<=[\s.!?\"”]))-?\s*(Man|Woman|Boy|Girl|Male|Female|Child|Narrator|Singer|Speaker\s*\d+|"
-                      r"Person\s*\d+|Voice\s*\d*)\s*:\s*")
+_SPEAKER = re.compile(r"(?:^|(?<=[\s.!?\"”]))-?\s*((?:[Mm]ale|[Ff]emale)\s+speaker|Man|Woman|Boy|Girl|Male|Female|Child|"
+                      r"Narrator|Singer|Speaker\s*\d+|Person\s*\d+|Voice\s*\d*)\s*:\s*")
 INTERJECTIONS = {"oh", "ah", "aah", "ahh", "yeah", "yea", "yes", "woo", "whoo", "wooo", "wow", "hey", "ha", "haha", "hahaha",
                  "ho", "hoo", "yay", "mm", "mmm", "hmm", "ooh", "oo", "uh", "um", "huh", "whoa", "yo", "la", "na", "da",
                  "ya", "eh", "oi", "hah", "hee", "aw", "aww", "boo", "yah", "ay", "ayy", "ole", "olé"}
@@ -1868,8 +1868,8 @@ def run_draft(plan_file, *, sheet=None, mode=CHUNK_MODES[0], named=(), qwen_mode
                 if who.lower().startswith(("none", "n/a", "no person", "no one")) or len(who) > 160:
                     who = ""
                 who = who_lasting(who)
-                if (plan.get("target") or "").strip():
-                    who = plan["target"].strip()        # the job's "who to replace", set by hand, wins
+                if sp.chunk_target(plan, c):
+                    who = sp.chunk_target(plan, c)      # who to replace, set by hand (the chunk's, else the job's), wins
                 ci["who"] = who
                 # lines from a voice that isn't the main person's (Omni's speaker labels): off camera
                 g_who = gender_of(who)

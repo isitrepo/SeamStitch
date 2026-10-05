@@ -564,6 +564,10 @@ def test_omni_loops_songs_speakers_and_wrappers():
     assert [ln["text"] for ln in kept] == ["Slide that baby out.", "Don't need it.", "Yeah.", "Oh, wow!"]
     assert hum.startswith("Mmm mmm mmm")
     assert sd.drop_hum_lines([{"text": "Oh yeah yeah!"}])[1] == "Oh yeah yeah!"
+    # B7: Omni's "male speaker:" / "female speaker:" labels had stayed in the lines
+    two = sd.parse_omni("transcript: [English] male speaker: Okay, of course. female speaker: You do. audio_events: a thump")
+    assert two["words"] == "Okay, of course. You do."
+    assert [sd.gender_of(x) for x in two["speakers"]] == ["m", "m", "m", "f", "f"]
 
 
 def test_speakers_reach_the_lines_and_split_them():

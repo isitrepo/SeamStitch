@@ -357,6 +357,12 @@ group *Swap Render · Character Replace*.
    each; only confirmed cuts move splits, fills and warnings. Drag splits, and make each one a
    **straight cut** (on a real cut) or **anchored** (12 frames of overlap, the right chunk's first 5
    frames pinned to the left chunk's take).
+   **Who to replace:** with more than one person in frame, name them in the *replace* field above the
+   player, as a short noun phrase ("woman in a purple top"): SAM3 marks them in the source (the output's
+   score still tracks "person") and the drafter writes about them. A chunk can name its own (another
+   scene, another person). Re-mark and redraft after a change. *invert* marks everything but them, for a
+   background swap; the drafted prompt and the R score still describe a person swap, so write that prompt
+   yourself.
 2. **Keep original** where nobody needs replacing: drag the strip's start or end handle in (or set
    *keep original* on a chunk). Kept chunks are never drafted, marked or rendered; the assembly uses
    the source frames.
