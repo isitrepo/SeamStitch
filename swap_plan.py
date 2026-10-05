@@ -149,6 +149,19 @@ def is_kept(chunk):
     return bool(chunk and chunk.get("keep"))
 
 
+def chunk_target(plan, chunk):
+    """Who the chunk replaces, as SAM3's source text and the drafter's main person: the chunk's own
+    target, else the job's; "" = SAM3's "person" and the drafter's own pick."""
+    return ((chunk.get("options") or {}).get("target") or plan.get("target") or "").strip()
+
+
+def chunk_invert(plan, chunk):
+    """Mark everything but the target (a background swap) instead of the target: the chunk's own
+    setting, else the job's."""
+    v = (chunk.get("options") or {}).get("invert")
+    return bool(plan.get("invert")) if v is None else bool(v)
+
+
 def geometry(frames, splits, cuts=(), settings=None, keep=()):
     """Chunks for a source of `frames` frames split at `splits`. `keep`: the left-split ids
     (None for the first chunk) of the chunks kept as the original (§4.10).
@@ -555,11 +568,12 @@ def join_info(split, a, b, settings=None):
     return info
 
 
-def mask_cover(plan, a, b):
-    """The cached source-mask segments (plan["masks"], written by a mark run) that cover source
-    frames a..b, newest first per frame: [(segment, f0, f1), ...] in frame order, or None when a
-    frame is uncovered or the segments disagree on the mask size."""
-    segs = sorted(plan.get("masks") or [], key=lambda m: str(m.get("created", "")), reverse=True)
+def mask_cover(plan, a, b, target=""):
+    """The cached source-mask segments (plan["masks"], written by a mark run for `target`) that cover
+    source frames a..b, newest first per frame: [(segment, f0, f1), ...] in frame order, or None when
+    a frame is uncovered or the segments disagree on the mask size."""
+    segs = sorted((m for m in plan.get("masks") or [] if m.get("target", "") == target),
+                  key=lambda m: str(m.get("created", "")), reverse=True)
     out, f = [], int(a)
     while f <= b:
         seg = next((m for m in segs if m["range"][0] <= f <= m["range"][1]), None)
@@ -579,10 +593,12 @@ def mask_cover(plan, a, b):
     return out
 
 
-def mask_coverage(plan, a, b):
-    """How many of source frames a..b some cached mask segment covers (for the strip's mask row)."""
+def mask_coverage(plan, a, b, target=""):
+    """How many of source frames a..b some cached mask segment for `target` covers (the strip's mask row)."""
     hit = set()
     for m in plan.get("masks") or []:
+        if m.get("target", "") != target:
+            continue
         lo, hi = max(int(a), int(m["range"][0])), min(int(b), int(m["range"][1]))
         hit.update(range(lo, hi + 1))
     return len(hit)

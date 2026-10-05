@@ -76,7 +76,7 @@ RETURN_TYPES = (CHUNK_TYPE, "IMAGE", "AUDIO", "STRING", "INT", "INT", "IMAGE", "
 RETURN_NAMES = ("chunk", "images", "audio", "prompt", "seed", "length", "start_pins", "end_pins", "width",
                 "height", "frame_rate", "source_frame_rate", "options", "draft_plan", "assemble_plan",
                 "mark_chunk", "mark_images", "source_mask", "has_source_mask")
-OUT_DRAFT, OUT_ASSEMBLE = 13, 14
+OUT_OPTIONS, OUT_DRAFT, OUT_ASSEMBLE = 12, 13, 14
 OUT_MARK_CHUNK, OUT_MARK_IMAGES, OUT_SOURCE_MASK, OUT_HAS_MASK = 15, 16, 17, 18
 SCENE_THRESHOLD = 0.15           # ffmpeg scene score (> 0.15 found every cut of the 978-frame test clip)
 # same-room jump cuts score lower: 100d's 131, 448, 669, 713, 764 and 850 read 0.10-0.14 (B5a); they come in as
@@ -270,8 +270,12 @@ def apply_op(plan, body):
                         n += 1
         res["subject_replaced_in"] = n
     elif op == "set_target":
-        # who in the source is replaced (the drafter's main person), when its own pick is wrong; "" = let it pick
-        plan["target"] = (body.get("target") or "").strip()
+        # the job's who-to-replace (SAM3's source text, the drafter's main person; "" = "person" and the drafter's
+        # pick) and invert (mark everything but them); a chunk's own go in its options
+        if "target" in body:
+            plan["target"] = (body.get("target") or "").strip()
+        if "invert" in body:
+            plan["invert"] = bool(body["invert"])
     elif op == "adopt_subject_draft":
         if not (plan.get("subject_draft") or "").strip():
             raise sp.PlanError("there's no subject draft to adopt")
@@ -841,7 +845,7 @@ def chunk_status(plan, jd):
         d = {"chunk": c["id"], "state": st, "take": t and t["id"], "takes": len(c.get("takes") or []),
              "prompt": "empty" if not (c.get("prompt") or "").strip() else c.get("prompt_state") or "edited",
              "draft": bool((c.get("draft") or "").strip()),
-             "mask": round(sp.mask_coverage(plan, r0, r1) / float(r1 - r0 + 1), 4),
+             "mask": round(sp.mask_coverage(plan, r0, r1, sp.chunk_target(plan, c)) / float(r1 - r0 + 1), 4),
              "mask_empty": [f for f in empty if r0 <= f <= r1], "mask_filled": [f for f in filled if r0 <= f <= r1]}
         if c.get("state") == "rendering":
             d["rendering"] = c.get("rendering")
@@ -995,6 +999,14 @@ def render_descriptor(plan, plan_file, run, settings=None):
         m = c.get("seed_mode", "new")
         seed = int(m["fixed"]) if isinstance(m, dict) else random.randint(0, 2 ** 32 - 1)
     pins, notes = resolve_pins(plan, k)
+    # the effective target and invert reach the render group as options ("person" when no one is named)
+    options = dict(c.get("options") or {}, **(run.get("options") or {}))
+    options.pop("target", None)
+    if sp.chunk_target(plan, c):
+        options["target"] = sp.chunk_target(plan, c)
+    options.pop("invert", None)
+    if sp.chunk_invert(plan, c):
+        options["invert"] = True
     splits = {d["id"]: d for d in plan.get("splits", [])}
     left = splits.get(c.get("left"))
     right = splits.get(plan["chunks"][k + 1].get("left")) if k + 1 < len(plan["chunks"]) else None
@@ -1009,7 +1021,7 @@ def render_descriptor(plan, plan_file, run, settings=None):
                        "right": right and {"frame": right["frame"], "mode": right["mode"]}},
             "pins": pins, "pin_notes": notes, "seed": int(seed), "prompt": prompt,
             "prompt_sha1": hashlib.sha1(prompt.encode("utf-8")).hexdigest(),
-            "options": dict(c.get("options") or {}, **(run.get("options") or {})),
+            "options": options,
             "source": {k2: src[k2] for k2 in ("path", "frames", "fps", "width", "height", "audio")},
             "conform": bool(s["conform_to_24fps"]), "render_fps": tl.conform_rate(fr, s["conform_to_24fps"]),
             "anchors": int(s["anchors"]), "hand_back": int(s["hand_back"]),
@@ -1098,15 +1110,16 @@ def mark_descriptor(plan, plan_file, run):
         raise PlannerError(f"mark range {r0}-{r1} is outside the source (0-{int(src['frames']) - 1})")
     return {"format": MARK_FORMAT, "job": plan["job"], "plan": plan_file, "plan_rev": plan.get("rev"),
             "chunk": cid, "range": [r0, r1], "frames": r1 - r0 + 1,
+            "target": sp.chunk_target(plan, c) if cid else (plan.get("target") or "").strip(),
             "source": {k: src[k] for k in ("path", "frames", "fps", "width", "height", "audio")},
             "nonce": run.get("nonce") or uuid.uuid4().hex, "started": time.time()}
 
 
-def cached_mask(plan, job_dir, r0, r1, held=0):
-    """The cached source person mask over r0..r1 (+ held repeats) as a MASK [n, h, w], or (None, why)."""
-    cover = sp.mask_cover(plan, r0, r1)
+def cached_mask(plan, job_dir, r0, r1, held=0, target=""):
+    """The cached source mask of `target` over r0..r1 (+ held repeats) as a MASK [n, h, w], or (None, why)."""
+    cover = sp.mask_cover(plan, r0, r1, target)
     if not cover:
-        return None, f"no cached mask covers {r0}-{r1}"
+        return None, f"no cached mask of {target or 'person'} covers {r0}-{r1}"
     fr = int(round(float(plan["source"]["fps"])))
     parts = []
     for seg, f0, f1 in cover:
@@ -1238,7 +1251,8 @@ class SeamStitchSwapPlanner:
             desc["plan_rev"] = plan["rev"]
             out[:13] = [desc, frames, audio, desc["prompt"], desc["seed"], desc["length"], pins["start"], pins["end"],
                         w, h, desc["render_fps"], fr, json.dumps(desc["options"])]
-            m, why = cached_mask(plan, jd, desc["render"][0], desc["render"][1], desc["held"])
+            m, why = cached_mask(plan, jd, desc["render"][0], desc["render"][1], desc["held"],
+                                 desc["options"].get("target", ""))
             out[OUT_SOURCE_MASK] = m if m is not None else torch.zeros((1, 64, 64), dtype=torch.float32)
             out[OUT_HAS_MASK] = m is not None
             desc["source_mask"] = "cached" if m is not None else None
@@ -1260,8 +1274,9 @@ class SeamStitchSwapPlanner:
             fr = int(round(float(src["fps"])))
             out[OUT_MARK_CHUNK] = desc
             out[OUT_MARK_IMAGES] = decode_frames(src["path"], fr, desc["range"][0], desc["frames"])
+            out[OUT_OPTIONS] = json.dumps({"target": desc["target"]} if desc["target"] else {})
             _say(f"[SeamStitch] Swap Planner: {job}: mark {desc['chunk'] or ''} frames {desc['range'][0]}-"
-                  f"{desc['range'][1]} ({desc['frames']}): the source person mask, tracked and cached")
+                  f"{desc['range'][1]} ({desc['frames']}): the source mask of {desc['target'] or 'person'}, tracked and cached")
         elif action == ACTION_ASSEMBLE:
             out[OUT_ASSEMBLE] = pp
         elif action == ACTION_DRAFT:

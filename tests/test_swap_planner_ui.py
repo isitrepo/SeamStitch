@@ -211,7 +211,8 @@ def test_mark_run_caches_a_mask_that_the_render_run_reuses(nodes):
     p = sp.load_plan(nodes["plan"])
     c = p["chunks"]
     out = _run(nodes, "mark", chunk=c[1]["id"])["result"]
-    assert all(isinstance(o, spl.ExecutionBlocker) for i, o in enumerate(out) if i not in (15, 16))
+    assert all(isinstance(o, spl.ExecutionBlocker) for i, o in enumerate(out) if i not in (12, 15, 16))
+    assert out[12] == "{}"                                    # no target named: the render group's "person"
     mark, imgs = out[15], out[16]
     r0, r1 = c[1]["render"]
     assert mark["range"] == [r0, r1] and imgs.shape[0] == r1 - r0 + 1
@@ -293,3 +294,35 @@ def test_the_strip_frees_memory_before_every_render_and_draft():
     start = on_event[on_event.index('type === "execution_start"'):on_event.index('type === "progress"')]
     assert 'q.kind === "render"' in start and 'x.kind === "render"' in start and "freeMemory()" in start
     assert src.count('fetchApi("/free"') == 1 and "freeForDraft" not in src
+
+
+def test_a_named_target_reaches_sam3_and_keys_the_mask_cache(nodes):
+    # B7: a scene with two people; the job names who to replace, a chunk can name its own, invert marks everyone else
+    import swap_mask as sm
+    jobs = str(nodes["dir"].parent.parent)
+    c = sp.load_plan(nodes["plan"])["chunks"]
+    spl.do_op({"job": "t", "op": "set_target", "target": "woman in a purple top"}, jobs)
+    spl.do_op({"job": "t", "op": "set_options", "chunk": c[1]["id"], "options": {"target": "woman in a red dress"}}, jobs)
+    out = _run(nodes, "mark", chunk=c[1]["id"])["result"]
+    assert json.loads(out[12]) == {"target": "woman in a red dress"} and out[15]["target"] == "woman in a red dress"
+    r0, r1 = c[1]["render"]
+    m = torch.ones((r1 - r0 + 1, 12, 16))
+    sm.SeamStitchSwapMask().save(out[15], m, save_preview=False, fill_holes=0)
+    out = _run(nodes, "render", chunk=c[1]["id"], seed=3)["result"]
+    assert json.loads(out[12]) == {"mark": True, "target": "woman in a red dress"}
+    assert out[18] is True                                    # cached for this target
+    out = _run(nodes, "render", chunk=c[2]["id"], seed=3)["result"]
+    assert json.loads(out[12])["target"] == "woman in a purple top"
+    # another target: the cached mask isn't theirs, so the render group tracks them itself
+    spl.do_op({"job": "t", "op": "set_options", "chunk": c[1]["id"], "options": {"target": ""}}, jobs)
+    q = sp.load_plan(nodes["plan"])
+    assert sp.chunk_target(q, q["chunks"][1]) == "woman in a purple top"
+    assert {s["chunk"]: s for s in spl.chunk_status(q, str(nodes["dir"]))}[c[1]["id"]]["mask"] == 0.0
+    out = _run(nodes, "render", chunk=c[1]["id"], seed=3)["result"]
+    assert out[18] is False
+    # invert: the job's, unless the chunk says
+    spl.do_op({"job": "t", "op": "set_target", "invert": True}, jobs)
+    assert json.loads(_run(nodes, "render", chunk=c[1]["id"], seed=3)["result"][12])["invert"] is True
+    spl.do_op({"job": "t", "op": "set_options", "chunk": c[1]["id"], "options": {"invert": False}}, jobs)
+    assert "invert" not in json.loads(_run(nodes, "render", chunk=c[1]["id"], seed=3)["result"][12])
+    assert sp.load_plan(nodes["plan"])["target"] == "woman in a purple top"      # an invert edit leaves the target

@@ -288,6 +288,23 @@ function buildPlanner(node) {
     const bVideo = button("load video ▾", "Choose the job's video: from the input folder or upload one (or drop it on the node). A new job is named after it, and its cuts and splits are found straight away.", (ev) => openSourceMenu(ev));
     head.append(el("span", { color: C.dim }, "job"), jobSel, el("span", { width: "8px" }), el("span", { color: C.dim }, "video"), videoName, videoFacts, bVideo);
 
+    // Who the job replaces: SAM3's source text (the mark and the render's own track; the output score keeps "person")
+    // and the drafter's main person. A chunk can name its own. Invert marks everything but them (a background swap).
+    const targetRow = el("div", { display: "flex", gap: "6px", alignItems: "center", flexShrink: "0", padding: "2px 6px" });
+    const targetIn = el("input", { flex: "0 1 22em", background: "#111", color: C.text, border: "1px solid #3b4252", borderRadius: "4px", padding: "0.15em 0.3em" });
+    targetIn.placeholder = "person (the drafter picks who)";
+    targetIn.title = "Who to replace, as a short noun phrase (\"woman in a purple top\"): what SAM3 marks in the source, and who the drafter writes about. Empty: SAM3 marks \"person\" and the drafter picks. Changing it needs a re-mark and a redraft.";
+    targetIn.onpointerdown = (e) => e.stopPropagation();
+    targetIn.onkeydown = (e) => { e.stopPropagation(); if (e.key === "Enter") targetIn.blur(); };
+    targetIn.onchange = () => op({ op: "set_target", target: targetIn.value });
+    const invertIn = el("input"); invertIn.type = "checkbox";
+    invertIn.onpointerdown = (e) => e.stopPropagation();
+    invertIn.onchange = () => op({ op: "set_target", invert: invertIn.checked });
+    const invertL = el("label", { display: "flex", alignItems: "center", gap: "3px" });
+    invertL.title = "Mark everything but the target (for a background swap). The drafted prompt and the R score still describe replacing a person: write the prompt yourself.";
+    invertL.append(invertIn, el("span", null, "invert (mark everything else)"));
+    targetRow.append(el("span", { color: C.dim }, "replace"), targetIn, invertL);
+
     const canvas = el("canvas", { width: "100%", height: `${CANVAS_H}px`, display: "block", cursor: "default",
         borderRadius: "4px", touchAction: "none", flex: "0 0 auto" });
 
@@ -306,7 +323,7 @@ function buildPlanner(node) {
     fileInput.accept = "video/*";
     fileInput.onchange = async () => { if (fileInput.files[0]) await setSourceFile(fileInput.files[0]); fileInput.value = ""; };
 
-    root.append(head, videoBox, bar1, canvas, nextBar, selBox, warnBox, fileInput);
+    root.append(head, targetRow, videoBox, bar1, canvas, nextBar, selBox, warnBox, fileInput);
 
     const widget = node.addDOMWidget("swap_planner_ui", "div", root, { serialize: false, hideOnZoom: false });
     // Keep the panel out of widgets_values (a saved blank shifted onto later widgets: timeline.js).
@@ -799,6 +816,9 @@ function buildPlanner(node) {
         videoName.textContent = src ? src.path.split(/[\\/]/).pop() : "none";
         videoName.title = src ? src.path : "";
         videoFacts.textContent = src ? `${src.frames} frames · ${src.fps} fps · ${src.width}×${src.height} · ${(src.frames / src.fps).toFixed(1)} s` : "";
+        if (document.activeElement !== targetIn) targetIn.value = P()?.target || "";
+        invertIn.checked = !!P()?.invert;
+        targetIn.disabled = invertIn.disabled = !has;
         bMode.textContent = { source: "source", quick: "quick", full: "full ●", mask: "mask" }[S.mode];
         bMode.title = "View: source (the original) · quick (each chunk's effective take, chained) · full (the latest assembly) · mask (the cached person mask)";
         updateOverlay();
@@ -1200,6 +1220,23 @@ function buildPlanner(node) {
         seedIn.onchange = () => { const v = parseInt(seedIn.value, 10); if (Number.isInteger(v) && v >= 0) op({ op: "seed_mode", chunk: c.id, seed_mode: { fixed: v } }); };
         acts.append(mkL, seedSel, seedIn, keepL);
         selBox.append(acts);
+        // this chunk's own target and invert (empty / "job": the job's, above the player)
+        const tgt = row();
+        const ownT = el("input", { flex: "0 1 22em", background: "#111", color: C.text, border: "1px solid #3b4252", borderRadius: "4px" });
+        ownT.value = (c.options || {}).target || "";
+        ownT.placeholder = P().target ? `the job's: ${P().target}` : "the job's (person)";
+        ownT.title = "Who this chunk replaces, when it isn't the job's target (another scene, another person). Re-mark and redraft after a change.";
+        ownT.onpointerdown = (e) => e.stopPropagation();
+        ownT.onkeydown = (e) => { e.stopPropagation(); if (e.key === "Enter") ownT.blur(); };
+        ownT.onchange = () => op({ op: "set_options", chunk: c.id, options: { target: ownT.value.trim() } });
+        const invSel = el("select", { background: "#111", color: C.text, border: "1px solid #3b4252", borderRadius: "4px" });
+        [["job", `invert: the job's (${P().invert ? "on" : "off"})`], ["on", "invert: on"], ["off", "invert: off"]].forEach(([v, t]) => { const o = el("option", null, t); o.value = v; invSel.append(o); });
+        const inv = (c.options || {}).invert;
+        invSel.value = inv == null ? "job" : inv ? "on" : "off";
+        invSel.onpointerdown = (e) => e.stopPropagation();
+        invSel.onchange = () => op({ op: "set_options", chunk: c.id, options: { invert: invSel.value === "job" ? null : invSel.value === "on" } });
+        tgt.append(el("span", { color: C.dim }, "replace"), ownT, invSel);
+        selBox.append(tgt);
 
         // the prompt editor (adopt draft, redraft)
         const pr = row();

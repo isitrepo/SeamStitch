@@ -121,7 +121,7 @@ def save_mask(mark, mask, preview=None, save_preview=True, fill_holes_frames=FIL
     # lost track is seen before a render
     entry = {"id": mid, "range": [a, b], "frames": n, "file": f"{rel}/mask.mkv", "preview": prev, "size": [w, h],
              "empty": [a + i for i in still_empty], "filled": [a + i for i in filled],
-             "chunk": mark.get("chunk"), "created": sp.now(), "nonce": mark.get("nonce"),
+             "chunk": mark.get("chunk"), "target": mark.get("target", ""), "created": sp.now(), "nonce": mark.get("nonce"),
              "seconds": round(time.time() - float(mark.get("started") or time.time()))}
 
     def add(p):
