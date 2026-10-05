@@ -1094,18 +1094,15 @@ def render_inputs(desc, job_dir, plan):
 
 
 def mark_descriptor(plan, plan_file, run):
-    """A mark run's descriptor: the range whose source person mask is tracked and cached (a chunk's
-    render range, or an explicit [a, b])."""
+    """A mark run's descriptor: the range whose source mask is tracked and cached: a chunk's render
+    range, one shot of it (the strip marks shot by shot: SAM3 doesn't find the target again after a
+    cut), or an explicit [a, b]. A chunk's run tracks the chunk's target."""
     src = plan["source"]
-    if run.get("range"):
-        r0, r1 = int(run["range"][0]), int(run["range"][1])
-        cid = None
-    else:
-        c = _chunk(plan, run.get("chunk"))
-        if sp.is_kept(c):
-            raise PlannerError(f"chunk {c['id']} {c['deliver']} is kept as the original: it needs no mask")
-        r0, r1 = c["render"]
-        cid = c["id"]
+    c = _chunk(plan, run["chunk"]) if run.get("chunk") else None
+    if c is not None and sp.is_kept(c):
+        raise PlannerError(f"chunk {c['id']} {c['deliver']} is kept as the original: it needs no mask")
+    r0, r1 = (int(run["range"][0]), int(run["range"][1])) if run.get("range") else c["render"]
+    cid = c and c["id"]
     if not 0 <= r0 <= r1 < int(src["frames"]):
         raise PlannerError(f"mark range {r0}-{r1} is outside the source (0-{int(src['frames']) - 1})")
     return {"format": MARK_FORMAT, "job": plan["job"], "plan": plan_file, "plan_rev": plan.get("rev"),
