@@ -61,9 +61,24 @@ def test_auto_plan_nudge_is_needed_without_it():
 
 
 def test_auto_plan_merges_a_short_last_chunk():
-    # 209 + 197 = 406; a 420-frame source leaves 420 - 394 = 26 render frames after it: merged.
-    assert sp.auto_splits(420) == [209]
+    # 209 + 197 = 406; a 400-frame source leaves 400 - 394 = 6 render frames after it: merged (209 + 191 -> 209).
+    assert sp.auto_splits(400) == [209]
     assert sp.auto_splits(200) == []
+    # 420 leaves 26: merged it would render 226, over the ceiling, so the last split moves back to the floor
+    assert sp.auto_splits(420) == [209, 324]
+    assert [c["length"] for c in sp.geometry(420, [209, 324])] == [209, 141, 124]
+
+
+def test_auto_plan_never_passes_the_ceiling_on_short_shots():
+    # B7, a sitcom scene (1437 frames, shots down to 18): the split due at 993 sits in the guard of the cut at 999;
+    # forward clears at 1018 (a 243 render), the straight cut at 999 renders 226, so it nudges back to 992.
+    cuts = [56, 99, 153, 193, 238, 256, 287, 315, 370, 533, 725, 844, 916, 999, 1037, 1126, 1150, 1329, 1392]
+    js = sp.auto_splits(1437, cuts, with_modes=True)
+    assert js == [(193, "cut"), (402, "anchored"), (599, "anchored"), (796, "anchored"), (992, "anchored"),
+                  (1189, "anchored"), (1322, "anchored")]
+    splits = [{"frame": f, "mode": m} for f, m in js]
+    assert max(c["length"] for c in sp.geometry(1437, splits, cuts)) == 209
+    assert sp.warnings(1437, splits, cuts) == []
 
 
 def test_hand_edited_plan_fills():

@@ -324,14 +324,16 @@ def clearance(frames, splits, cuts, settings, split_id, keep=()):
 def auto_splits(frames, cuts=(), settings=None, max_shift=None, with_modes=False):
     """Split frames for target-length renders: the first at target_render, then every
     target_render - overlap (anchored). A last chunk whose render would fall under the floor merges
-    into the one before. An anchored split whose overlap guard holds a cut (checked AFTER the fill,
+    into the one before, unless that passes the ceiling: then the last split moves back until the last
+    render is the floor. An anchored split whose overlap guard holds a cut (checked AFTER the fill,
     since a head fill lengthens the overlap) is nudged forward, else backward, by the smallest
     shift that clears it without fouling an earlier split's guard; the splits after it are
     re-placed from its new position. If that nudge leaves a render over the ceiling and a straight
     cut on the cut in the guard doesn't (B5b: 100d's nudge to 815 made a 226-frame render, which
     failed and then crashed ComfyUI), the split becomes a straight cut there instead, and the
-    splits after it are placed from the cut (its chunk renders from the cut: no overlap).
-    Returns the frames; with_modes=True, [(frame, mode)]."""
+    splits after it are placed from the cut (its chunk renders from the cut: no overlap). If the
+    straight cut passes the ceiling too, the backward nudge is taken (B7: a sitcom's shots 38 frames
+    apart, where neither cleared it). Returns the frames; with_modes=True, [(frame, mode)]."""
     s = _settings(settings)
     n_src = int(frames)
     cut_frames = confirmed_cuts(cuts)
@@ -341,6 +343,7 @@ def auto_splits(frames, cuts=(), settings=None, max_shift=None, with_modes=False
     straight = set()                    # split frames made straight cuts
 
     def chain(prefix, J, cut=False):
+        prefix_cut = J
         out = list(prefix)
         if J < n_src:
             out.append(J)
@@ -348,11 +351,19 @@ def auto_splits(frames, cuts=(), settings=None, max_shift=None, with_modes=False
         while J < n_src:
             out.append(J)
             J += step
-        # merge an under-floor last chunk into the one before
+        # merge an under-floor last chunk into the one before, or move it back to the floor
         if out and len(out) > len(prefix) + (1 if cut else 0):
             last = out[-1]
             if snap_up(n_src - (last - ov)) < s["floor"]:
                 out.pop()
+                extra = [prefix_cut] if cut else []
+                if out and chunks_of(out, extra)[-1]["length"] > s["ceiling"]:
+                    J = last
+                    while J > out[-1] + 1 and snap_up(n_src - (J - ov)) < s["floor"]:
+                        J -= 1
+                    ch = chunks_of(out + [J], extra)
+                    if ch[-2]["length"] >= s["floor"] and not any(c["length"] > s["ceiling"] for c in ch[-2:]):
+                        out.append(J)
         return out
 
     def chunks_of(js, extra=()):
@@ -370,7 +381,7 @@ def auto_splits(frames, cuts=(), settings=None, max_shift=None, with_modes=False
         if js[k] in straight or _guard_clear(ch, k + 1, cut_frames, guard):
             k += 1
             continue
-        best = None
+        found = {}
         for sign in (1, -1):
             for shift in range(1, max_shift + 1):
                 J = js[k] + sign * shift
@@ -383,19 +394,21 @@ def auto_splits(frames, cuts=(), settings=None, max_shift=None, with_modes=False
                 tch = chunks_of(trial)
                 if all(_guard_clear(tch, i + 1, cut_frames, guard) or not _guard_clear(ch, i + 1, cut_frames, guard)
                        for i in range(k)) and _guard_clear(tch, k + 1, cut_frames, guard):
-                    best = trial
+                    found[sign] = trial
                     break
-            if best is not None:
-                break
+        best = found.get(1) or found.get(-1)
         if best is not None and over(chunks_of(best), k + 1):
             lo_g = ch[k + 1]["render"][0] - guard
             inside = [c for c in cut_frames if lo_g <= c <= js[k] + guard and (k == 0 or c > js[k - 1])]
+            alt = None
             if inside:
                 c0 = min(inside, key=lambda c: abs(c - js[k]))
                 alt = chain(js[:k], c0, cut=True)
                 if not over(chunks_of(alt, [c0]), k + 1):
                     best = alt
                     straight.add(c0)
+            if best is not alt and -1 in found and not over(chunks_of(found[-1]), k + 1):
+                best = found[-1]
         if best is not None:
             js = best
         k += 1
