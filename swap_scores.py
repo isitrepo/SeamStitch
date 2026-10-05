@@ -69,6 +69,10 @@ THRESHOLDS = {
     # pose IoU (0.88), and 90 / 107-frame renders swapped only the head onto his t-shirt. Full-size fit on 9 takes:
     # copy 17.5, head only 41-46, full 69-91. Following measures the outline, not who is inside it.
     "replaced": {"green": 60.0, "amber": 30.0}, "replaced_min_px": 0.002,
+    # who says a line (B7, a sitcom scene): another face's mouth moving at least twice the target's (mean frame
+    # change of the opening), and at least 0.04. Measured: the other speaker 0.07-0.18 against her 0.01-0.03; her
+    # own lines 0.05-0.07 with no other face moving; a close call (0.032 / 0.025) stays hers.
+    "speaker": {"ratio": 2.0, "min": 0.04},
 }
 
 GREEN, AMBER, RED, GREY = "green", "amber", "red", "grey"
@@ -259,6 +263,52 @@ def mouth_series(frames, model_path, fps=25.0):
             wid = np.hypot((p[78].x - p[308].x) * AN_W, (p[78].y - p[308].y) * AN_H)
             out.append(float(gap / wid) if wid > 1 else None)
     return out
+
+
+def face_mouths(frames, masks, model_path, fps=25.0):
+    """Who speaks in a shot with more than one person (B7): the mouth opening per frame of the face whose
+    centre is inside `masks` (the target) and of the largest face outside it, None where there's none.
+    frames: RGB uint8; masks: [n, h, w] in 0-1 at any size."""
+    import mediapipe as mp
+    from mediapipe.tasks.python import BaseOptions, vision
+    opts = vision.FaceLandmarkerOptions(base_options=BaseOptions(model_asset_path=str(model_path)),
+                                        running_mode=vision.RunningMode.VIDEO, num_faces=4)
+    tgt, oth = [], []
+    step = 1000.0 / float(fps or 25.0)
+    with vision.FaceLandmarker.create_from_options(opts) as lm:
+        for t, (f, m) in enumerate(zip(frames, masks)):
+            f = thumb(f, interp=cv2.INTER_CUBIC)
+            r = lm.detect_for_video(mp.Image(image_format=mp.ImageFormat.SRGB, data=np.ascontiguousarray(f)),
+                                    int(round(t * step)))
+            ti = oi = None
+            widest = 0.0
+            for p in r.face_landmarks:
+                gap = np.hypot((p[13].x - p[14].x) * AN_W, (p[13].y - p[14].y) * AN_H)
+                wid = np.hypot((p[78].x - p[308].x) * AN_W, (p[78].y - p[308].y) * AN_H)
+                if wid <= 1:
+                    continue
+                cx = min(m.shape[1] - 1, max(0, int(np.mean([q.x for q in p]) * m.shape[1])))
+                cy = min(m.shape[0] - 1, max(0, int(np.mean([q.y for q in p]) * m.shape[0])))
+                if m[cy, cx] > 0.5:
+                    ti = float(gap / wid)
+                elif wid > widest:
+                    widest, oi = wid, float(gap / wid)
+            tgt.append(ti)
+            oth.append(oi)
+    return tgt, oth
+
+
+def speaker_of(target, other):
+    """"other" when another face's mouth moves clearly more than the target's over a line's frames, else
+    "target" (also when neither face is seen: the line stays the target's)."""
+    def motion(s):
+        d = [abs(b - a) for a, b in zip(s, s[1:]) if a is not None and b is not None]
+        return float(np.mean(d)) if d else None
+    t, o = motion(target), motion(other)
+    th = THRESHOLDS["speaker"]
+    if o is not None and o >= th["min"] and (t is None or o >= th["ratio"] * t):
+        return "other"
+    return "target"
 
 
 def _corr(a, b):

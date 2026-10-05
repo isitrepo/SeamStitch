@@ -38,10 +38,12 @@ import torch
 try:
     from . import swap_plan as sp
     from . import swap_planner as spl
+    from . import swap_scores as ss
     from . import timeline as tl
 except ImportError:  # imported as a top-level module (tests, tools)
     import swap_plan as sp
     import swap_planner as spl
+    import swap_scores as ss
     import timeline as tl
 
 _say = spl._say
@@ -877,6 +879,24 @@ _PRONOUN_SWAP = {"she": [("himself", "herself"), ("his", "her"), ("him", "her"),
                           ("her", "their"), ("he", "they"), ("she", "they")]}
 
 
+def said(ln, language):
+    """A dialogue line as H3 reads it, by its speaker: <Subject 1> unless another person says it (B7)."""
+    return f"{ln.get('tag') or '<Subject 1> (S1)'} says <d>[{language}]{ln['text']}</d>"
+
+
+def attribute_lines(lines, frames, masks, model_path, fps):
+    """Marks the timed lines another face says ("by": "other"), from whose mouth moves over each line's
+    frames (swap_scores.face_mouths / speaker_of). frames and masks: the chunk's render range. -> count."""
+    tgt, oth = ss.face_mouths(frames, masks, model_path, fps)
+    n = 0
+    for ln in lines:
+        if "frames" in ln and ss.speaker_of(tgt[ln["frames"][0]:ln["frames"][1] + 1],
+                                            oth[ln["frames"][0]:ln["frames"][1] + 1]) == "other":
+            ln["by"] = "other"
+            n += 1
+    return n
+
+
 def _verb3(v, pr):
     """'hold' -> 'holds' for she / he (captions sometimes come in the base form)."""
     if pr["subj"] == "they" or not v or v.endswith("s"):
@@ -896,7 +916,7 @@ def merge_moments(moments, lines_rel, fps, pronoun, language="English", similar=
     first = True
     for _, kind, x in ev:
         if kind == "l":
-            out.append(f"<Subject 1> (S1) says <d>[{language}]{x['text']}</d>")
+            out.append(said(x, language))
             continue
         if not present(x):
             continue                    # the main person isn't in this frame
@@ -925,7 +945,7 @@ def merge_moments(moments, lines_rel, fps, pronoun, language="English", similar=
             out.append(f"{pr['Subj']} {hands}" + (f", looking {look}" if look and look != last_look else "") + ".")
         last_hands, last_look = hands or last_hands, look or last_look
     untimed = [ln for ln in lines_rel if "frames" not in ln]
-    out += [f"<Subject 1> (S1) says <d>[{language}]{ln['text']}</d>" for ln in untimed]
+    out += [said(ln, language) for ln in untimed]
     return re.sub(r"\s+", " ", " ".join(out)).strip()
 
 
@@ -1033,7 +1053,7 @@ _QUOTED = re.compile(r"(?:,?\s*(?:and\s+)?(?:(?:she|he|they)\s+)?(?:says|saying|
                      r"adds|adding|exclaims|exclaiming|asks|asking|announces|announcing|notes|noting|continues|"
                      r"replies|mutters|muttering|murmurs|murmuring|whispers|whispering|declares|comments|commenting|"
                      r"finally remarks|then)\s*,?\s*)?[\"“]([^\"”]+)[\"”]", re.I)
-_DTAG = re.compile(r"\s*<Subject 1> \(S1\) says <d>\[[^\]]*\](.*?)</d>")
+_DTAG = re.compile(r"\s*<Subject \d+> \(S\d+\) says <d>\[[^\]]*\](.*?)</d>")
 
 
 def _match_line(words, lines, used):
@@ -1058,7 +1078,7 @@ def place_dialogue(block, lines, language="English"):
 
     def tag(i):
         used.add(i)
-        return f" <Subject 1> (S1) says <d>[{language}]{lines[i]['text']}</d>"
+        return " " + said(lines[i], language)
 
     def from_tag(m):
         i = _match_line(m.group(1), lines, used)
@@ -1069,7 +1089,7 @@ def place_dialogue(block, lines, language="English"):
         return tag(i) if i is not None else m.group(0)
 
     out = re.sub(r"(?:,?\s*(?:(?:she|he|they)\s+)?(?:says|saying|mutters|muttering|murmurs|whispers|states|"
-                 r"stating|remarks|adds|exclaims|asks|notes|comments)\s*,?)\s*(?=<Subject 1> \(S1\) says <d>)", " ", block,
+                 r"stating|remarks|adds|exclaims|asks|notes|comments)\s*,?)\s*(?=<Subject \d+> \(S\d+\) says <d>)", " ", block,
                  flags=re.I)
     out = _DTAG.sub(from_tag, out)
     out = _QUOTED.sub(from_quote, out)
@@ -1142,7 +1162,8 @@ def _cuts_phrase(n_cuts):
     return {0: "", 1: "the jump cut, ", 2: "both jump cuts, "}.get(n_cuts, f"all {n_cuts} jump cuts, ")
 
 
-def fill_ref2va(*, subject, video_1, shots, sounds, n_shots, dialogue, audio, pronoun, who=None, others=False):
+def fill_ref2va(*, subject, video_1, shots, sounds, n_shots, dialogue, audio, pronoun, who=None, others=False,
+                second=""):
     """The six sections, filled from the job's subject and Qwen's three parts (design §4.6)."""
     pr = PRONOUNS[pronoun]
     name = subject_name(subject)
@@ -1169,6 +1190,9 @@ def fill_ref2va(*, subject, video_1, shots, sounds, n_shots, dialogue, audio, pr
     if isinstance(others, str) and others:
         ret.append(f"The other people in <Video 1> ({others}): fully_preserved - their appearance, positions and "
                    f"movements stay exactly as they are.")
+    if second:
+        ret.append(f"<Subject 2> (appears in <Video 1>): fully_preserved - {second} keeps exactly their own appearance "
+                   f"and movements from <Video 1>, and their lips move with their own lines.")
     if audio:
         ret.append("<Audio 1>: fully_copy - the original speech and room sound of <Video 1> are kept as they are"
                    + (f", and {pr['poss']} lip movements follow the speech." if dialogue else "."))
@@ -1179,7 +1203,10 @@ def fill_ref2va(*, subject, video_1, shots, sounds, n_shots, dialogue, audio, pr
              f"person's hands hold.")
     blocks = list(shots) or ["[Shot 1] " + f"{pr['Subj']} {pr['does']} exactly what the person does."]
     tail = []
-    if dialogue:
+    if dialogue and second:
+        tail.append(f"{pr['Poss']} lips move only with {pr['poss']} own lines, and <Subject 2>'s with theirs, in time "
+                    f"with the speech in <Audio 1>.")
+    elif dialogue:
         tail.append(f"{pr['Poss']} lips move with every word, in time with the speech in <Audio 1>, and close between "
                     f"sentences.")
     if n_cuts:
@@ -1189,7 +1216,9 @@ def fill_ref2va(*, subject, video_1, shots, sounds, n_shots, dialogue, audio, pr
         blocks[-1] = blocks[-1].rstrip() + " " + " ".join(tail)
     sound = ("The original sound of <Video 1>: " + (sounds or "the room tone and the sounds of the action.")) if audio \
         else (sounds or "Quiet room tone.")
-    return ("subject_definitions:\n" + subject.strip() + "\n<Video 1> is the source video for the target video edit: "
+    s2 = (f"\n<Subject 2> (S2) is {second}, who keeps their own appearance and movements from <Video 1>."
+          if second else "")
+    return ("subject_definitions:\n" + subject.strip() + s2 + "\n<Video 1> is the source video for the target video edit: "
             + v1 + "\n\nsummary:\n" + summary + "\n\nretention_analysis:\n" + "\n".join(ret)
             + "\n\ndetailed_description:\n" + style + "\n" + "\n".join(blocks)
             + "\n\noverall_soundscape:\n" + sound + "\n\nnon_diegetic_music:\nN/A\n")
@@ -1880,6 +1909,31 @@ def run_draft(plan_file, *, sheet=None, mode=CHUNK_MODES[0], named=(), qwen_mode
                 named = " ".join((_labelled(craw).get("others") or "").split()).strip(' ."')
                 if named.lower().startswith(("none", "no one", "nobody", "n/a")) or len(named) > 240:
                     named = ""
+                # who says each line, when someone else is in the clip: whose mouth moves (the target's face is the
+                # one inside the chunk's cached mask). One other person speaks as <Subject 2>; with more, their
+                # lines go into the soundscape (B7: every line of a two-person scene went to her)
+                if named and any("frames" in ln for ln in ci["lines"]):
+                    ok, why = ss.mouth_available()
+                    m, _ = spl.cached_mask(plan, jd, r0, r0 + ci["n"] - 1, 0, sp.chunk_target(plan, c))
+                    if not ok:
+                        ci["warnings"].append(f"who says each line wasn't checked ({why}): every line is hers")
+                    elif m is None:
+                        ci["warnings"].append("who says each line wasn't checked: mark this chunk first (the mask "
+                                              "tells her face from the others'), then redraft; every line is hers")
+                    else:
+                        k = attribute_lines(ci["lines"], list(tl._iter_frames(path, fps, r0, r0 + ci["n"])), m.numpy(),
+                                            why, fps)
+                        theirs = [ln for ln in ci["lines"] if ln.get("by") == "other"]
+                        if k and ";" not in named:
+                            for ln in theirs:
+                                ln["tag"] = "<Subject 2> (S2)"
+                            ci["second"] = named
+                            ci["warnings"].append(f"{k} line(s) said by {named}: written as <Subject 2> (S2)'s, "
+                                                  f"not hers (check them against the clip)")
+                        elif k:
+                            ci["lines"] = [ln for ln in ci["lines"] if ln not in theirs]
+                            ci.setdefault("offscreen", []).extend(theirs)
+                            ci["warnings"].append(f"{k} line(s) said by someone else: into the soundscape, not hers")
                 # lines from a voice that isn't the main person's (Omni's speaker labels): off camera
                 g_who = gender_of(who)
                 offscreen = [ln for ln in ci["lines"] if ln.get("speaker") and g_who and gender_of(ln["speaker"])
@@ -1959,7 +2013,7 @@ def run_draft(plan_file, *, sheet=None, mode=CHUNK_MODES[0], named=(), qwen_mode
                 ci["warnings"].append("Qwen saw no person in this chunk")
             text = fill_ref2va(subject=subject, video_1=parts["video_1"], shots=parts["shots"], sounds=parts["sounds"],
                                n_shots=len(ci["shots"]), dialogue=bool(ci["lines"]), audio=audio_ok, pronoun=pronoun,
-                               who=ci.get("who"), others=ci.get("others", False))
+                               who=ci.get("who"), others=ci.get("others", False), second=ci.get("second", ""))
             parse_sections(text)            # the template must parse into the six sections
             drafted_shots[c["id"]] = parts["shots"]
             props = prop_check(parts["shots"], objs["objects"], prev_shots)
