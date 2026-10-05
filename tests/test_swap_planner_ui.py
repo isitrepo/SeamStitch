@@ -281,3 +281,15 @@ def test_a_split_near_an_unconfirmed_cut_says_so():
     spl.apply_op(p, {"op": "confirm_cut", "frame": 448, "confirmed": True})
     codes = {(x.get("frame"), x["code"]) for x in sp.warnings(978, p["splits"], p["cuts"], p["settings"])}
     assert (455, "guard") in codes and (455, "suggested_cut") not in codes
+
+
+def test_the_strip_frees_memory_before_every_render_and_draft():
+    # B6: a render queued from the strip had no free in front of it (0.7 GB of RAM at its lowest). ComfyUI applies
+    # a free only between queue items, so the strip frees before queueing and when a render starts with another behind it.
+    src = open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "js", "swap_planner.js"), encoding="utf-8").read()
+    queue_run = src[src.index("async function queueRun("):src.index("function emptyPrompts(")]
+    assert 'if (kind === "render" || kind === "draft") await freeMemory(true);' in queue_run.splitlines()[1]
+    on_event = src[src.index("function onQueueEvent("):src.index("// ------------------------------------------------------------ prompts and takes")]
+    start = on_event[on_event.index('type === "execution_start"'):on_event.index('type === "progress"')]
+    assert 'q.kind === "render"' in start and 'x.kind === "render"' in start and "freeMemory()" in start
+    assert src.count('fetchApi("/free"') == 1 and "freeForDraft" not in src

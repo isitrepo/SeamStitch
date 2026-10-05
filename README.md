@@ -333,7 +333,7 @@ group *Swap Render · Character Replace*.
 | Group | Nodes |
 | --- | --- |
 | **Swap · Plan** | SeamStitch Swap Planner: the strip, the plan and every button below. |
-| **Swap Render · Character Replace** | The render (a graph group, not a node): the sheet, SAM3 marking, H3 Ref2VA pass 1, the 1 MP refine, both SeamStitch MiniMax Guides on the Planner's pins, SeamStitch Swap Option (`mark`). Any render with the same inputs and the same Take at the end can replace it. |
+| **Swap Render · Character Replace** | The render (a graph group, not a node): the sheet, SAM3 marking, H3 Ref2VA pass 1, the 1 MP refine, a light sharpen after the resize to the source size (Sharpen Image, alpha 0.2), both SeamStitch MiniMax Guides on the Planner's pins, SeamStitch Swap Option (`mark`). Any render with the same inputs and the same Take at the end can replace it. |
 | **Swap Score (SAM3)** | Tracks the person in the render, for the Take's scores. |
 | **Swap · Take** | SeamStitch Swap Take: saves, scores and registers each take. |
 | **Swap · Assemble** | SeamStitch Swap Assemble (the Planner's assemble button runs the same code off the queue). |
@@ -362,10 +362,12 @@ group *Swap Render · Character Replace*.
    the source frames.
 3. **Draft prompts**, then edit them. One queue item drafts every empty chunk: the subject from the
    sheet, each shot's pose, gaze and hands, and the dialogue as timed `<d>` lines. Read each chunk's
-   warnings: a hand-held object the frames' own object list doesn't contain is left out and named.
+   warnings: a hand-held object the frames' own object list doesn't contain is left out and named, and a
+   hum or exclamation said over and over ("Mmm mmm mmm") goes into the soundscape, not a line.
    Nothing renders while a rendered chunk's prompt is empty.
 4. **Render pending.** Every chunk without a take renders left to right; each anchored chunk is
-   pinned to its left neighbour's take at execution. Free ComfyUI's memory before each render.
+   pinned to its left neighbour's take at execution. The strip frees ComfyUI's memory before each render
+   it queues, and between the renders of a batch.
 5. **Review.** Each take gets dots: **F** following (the render's person outline against the
    source's), **R** replaced (is the person inside it really the character?), **C** cuts (were the
    source's cuts copied?), **M** mouth (information only, never a gate). Each join gets a pill:
@@ -384,8 +386,9 @@ group *Swap Render · Character Replace*.
   at the 1 MP refine on a 32 GB card with 64 GB of system RAM (226 failed, then crashed; 243 crashed;
   260 failed), so the Planner warns above `ceiling_frames` 209, and auto placement makes a split a
   straight cut on a nearby cut rather than nudge a render past it. Under `floor_frames` 124 a render
-  can come back unreplaced or head-only. **Free ComfyUI's memory before each render**: system RAM,
-  not the card, is the limit (a 209 render without a free left 0.3 GB).
+  can come back unreplaced or head-only. **Free ComfyUI's memory before each render** (the strip does;
+  queued another way, `POST /free` first): system RAM, not the card, is the limit (a 209 render without a
+  free left 0.3 GB).
 - **Grid fill:** H3 renders 17k+5 frames. The surplus extends the render into the next chunk (tail),
   into its own overlap (head), or holds the last frame (hold); the extra frames are discarded.
 - **Joins:** forward joins use the **level lock**, handing back to the right take's grade over 12

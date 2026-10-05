@@ -1,7 +1,7 @@
 {
  "revision": 0,
- "last_node_id": 54,
- "last_link_id": 145,
+ "last_node_id": 55,
+ "last_link_id": 146,
  "nodes": [
   {
    "id": 2,
@@ -44,7 +44,7 @@
      "type": "IMAGE",
      "links": [
       68,
-      145
+      146
      ],
      "slot_index": 0
     },
@@ -120,8 +120,8 @@
      "type": "MODEL",
      "links": [
       51,
-      118,
-      134
+      119,
+      135
      ],
      "slot_index": 0
     },
@@ -210,8 +210,8 @@
      "type": "CONDITIONING",
      "links": [
       52,
-      119,
-      135
+      120,
+      136
      ],
      "slot_index": 0
     }
@@ -493,7 +493,7 @@
      "name": "masks",
      "type": "MASK",
      "links": [
-      129
+      130
      ],
      "slot_index": 0
     }
@@ -622,7 +622,7 @@
      "name": "mask",
      "shape": 7,
      "type": "MASK",
-     "link": 130
+     "link": 131
     },
     {
      "localized_name": "x",
@@ -742,7 +742,7 @@
      "type": "IMAGE",
      "links": [
       60,
-      125
+      126
      ],
      "slot_index": 0
     }
@@ -2810,8 +2810,7 @@
      "name": "IMAGE",
      "type": "IMAGE",
      "links": [
-      116,
-      122
+      116
      ],
      "slot_index": 0
     }
@@ -2870,7 +2869,7 @@
    "title": "About this workflow",
    "properties": {},
    "widgets_values": [
-    "Swap - Character Replace: whole-video character replacement with MiniMax H3, through the SeamStitch Swap nodes. See the SeamStitch README, section \"SeamStitch Swap\".\n\nSet first: on the Planner's strip, load your video (a new job is named after it); in group 1, your character sheet.\n\nSwap \u00b7 Plan: SeamStitch Swap Planner. The strip: the source with its cuts, splits and chunks, the mask row and the prompt row. Its buttons set the run and queue it: detect + plan, draft prompts, mark, render pending, a chunk's render / re-roll, assemble. Pins come from the neighbours' takes at execution.\n\nSwap Render \u00b7 Character Replace: H3 Ref2VA pass 1 at 0.3 MP, then the 1 MP refine and a resize to the source size. Its inputs come from the Planner: images / audio (on H3's 24 fps clock) / prompt / length / seed / width / height, the pins in both passes (SeamStitch MiniMax Guides, clip), and the chunk's mark option (Swap Option, default on: SAM3 paints the source person before H3 sees the guide).\n\nSwap Score (SAM3): the output's person mask, for the Take's scores.\nSwap \u00b7 Take: saves the take (FFV1 + FLAC, source fps, original audio), its lineage, masks, scores and review clip.\nSwap \u00b7 Assemble: runs on an assemble run only.\nSwap Mark (SAM3): a mark run tracks and caches the source person up front.\nSwap \u00b7 Draft: drafts the subject (from the sheet) and each chunk's prompt (QwenVL; Omni + faster-whisper for the dialogue).\n\nFree ComfyUI's memory before each render: render lengths over 209 frames failed at the refine on 64 GB of system RAM."
+    "Swap - Character Replace: whole-video character replacement with MiniMax H3, through the SeamStitch Swap nodes. See the SeamStitch README, section \"SeamStitch Swap\".\n\nSet first: on the Planner's strip, load your video (a new job is named after it); in group 1, your character sheet.\n\nSwap \u00b7 Plan: SeamStitch Swap Planner. The strip: the source with its cuts, splits and chunks, the mask row and the prompt row. Its buttons set the run and queue it: detect + plan, draft prompts, mark, render pending, a chunk's render / re-roll, assemble. Pins come from the neighbours' takes at execution.\n\nSwap Render \u00b7 Character Replace: H3 Ref2VA pass 1 at 0.3 MP, then the 1 MP refine, a resize to the source size and a light sharpen (Sharpen Image, alpha 0.2). Its inputs come from the Planner: images / audio (on H3's 24 fps clock) / prompt / length / seed / width / height, the pins in both passes (SeamStitch MiniMax Guides, clip), and the chunk's mark option (Swap Option, default on: SAM3 paints the source person before H3 sees the guide).\n\nSwap Score (SAM3): the output's person mask, for the Take's scores.\nSwap \u00b7 Take: saves the take (FFV1 + FLAC, source fps, original audio), its lineage, masks, scores and review clip.\nSwap \u00b7 Assemble: runs on an assemble run only.\nSwap Mark (SAM3): a mark run tracks and caches the source person up front.\nSwap \u00b7 Draft: drafts the subject (from the sheet) and each chunk's prompt (QwenVL; Omni + faster-whisper for the dialogue).\n\nThe strip frees ComfyUI's memory before each render and draft it queues: render lengths over 209 frames failed at the refine on 64 GB of system RAM."
    ],
    "color": "#432",
    "bgcolor": "#653"
@@ -2976,7 +2975,7 @@
      "name": "chunk",
      "type": "SEAMSTITCH_SWAP_CHUNK",
      "links": [
-      121
+      122
      ],
      "slot_index": 0
     },
@@ -3077,7 +3076,7 @@
      "name": "draft_plan",
      "type": "STRING",
      "links": [
-      144
+      145
      ],
      "slot_index": 13
     },
@@ -3085,7 +3084,7 @@
      "name": "assemble_plan",
      "type": "STRING",
      "links": [
-      126
+      127
      ],
      "slot_index": 14
     },
@@ -3093,7 +3092,7 @@
      "name": "mark_chunk",
      "type": "SEAMSTITCH_SWAP_MARK",
      "links": [
-      141
+      142
      ],
      "slot_index": 15
     },
@@ -3101,7 +3100,7 @@
      "name": "mark_images",
      "type": "IMAGE",
      "links": [
-      132
+      133
      ],
      "slot_index": 16
     },
@@ -3109,7 +3108,7 @@
      "name": "source_mask",
      "type": "MASK",
      "links": [
-      128
+      129
      ],
      "slot_index": 17
     },
@@ -3117,7 +3116,7 @@
      "name": "has_source_mask",
      "type": "BOOLEAN",
      "links": [
-      127
+      128
      ],
      "slot_index": 18
     }
@@ -3414,7 +3413,7 @@
     {
      "name": "image",
      "type": "IMAGE",
-     "link": 116
+     "link": 117
     },
     {
      "name": "upscale_method",
@@ -3446,7 +3445,7 @@
      "name": "IMAGE",
      "type": "IMAGE",
      "links": [
-      117
+      118
      ],
      "slot_index": 0
     }
@@ -3479,12 +3478,12 @@
     {
      "name": "images",
      "type": "IMAGE",
-     "link": 117
+     "link": 118
     },
     {
      "name": "model",
      "type": "MODEL",
-     "link": 118
+     "link": 119
     },
     {
      "name": "initial_mask",
@@ -3494,7 +3493,7 @@
     {
      "name": "conditioning",
      "type": "CONDITIONING",
-     "link": 119
+     "link": 120
     },
     {
      "name": "detection_threshold",
@@ -3526,7 +3525,7 @@
      "name": "track_data",
      "type": "SAM3_TRACK_DATA",
      "links": [
-      120
+      121
      ],
      "slot_index": 0
     }
@@ -3559,7 +3558,7 @@
     {
      "name": "track_data",
      "type": "SAM3_TRACK_DATA",
-     "link": 120
+     "link": 121
     },
     {
      "name": "object_indices",
@@ -3575,7 +3574,7 @@
      "name": "masks",
      "type": "MASK",
      "links": [
-      124
+      125
      ],
      "slot_index": 0
     }
@@ -3606,27 +3605,27 @@
     {
      "name": "chunk",
      "type": "SEAMSTITCH_SWAP_CHUNK",
-     "link": 121
+     "link": 122
     },
     {
      "name": "images",
      "type": "IMAGE",
-     "link": 122
+     "link": 123
     },
     {
      "name": "source_mask",
      "type": "MASK",
-     "link": 131
+     "link": 132
     },
     {
      "name": "output_mask",
      "type": "MASK",
-     "link": 124
+     "link": 125
     },
     {
      "name": "marked_guide",
      "type": "IMAGE",
-     "link": 125
+     "link": 126
     },
     {
      "name": "take_codec",
@@ -3719,7 +3718,7 @@
      "widget": {
       "name": "assemble_plan"
      },
-     "link": 126
+     "link": 127
     },
     {
      "name": "hand_back_frames",
@@ -3811,6 +3810,72 @@
    "title": "Swap Assemble"
   },
   {
+   "id": 55,
+   "type": "ImageSharpen",
+   "pos": [
+    3620,
+    416
+   ],
+   "size": [
+    340,
+    110
+   ],
+   "flags": {},
+   "order": 0,
+   "mode": 0,
+   "inputs": [
+    {
+     "name": "image",
+     "type": "IMAGE",
+     "link": 116
+    },
+    {
+     "name": "sharpen_radius",
+     "type": "INT",
+     "widget": {
+      "name": "sharpen_radius"
+     },
+     "link": null
+    },
+    {
+     "name": "sigma",
+     "type": "FLOAT",
+     "widget": {
+      "name": "sigma"
+     },
+     "link": null
+    },
+    {
+     "name": "alpha",
+     "type": "FLOAT",
+     "widget": {
+      "name": "alpha"
+     },
+     "link": null
+    }
+   ],
+   "outputs": [
+    {
+     "name": "IMAGE",
+     "type": "IMAGE",
+     "links": [
+      117,
+      123
+     ],
+     "slot_index": 0
+    }
+   ],
+   "properties": {
+    "Node name for S&R": "ImageSharpen"
+   },
+   "widgets_values": [
+    1,
+    1.0,
+    0.2
+   ],
+   "title": "Sharpen (alpha 0.2)"
+  },
+  {
    "id": 47,
    "type": "ComfySwitchNode",
    "pos": [
@@ -3828,17 +3893,17 @@
     {
      "name": "switch",
      "type": "BOOLEAN",
-     "link": 127
+     "link": 128
     },
     {
      "name": "on_false",
      "type": "*",
-     "link": 129
+     "link": 130
     },
     {
      "name": "on_true",
      "type": "*",
-     "link": 128
+     "link": 129
     }
    ],
    "outputs": [
@@ -3846,8 +3911,8 @@
      "name": "output",
      "type": "*",
      "links": [
-      130,
-      131
+      131,
+      132
      ],
      "slot_index": 0
     }
@@ -3876,7 +3941,7 @@
     {
      "name": "image",
      "type": "IMAGE",
-     "link": 132
+     "link": 133
     },
     {
      "name": "upscale_method",
@@ -3908,9 +3973,9 @@
      "name": "IMAGE",
      "type": "IMAGE",
      "links": [
-      133,
-      137,
-      138
+      134,
+      138,
+      139
      ],
      "slot_index": 0
     }
@@ -3943,12 +4008,12 @@
     {
      "name": "images",
      "type": "IMAGE",
-     "link": 133
+     "link": 134
     },
     {
      "name": "model",
      "type": "MODEL",
-     "link": 134
+     "link": 135
     },
     {
      "name": "initial_mask",
@@ -3958,7 +4023,7 @@
     {
      "name": "conditioning",
      "type": "CONDITIONING",
-     "link": 135
+     "link": 136
     },
     {
      "name": "detection_threshold",
@@ -3990,7 +4055,7 @@
      "name": "track_data",
      "type": "SAM3_TRACK_DATA",
      "links": [
-      136
+      137
      ],
      "slot_index": 0
     }
@@ -4023,7 +4088,7 @@
     {
      "name": "track_data",
      "type": "SAM3_TRACK_DATA",
-     "link": 136
+     "link": 137
     },
     {
      "name": "object_indices",
@@ -4039,8 +4104,8 @@
      "name": "masks",
      "type": "MASK",
      "links": [
-      140,
-      142
+      141,
+      143
      ],
      "slot_index": 0
     }
@@ -4071,7 +4136,7 @@
     {
      "name": "image",
      "type": "IMAGE",
-     "link": 137
+     "link": 138
     }
    ],
    "outputs": [
@@ -4079,7 +4144,7 @@
      "name": "IMAGE",
      "type": "IMAGE",
      "links": [
-      139
+      140
      ],
      "slot_index": 0
     }
@@ -4108,17 +4173,17 @@
     {
      "name": "destination",
      "type": "IMAGE",
-     "link": 138
+     "link": 139
     },
     {
      "name": "source",
      "type": "IMAGE",
-     "link": 139
+     "link": 140
     },
     {
      "name": "mask",
      "type": "MASK",
-     "link": 140
+     "link": 141
     },
     {
      "name": "x",
@@ -4150,7 +4215,7 @@
      "name": "IMAGE",
      "type": "IMAGE",
      "links": [
-      143
+      144
      ],
      "slot_index": 0
     }
@@ -4183,17 +4248,17 @@
     {
      "name": "mark_chunk",
      "type": "SEAMSTITCH_SWAP_MARK",
-     "link": 141
+     "link": 142
     },
     {
      "name": "mask",
      "type": "MASK",
-     "link": 142
+     "link": 143
     },
     {
      "name": "preview",
      "type": "IMAGE",
-     "link": 143
+     "link": 144
     },
     {
      "name": "save_preview",
@@ -4246,12 +4311,12 @@
     {
      "name": "draft_plan",
      "type": "STRING",
-     "link": 144
+     "link": 145
     },
     {
      "name": "sheet",
      "type": "IMAGE",
-     "link": 145
+     "link": 146
     },
     {
      "name": "chunks",
@@ -4851,12 +4916,20 @@
    116,
    33,
    0,
-   42,
+   55,
    0,
    "IMAGE"
   ],
   [
    117,
+   55,
+   0,
+   42,
+   0,
+   "IMAGE"
+  ],
+  [
+   118,
    42,
    0,
    43,
@@ -4864,7 +4937,7 @@
    "IMAGE"
   ],
   [
-   118,
+   119,
    3,
    0,
    43,
@@ -4872,7 +4945,7 @@
    "MODEL"
   ],
   [
-   119,
+   120,
    4,
    0,
    43,
@@ -4880,7 +4953,7 @@
    "CONDITIONING"
   ],
   [
-   120,
+   121,
    43,
    0,
    44,
@@ -4888,7 +4961,7 @@
    "SAM3_TRACK_DATA"
   ],
   [
-   121,
+   122,
    37,
    0,
    45,
@@ -4896,15 +4969,15 @@
    "SEAMSTITCH_SWAP_CHUNK"
   ],
   [
-   122,
-   33,
+   123,
+   55,
    0,
    45,
    1,
    "IMAGE"
   ],
   [
-   124,
+   125,
    44,
    0,
    45,
@@ -4912,7 +4985,7 @@
    "MASK"
   ],
   [
-   125,
+   126,
    10,
    0,
    45,
@@ -4920,7 +4993,7 @@
    "IMAGE"
   ],
   [
-   126,
+   127,
    37,
    14,
    46,
@@ -4928,7 +5001,7 @@
    "STRING"
   ],
   [
-   127,
+   128,
    37,
    18,
    47,
@@ -4936,7 +5009,7 @@
    "BOOLEAN"
   ],
   [
-   128,
+   129,
    37,
    17,
    47,
@@ -4944,7 +5017,7 @@
    "MASK"
   ],
   [
-   129,
+   130,
    7,
    0,
    47,
@@ -4952,7 +5025,7 @@
    "MASK"
   ],
   [
-   130,
+   131,
    47,
    0,
    9,
@@ -4960,7 +5033,7 @@
    "MASK"
   ],
   [
-   131,
+   132,
    47,
    0,
    45,
@@ -4968,7 +5041,7 @@
    "MASK"
   ],
   [
-   132,
+   133,
    37,
    16,
    48,
@@ -4976,7 +5049,7 @@
    "IMAGE"
   ],
   [
-   133,
+   134,
    48,
    0,
    49,
@@ -4984,7 +5057,7 @@
    "IMAGE"
   ],
   [
-   134,
+   135,
    3,
    0,
    49,
@@ -4992,7 +5065,7 @@
    "MODEL"
   ],
   [
-   135,
+   136,
    4,
    0,
    49,
@@ -5000,7 +5073,7 @@
    "CONDITIONING"
   ],
   [
-   136,
+   137,
    49,
    0,
    50,
@@ -5008,7 +5081,7 @@
    "SAM3_TRACK_DATA"
   ],
   [
-   137,
+   138,
    48,
    0,
    51,
@@ -5016,7 +5089,7 @@
    "IMAGE"
   ],
   [
-   138,
+   139,
    48,
    0,
    52,
@@ -5024,7 +5097,7 @@
    "IMAGE"
   ],
   [
-   139,
+   140,
    51,
    0,
    52,
@@ -5032,7 +5105,7 @@
    "IMAGE"
   ],
   [
-   140,
+   141,
    50,
    0,
    52,
@@ -5040,7 +5113,7 @@
    "MASK"
   ],
   [
-   141,
+   142,
    37,
    15,
    53,
@@ -5048,7 +5121,7 @@
    "SEAMSTITCH_SWAP_MARK"
   ],
   [
-   142,
+   143,
    50,
    0,
    53,
@@ -5056,7 +5129,7 @@
    "MASK"
   ],
   [
-   143,
+   144,
    52,
    0,
    53,
@@ -5064,7 +5137,7 @@
    "IMAGE"
   ],
   [
-   144,
+   145,
    37,
    13,
    54,
@@ -5072,7 +5145,7 @@
    "STRING"
   ],
   [
-   145,
+   146,
    2,
    0,
    54,

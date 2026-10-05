@@ -315,6 +315,14 @@ def interjections_only(text):
     return bool(toks) and all(t in INTERJECTIONS for t in toks)
 
 
+def drop_hum_lines(lines, min_words=3):
+    """Lines that are only a hum or an exclamation said over and over ("Mmm mmm mmm ..." x 14, B5b: a man humming
+    while he mimes licking a packet) aren't words she says: they go into the soundscape. A short "Yeah." or "Wow!"
+    stays a line. -> (the lines kept, the hums' text)."""
+    hums = [ln for ln in lines if len(ln["text"].split()) >= min_words and interjections_only(ln["text"])]
+    return [ln for ln in lines if ln not in hums], " ".join(ln["text"] for ln in hums)
+
+
 def parse_omni(text):
     """Omni's answer to the node's default structured prompt -> {language, words (str), speakers (one label or
     None per word), notes, events, speech, structured, sung, looping}. Cleans what Omni wraps around the
@@ -1732,8 +1740,11 @@ def run_draft(plan_file, *, sheet=None, mode=CHUNK_MODES[0], named=(), qwen_mode
                 cheer = said
                 ci["warnings"].append(f"only cheers or exclamations heard ({said[:60]}): into the soundscape, not lines")
                 lines = []
+            lines, hum = drop_hum_lines(lines)
+            if hum:
+                ci["warnings"].append(f"a hum or exclamation, not words ({hum[:60]}): into the soundscape, not a line")
             ci.update(lines=lines, language=lang, events=(po or {}).get("events") or "",
-                      notes=(po or {}).get("notes") or [], song=song, cheer=cheer)
+                      notes=(po or {}).get("notes") or [], song=song, cheer=cheer, hum=hum)
             if words is not None or po is not None:
                 _write_json(os.path.join(ci["dir"], "whisper.json"),
                             {"language": wlang, "words": words or [], "aligned": aligned, "lines": lines,
@@ -1926,6 +1937,8 @@ def run_draft(plan_file, *, sheet=None, mode=CHUNK_MODES[0], named=(), qwen_mode
                 extra_sounds.append(f'a voice sings "{ci["song"][:160]}"')
             if ci.get("cheer"):
                 extra_sounds.append(f'voices shout "{ci["cheer"][:80]}"')
+            if ci.get("hum"):
+                extra_sounds.append(f'a voice hums "{ci["hum"][:40]}"')
             for ln in ci.get("offscreen", []):
                 extra_sounds.append(f'{("a " + ln["speaker"].lower() + "\'s voice") if ln.get("speaker") else "a voice"} '
                                     f'off camera says "{ln["text"]}"')

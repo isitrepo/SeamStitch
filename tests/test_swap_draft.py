@@ -557,6 +557,13 @@ def test_omni_loops_songs_speakers_and_wrappers():
                        "audio_events: a squeak")
     assert ts["words"] == "And it's me... ...again"
     assert sd.interjections_only("Wow! Woo! Woo! Oh, yeah!") and not sd.interjections_only("Oh, what's that?")
+    # B5b: a hum among real lines (Omni's text, no Whisper words) became a line she says
+    lines = [{"text": t} for t in ["Slide that baby out.", "Mmm mmm mmm mmm mmm mmm mmm mmm mmm mmm mmm mmm mmm mmm.",
+                                   "Don't need it.", "Yeah.", "Oh, wow!"]]
+    kept, hum = sd.drop_hum_lines(lines)
+    assert [ln["text"] for ln in kept] == ["Slide that baby out.", "Don't need it.", "Yeah.", "Oh, wow!"]
+    assert hum.startswith("Mmm mmm mmm")
+    assert sd.drop_hum_lines([{"text": "Oh yeah yeah!"}])[1] == "Oh yeah yeah!"
 
 
 def test_speakers_reach_the_lines_and_split_them():
