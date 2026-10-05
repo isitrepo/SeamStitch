@@ -336,3 +336,29 @@ def test_the_strip_refuses_a_target_the_workflow_cant_pass_on():
     assert '(kind === "render" || kind === "mark") && named' in guard and '"SeamStitchSwapOption"' in guard
     assert '["target", "invert"]' in guard and "throw new Error" in guard
     assert queue_run.index("const named = ") < queue_run.index("queue.call(api")
+
+
+def test_a_chunk_marked_shot_by_shot_renders_from_the_stitched_mask(nodes):
+    # B7: SAM3 keeps one track and loses the target at a cut, so the strip marks each shot of a chunk on its own
+    import swap_mask as sm
+    jobs = str(nodes["dir"].parent.parent)
+    c = sp.load_plan(nodes["plan"])["chunks"]
+    spl.do_op({"job": "t", "op": "set_options", "chunk": c[1]["id"], "options": {"target": "woman in a red dress"}}, jobs)
+    r0, r1 = c[1]["render"]
+    cut = (r0 + r1) // 2
+    parts = []
+    for a, b, v in ((r0, cut - 1, 1.0), (cut, r1, 0.0)):
+        out = _run(nodes, "mark", chunk=c[1]["id"], range=[a, b])["result"]
+        assert out[15]["chunk"] == c[1]["id"] and out[15]["range"] == [a, b] and out[15]["target"] == "woman in a red dress"
+        m = torch.full((b - a + 1, 12, 16), v)
+        sm.SeamStitchSwapMask().save(out[15], m, save_preview=False, fill_holes=0)
+        parts.append(m)
+    q = sp.load_plan(nodes["plan"])
+    assert {s["chunk"]: s for s in spl.chunk_status(q, str(nodes["dir"]))}[c[1]["id"]]["mask"] == 1.0
+    out = _run(nodes, "render", chunk=c[1]["id"], seed=3)["result"]
+    n = r1 - r0 + 1
+    assert out[18] is True and torch.equal(out[17][:n], torch.cat(parts, 0))
+    # a kept chunk is still refused, whatever the range
+    spl.do_op({"job": "t", "op": "keep", "chunk": c[2]["id"], "keep": True}, jobs)
+    with pytest.raises(spl.PlannerError, match="kept"):
+        spl.mark_descriptor(sp.load_plan(nodes["plan"]), nodes["plan"], {"chunk": c[2]["id"], "range": list(c[2]["render"])})

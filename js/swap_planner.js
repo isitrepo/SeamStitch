@@ -726,6 +726,19 @@ function buildPlanner(node) {
         if (!P()) return;
         await queueRun(chunk ? { action: "draft", chunk } : { action: "draft" }, "draft");
     }
+    // A chunk is marked shot by shot: SAM3 keeps one track and doesn't find the target again after a cut (B7).
+    function shotsOf(c) {
+        const [a, b] = c.render;
+        const at = cuts().filter(x => x.confirmed !== false && x.frame > a && x.frame <= b).map(x => x.frame).sort((x, y) => x - y);
+        return [a, ...at].map((f, i) => [f, i < at.length ? at[i] - 1 : b]);
+    }
+    async function markChunk(c, quiet) {
+        const shots = shotsOf(c);
+        let n = 0;
+        for (const r of shots) if (await queueRun({ action: "mark", chunk: c.id, range: r }, "mark", true)) n++; else break;
+        if (!quiet && n) toast(`queued ${n} mark run${n === 1 ? "" : "s"} for chunk ${label(c.id)} (${n === 1 ? "one shot" : "one per shot"})`, "green");
+        return n === shots.length;
+    }
     function openMarkMenu(ev) {
         if (!P()) return;
         const sel0 = S.sel?.kind === "chunk" ? chunks().find(c => c.id === S.sel.id) : null;
@@ -733,8 +746,8 @@ function buildPlanner(node) {
         const unmarked = chunks().filter(c => !kept(c) && (statusOf(c.id).mask || 0) < 1);
         popup(ev, [
             { label: "the source person mask (SAM3), cached per chunk's render range" },
-            ...(sel ? [{ text: `mark chunk ${label(sel.id)} (${sel.render[0]}-${sel.render[1]})`, run: () => queueRun({ action: "mark", chunk: sel.id }, "mark") }] : []),
-            { text: `mark every unmarked chunk (${unmarked.length})`, run: async () => { for (const c of unmarked) if (!await queueRun({ action: "mark", chunk: c.id }, "mark", true)) break; toast(`queued ${unmarked.length} mark runs`, "green"); } },
+            ...(sel ? [{ text: `mark chunk ${label(sel.id)} (${sel.render[0]}-${sel.render[1]}, ${shotsOf(sel).length} shot${shotsOf(sel).length === 1 ? "" : "s"})`, run: () => markChunk(sel) }] : []),
+            { text: `mark every unmarked chunk (${unmarked.length})`, run: async () => { let k = 0; for (const c of unmarked) { if (!await markChunk(c, true)) break; k++; } toast(`queued the mark runs of ${k} chunk${k === 1 ? "" : "s"}, one per shot`, "green"); } },
             { text: "view the mask row in the player", run: () => setMode("mask") },
         ]);
     }
@@ -1209,7 +1222,7 @@ function buildPlanner(node) {
         acts.append(button("re-roll × N", "N renders with N new seeds, all against the same neighbours (two-sided when both have takes)", () => reroll(c.id, +nSel.value, true)), nSel);
         const staleSides = [joinAt(c.left), S.joins.find(j => j.left_chunk === c.id)].filter(j => j?.stale);
         if (staleSides.length) acts.append(button("re-roll to fit", `A stale join at ${staleSides.map(j => j.frame).join(", ")}: re-render this chunk pinned to both neighbours' current takes`, () => reroll(c.id, 1, true)));
-        acts.append(button("mark", "Queue a mark run: track and cache this chunk's source person mask", () => queueRun({ action: "mark", chunk: c.id }, "mark")),
+        acts.append(button("mark", "Queue the mark runs: track and cache this chunk's source mask of its target, one run per shot", () => markChunk(c)),
             el("span", { color: C.dim }, sideTxt));
         // options and seed mode
         const mk = el("input"); mk.type = "checkbox"; mk.checked = (c.options || {}).mark !== false;
