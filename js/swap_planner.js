@@ -727,15 +727,10 @@ function buildPlanner(node) {
         await queueRun(chunk ? { action: "draft", chunk } : { action: "draft" }, "draft");
     }
     // A chunk is marked shot by shot: SAM3 keeps one track and doesn't find the target again after a cut (B7).
-    function shotsOf(c) {
-        const [a, b] = c.render;
-        const at = cuts().filter(x => x.confirmed !== false && x.frame > a && x.frame <= b).map(x => x.frame).sort((x, y) => x - y);
-        return [a, ...at].map((f, i) => [f, i < at.length ? at[i] - 1 : b]);
-    }
     async function markChunk(c, quiet) {
         const shots = shotsOf(c);
         let n = 0;
-        for (const r of shots) if (await queueRun({ action: "mark", chunk: c.id, range: r }, "mark", true)) n++; else break;
+        for (const s of shots) if (await queueRun({ action: "mark", chunk: c.id, range: [s.a, s.b] }, "mark", true)) n++; else break;
         if (!quiet && n) toast(`queued ${n} mark run${n === 1 ? "" : "s"} for chunk ${label(c.id)} (${n === 1 ? "one shot" : "one per shot"})`, "green");
         return n === shots.length;
     }

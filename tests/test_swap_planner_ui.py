@@ -362,3 +362,11 @@ def test_a_chunk_marked_shot_by_shot_renders_from_the_stitched_mask(nodes):
     spl.do_op({"job": "t", "op": "keep", "chunk": c[2]["id"], "keep": True}, jobs)
     with pytest.raises(spl.PlannerError, match="kept"):
         spl.mark_descriptor(sp.load_plan(nodes["plan"]), nodes["plan"], {"chunk": c[2]["id"], "range": list(c[2]["render"])})
+
+
+def test_the_strip_marks_with_its_own_shot_list():
+    # B7: a second shotsOf (arrays) shadowed the strip's own ({a, b}), and the mark runs went out with {a, b} ranges
+    src = open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "js", "swap_planner.js"), encoding="utf-8").read()
+    assert src.count("function shotsOf(") == 1
+    mark = src[src.index("async function markChunk("):src.index("function openMarkMenu(")]
+    assert 'range: [s.a, s.b]' in mark
