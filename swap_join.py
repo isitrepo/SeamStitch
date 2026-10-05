@@ -366,12 +366,14 @@ def measure_window(right_render_start, splice, hand_back=HAND_BACK):
 def jumps(track, first, splice, lo, hi):
     """Luma-jump stats of a track (track[i] = frame first + i) around a splice:
     at_splice = |t[splice] - t[splice - 1]|; max over [lo, hi) and where (the frame jumped
-    INTO); median of |diff| over the whole track (the natural median)."""
+    INTO); median of |diff| over the whole track (the natural median). A frame without the
+    character (an empty mask: NaN) on either side of the splice leaves at_splice None."""
     t = np.asarray(track, np.float64)
     lo_i, hi_i = max(0, lo - first), min(len(t), hi - first)
     d = np.abs(np.diff(t[lo_i:hi_i]))
     s = splice - first
-    out = {"at_splice": round(float(abs(t[s] - t[s - 1])), 3) if 0 < s < len(t) else None,
+    step = abs(t[s] - t[s - 1]) if 0 < s < len(t) else np.nan
+    out = {"at_splice": round(float(step), 3) if np.isfinite(step) else None,
            "max": round(float(np.nanmax(d)), 3) if d.size else None,
            "max_at": int(first + lo_i + 1 + int(np.nanargmax(d))) if d.size else None,
            "median": round(float(np.nanmedian(np.abs(np.diff(t)))), 3) if len(t) > 1 else None}

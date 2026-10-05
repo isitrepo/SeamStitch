@@ -338,6 +338,11 @@ def test_jumps():
     t = [10, 10, 10, 13, 13, 13]
     j = sj.jumps(t, 100, 103, 100, 106)
     assert (j["at_splice"], j["max"], j["max_at"], j["median"]) == (3, 3, 103, 0)
+    # B7: no character on the frame before the splice (an empty mask): nothing to measure, and no NaN for the
+    # plan's JSON (the browser refused the whole plan)
+    j = sj.jumps([10, 10, float("nan"), 13, 13, 13], 100, 103, 100, 106)
+    assert j["at_splice"] is None and (j["max"], j["max_at"]) == (0, 101)
+    assert json.loads(json.dumps(j)) == j
 
 
 def test_tone_compensate_frame_shift_matches_the_overlap():
