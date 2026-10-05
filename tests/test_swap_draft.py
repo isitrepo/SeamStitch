@@ -20,7 +20,7 @@ import swap_draft as sd  # noqa: E402
 from test_swap import job  # noqa: E402,F401
 from test_swap_nodes import _plan978  # noqa: E402
 
-SUBJECT = ("<Subject 1> (S1) is the clown angel girl whose motion comes from <Video 1> and whose appearance comes "
+SUBJECT = ("<Subject 1> is the clown angel girl whose motion comes from <Video 1> and whose appearance comes "
            "from <Picture 1>: a young woman with pink hair.")
 
 
@@ -146,7 +146,7 @@ def test_the_subject_is_drafted_into_an_empty_subject_else_its_draft_field(job):
     rep = _draft(job, sheet=_sheet())
     p = sp.load_plan(job["plan"])
     assert rep["subject"]["into"] == "subject" and p["subject_pronoun"] == "she"
-    assert p["subject"].startswith("<Subject 1> (S1) is the clown angel girl whose motion comes from <Video 1>")
+    assert p["subject"].startswith("<Subject 1> is the clown angel girl whose motion comes from <Video 1>")
     assert p["subject"] in p["chunks"][1]["prompt"]
     sp.update_plan(job["plan"], lambda q: q.update(subject=SUBJECT))
     rep = _draft(job, sheet=_sheet(), mode="all (into the draft field)")
@@ -747,14 +747,35 @@ def test_the_scene_knows_who_is_replaced_and_the_prompt_keeps_everyone_else():
     ans = ("video_1: She sits on the left of a dark blue diner booth, a white cup in her hands.\nsounds: chatter.\n"
            "others: a man in a striped jacket on the right")
     assert sd._labelled(ans)["others"] == "a man in a striped jacket on the right"
-    t = sd.fill_ref2va(subject=SUBJECT, video_1="a diner booth.", shots=["[Shot 1] She sits."], sounds="chatter", n_shots=1,
-                       dialogue=False, audio=True, pronoun="she", who="a woman in a red dress",
-                       others="a man in a striped jacket on the right")
-    sec = sd.parse_sections(t)
-    assert "Everyone else in <Video 1> (a man in a striped jacket on the right) keeps exactly" in sec["summary"]
-    assert "The other people in <Video 1> (a man in a striped jacket on the right): fully_preserved" in sec["retention_analysis"]
     src = open(sd.__file__, encoding="utf-8").read()
     assert src.index('ci["who"] = who') < src.index("sinstr = SCENE_INSTRUCTION.format(")
+
+
+def test_the_prompt_follows_h3s_reference_guide():
+    # MiniMax-H3 skills/h3-prompt-writing/references/ref-en.txt: everyone kept from <Video 1> is a <Subject N> with
+    # its own definition and retention line (by shot); (Sx) only where a voice speaks, numbered in speaking order;
+    # every label used is defined (<Audio 1>); every line inside <d> in its shot, none in the soundscape
+    lines = [{"text": "Okay.", "frames": [30, 40]}, {"text": "What?", "frames": [2, 8], "speaker_label": "<Subject 2>"},
+             {"text": "Come in.", "frames": [50, 60], "speaker_label": "an off-screen male voice"}, {"text": "Bye."}]
+    ids = sd.speaker_ids(lines)
+    assert ids == {"<Subject 2>": "S1", "<Subject 1>": "S2", "an off-screen male voice": "S3"}       # who speaks first
+    assert [ln["tag"] for ln in lines] == ["<Subject 1> (S2)", "<Subject 2> (S1)", "an off-screen male voice (S3)",
+                                           "<Subject 1> (S2)"]
+    block, _ = sd.place_dialogue("She sits. <Subject 1> (S1) says <d>[English]What?</d> SAYS \"Come in.\"", lines[1:3])
+    assert "<Subject 2> (S1) says <d>[English]What?</d>" in block
+    assert "an off-screen male voice (S3) says <d>[English]Come in.</d>" in block
+    t = sd.fill_ref2va(subject=SUBJECT, video_1="a couch.", shots=["[Shot 1] " + block, "[Shot 2] Jump cut. She nods."],
+                       sounds="room tone", n_shots=2, dialogue=True, audio=True, pronoun="she", who="a woman in a purple top",
+                       others=True, people=[("<Subject 2>", "a man in a scarf on the right", [1])], speaking=True)
+    sec = sd.parse_sections(t)
+    defs = sec["subject_definitions"].splitlines()
+    assert defs[1] == "<Subject 2> is a man in a scarf on the right in <Video 1>, who keeps their own appearance and movements."
+    assert defs[-1] == "<Audio 1> is the synchronized audio track of <Video 1>, and is reused in the target video."
+    assert not any("(S" in d for d in defs) and "(S" not in sec["retention_analysis"]
+    assert "<Subject 2> keeps exactly their own appearance and movements: only the main person is replaced." in sec["summary"]
+    assert "<Subject 2> (appears in [Shot 1]): fully_preserved - a man in a scarf on the right keeps" in sec["retention_analysis"]
+    assert "Her lips move only with her own lines" in sec["detailed_description"]
+    assert '"' not in sec["overall_soundscape"]
 
 
 def test_a_line_another_face_says_is_theirs_as_subject_2(monkeypatch):
@@ -770,14 +791,49 @@ def test_a_line_another_face_says_is_theirs_as_subject_2(monkeypatch):
         [0.2, 0.27, 0.21, 0.28, 0.30, 0.31, 0.30, 0.32], [None, None, None, None, 0.20, 0.38, 0.22, 0.40]))
     assert sd.attribute_lines(lines, [None] * 8, [None] * 8, "x.task", 24) == 1
     assert [ln.get("by") for ln in lines] == [None, "other", None, None]
-    lines[1]["tag"] = "<Subject 2> (S2)"
+    lines[1]["speaker_label"] = "<Subject 2>"
+    sd.speaker_ids(lines)
     # a tag Qwen wrote as hers is put back as his where the words are his line
     block, added = sd.place_dialogue('She sits. <Subject 1> (S1) says <d>[English]What?</d> She looks up.', lines[1:2])
     assert "<Subject 2> (S2) says <d>[English]What?</d>" in block and "(S1) says" not in block
-    t = sd.fill_ref2va(subject=SUBJECT, video_1="a couch.", shots=[block], sounds="room", n_shots=1, dialogue=True,
-                       audio=True, pronoun="she", who="a woman in a purple top", others="a man in a scarf on the right",
-                       second="a man in a scarf on the right")
-    sec = sd.parse_sections(t)
-    assert "<Subject 2> (S2) is a man in a scarf on the right, who keeps their own appearance and movements from <Video 1>." in sec["subject_definitions"]
-    assert "<Subject 2> (appears in <Video 1>): fully_preserved" in sec["retention_analysis"]
-    assert "Her lips move only with her own lines, and <Subject 2>'s with theirs" in sec["detailed_description"]
+
+
+class TimelineQwen(FakeQwen):
+    """Answers the timeline template's questions: who, the scene (with someone else in it), objects, moments."""
+
+    def ask(self, prompt, image=None, video=None, max_tokens=2048, frame_count=16):
+        self.calls.append({"prompt": prompt})
+        if "character sheet" in prompt:
+            return "name: clown angel girl\nappearance: a young woman with pink hair, a halo and wings.\npronoun: she"
+        if "Who is the main person" in prompt:
+            return "a woman in a red dress"
+        if "The main person is" in prompt:
+            return "video_1: She sits in a diner booth.\nsounds: chatter.\nothers: a man in a plaid jacket on the right"
+        if prompt.startswith("These are"):
+            return "person: yes\nobjects: white cup, booth"
+        if prompt.startswith("This is one frame"):
+            return ("person: yes\npose: sitting in a booth\nlook: to the side\nhands: holds a white cup with both hands\n"
+                    "others: a man on the right\nframe: a diner booth")
+        return "yes"
+
+
+def test_the_timeline_draft_writes_another_speaker_as_their_own_subject(job, monkeypatch):
+    # end to end through the timeline template: the scene names a man, his mouth moves during the line, so the line
+    # is <Subject 2>'s, numbered (S1) as the first voice; the prompt keeps to H3's reference guide
+    import swap_scores as ss
+    monkeypatch.setattr(ss, "mouth_available", lambda: (True, "face_landmarker.task"))
+    import torch
+    monkeypatch.setattr(sd.spl, "cached_mask", lambda plan, jd, a, b, held=0, target="": (torch.ones((b - a + 1, 8, 8)), None))
+    monkeypatch.setattr(ss, "face_mouths", lambda frames, masks, path, fps: (
+        [0.20] * len(frames), [0.20 if i % 2 else 0.45 for i in range(len(frames))]))
+    rep = _draft(job, sheet=_sheet(), qwen_cls=TimelineQwen(), template=sd.TEMPLATES[2])
+    p = sp.load_plan(job["plan"])
+    sec = sd.parse_sections(p["chunks"][0]["prompt"])
+    assert "<Subject 2> is a man in a plaid jacket on the right in <Video 1>, who keeps their own appearance" in sec["subject_definitions"]
+    assert "<Audio 1> is the synchronized audio track of <Video 1>" in sec["subject_definitions"]
+    assert "(S" not in sec["subject_definitions"] and "(S" not in sec["retention_analysis"]
+    assert "<Subject 2> (S1) says <d>[English]Hello there.</d>" in sec["detailed_description"]
+    assert "<Subject 1> (S1) says" not in sec["detailed_description"]
+    assert "<Subject 2>, a man in a plaid jacket on the right, stays exactly as in <Video 1>." in sec["detailed_description"]
+    assert '"' not in sec["overall_soundscape"]
+    assert any("said by a man in a plaid jacket" in w for w in rep["chunks"][p["chunks"][0]["id"]]["warnings"])
