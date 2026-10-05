@@ -338,6 +338,21 @@ def test_the_prop_check_lists_unseen_and_carried_over_nouns():
     assert sd.prop_check(["[Shot 1] She looks at the camera with her head at the top edge of the frame."], [])["unseen"] == []
 
 
+def test_hands_naming_an_unseen_prop_are_left_out_of_the_shot_block():
+    moments = [(0.1, {"person": "yes", "pose": "crouching low near floor", "look": "to the side",
+                      "hands": "holds a silver knife over cardboard box"}),
+               (1.6, {"person": "yes", "pose": "sitting on floor", "look": "at the camera",
+                      "hands": "holds a dark cigar-like object near mouth with left hand"}),
+               (2.2, {"person": "yes", "pose": "sitting on floor", "look": "at the camera",
+                      "hands": "holds a dark grey box lid near lap with both hands"}),
+               (3.0, {"person": "yes", "pose": "sitting on floor", "look": "at the camera",
+                      "hands": "holds a large brown cardboard box angled toward viewer"})]
+    assert sd.drop_unseen_hands(moments, ["box", "knife"]) == ["dark cigar-like object", "dark grey box lid"]
+    body = sd.merge_moments(moments, [], 25, "she")
+    assert "cigar" not in body and "lid" not in body
+    assert "silver knife" in body and "box angled toward viewer" in body
+
+
 def test_the_node_widgets_keep_their_order():
     req = sd.SeamStitchSwapDraft.INPUT_TYPES()["required"]
     assert list(req) == ["draft_plan", "chunks", "qwen_model", "quantization", "frames_per_chunk", "transcribe",

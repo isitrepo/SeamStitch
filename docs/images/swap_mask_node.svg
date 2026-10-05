@@ -1,0 +1,24 @@
+<svg width="620" height="205" viewBox="0 0 620 205" xmlns="http://www.w3.org/2000/svg" font-family="Segoe UI, Helvetica, Arial, sans-serif">
+<rect x="0" y="0" width="620" height="205" fill="#1a1a1a"/>
+<rect x="24" y="10" width="572" height="185" rx="10" fill="#2a2a2a" stroke="#454545" stroke-width="1.5"/>
+<path d="M 24 40 Q 24 10 34 10 L 586 10 Q 596 10 596 40 Z" fill="#2f8f5b"/>
+<text x="38" y="30" fill="#ffffff" font-size="14" font-weight="600">SeamStitch Swap Mask</text>
+<rect x="25" y="39" width="570" height="24" fill="#242424" opacity="0.4"/>
+<circle cx="24" cy="51.0" r="5.5" fill="#ffd54f" stroke="#1a1a1a" stroke-width="1.5"/>
+<text x="36" y="55.0" fill="#e8e8e8" font-size="12">mark_chunk</text>
+<circle cx="596" cy="51.0" r="5.5" fill="#b0bec5" stroke="#1a1a1a" stroke-width="1.5"/>
+<text x="584" y="55.0" fill="#e8e8e8" font-size="12" text-anchor="end">mask_id</text>
+<circle cx="24" cy="75.0" r="5.5" fill="#81c784" stroke="#1a1a1a" stroke-width="1.5"/>
+<text x="36" y="79.0" fill="#e8e8e8" font-size="12">mask</text>
+<rect x="25" y="87" width="570" height="24" fill="#242424" opacity="0.4"/>
+<circle cx="24" cy="99.0" r="5.5" fill="#64b5f6" stroke="#1a1a1a" stroke-width="1.5"/>
+<text x="36" y="103.0" fill="#e8e8e8" font-size="12" font-style="italic">preview</text>
+<line x1="34" y1="120" x2="586" y2="120" stroke="#454545" stroke-width="1"/>
+<rect x="34" y="123" width="552" height="19" rx="4" fill="#3a3a3a" stroke="#555" stroke-width="1"/>
+<text x="42" y="136" fill="#9a9a9a" font-size="11">save_preview</text>
+<text x="578" y="136" fill="#e8e8e8" font-size="11" text-anchor="end">True</text>
+<rect x="25" y="144" width="570" height="24" fill="#242424" opacity="0.4"/>
+<rect x="34" y="147" width="552" height="19" rx="4" fill="#3a3a3a" stroke="#555" stroke-width="1"/>
+<text x="42" y="160" fill="#9a9a9a" font-size="11">fill_holes</text>
+<text x="578" y="160" fill="#e8e8e8" font-size="11" text-anchor="end">6</text>
+</svg>

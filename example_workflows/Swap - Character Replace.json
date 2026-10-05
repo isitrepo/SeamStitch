@@ -1,0 +1,5259 @@
+{
+ "revision": 0,
+ "last_node_id": 54,
+ "last_link_id": 145,
+ "nodes": [
+  {
+   "id": 2,
+   "type": "LoadImage",
+   "pos": [
+    1140,
+    456
+   ],
+   "size": [
+    340,
+    102
+   ],
+   "flags": {},
+   "order": 1,
+   "mode": 0,
+   "inputs": [
+    {
+     "localized_name": "image",
+     "name": "image",
+     "type": "COMBO",
+     "widget": {
+      "name": "image"
+     },
+     "link": null
+    },
+    {
+     "localized_name": "choose file to upload",
+     "name": "upload",
+     "type": "IMAGEUPLOAD",
+     "widget": {
+      "name": "upload"
+     },
+     "link": null
+    }
+   ],
+   "outputs": [
+    {
+     "localized_name": "IMAGE",
+     "name": "IMAGE",
+     "type": "IMAGE",
+     "links": [
+      68,
+      145
+     ],
+     "slot_index": 0
+    },
+    {
+     "localized_name": "MASK",
+     "name": "MASK",
+     "type": "MASK",
+     "links": null
+    }
+   ],
+   "title": "Load Character Sheet",
+   "properties": {
+    "cnr_id": "comfy-core",
+    "ver": "0.37.0",
+    "ue_properties": {
+     "widget_ue_connectable": {},
+     "input_ue_unconnectable": {}
+    },
+    "Node name for S&R": "LoadImage",
+    "__skeba_tags": {
+     "inputs": [],
+     "outputs": []
+    }
+   },
+   "widgets_values": [
+    "your_character_sheet.png",
+    "image"
+   ],
+   "_meta": {
+    "skeba_tags": {
+     "inputs": [],
+     "outputs": []
+    }
+   },
+   "extensions": {
+    "_meta": {
+     "skeba_tags": {
+      "inputs": [],
+      "outputs": []
+     }
+    }
+   }
+  },
+  {
+   "id": 3,
+   "type": "CheckpointLoaderSimple",
+   "pos": [
+    1580,
+    100
+   ],
+   "size": [
+    340,
+    98
+   ],
+   "flags": {},
+   "order": 2,
+   "mode": 0,
+   "inputs": [
+    {
+     "localized_name": "ckpt_name",
+     "name": "ckpt_name",
+     "type": "COMBO",
+     "widget": {
+      "name": "ckpt_name"
+     },
+     "link": null
+    }
+   ],
+   "outputs": [
+    {
+     "localized_name": "MODEL",
+     "name": "MODEL",
+     "type": "MODEL",
+     "links": [
+      51,
+      118,
+      134
+     ],
+     "slot_index": 0
+    },
+    {
+     "localized_name": "CLIP",
+     "name": "CLIP",
+     "type": "CLIP",
+     "links": [
+      48
+     ]
+    },
+    {
+     "localized_name": "VAE",
+     "name": "VAE",
+     "type": "VAE",
+     "links": null
+    }
+   ],
+   "title": "Load SAM3",
+   "properties": {
+    "cnr_id": "comfy-core",
+    "ver": "0.37.0",
+    "ue_properties": {
+     "widget_ue_connectable": {},
+     "input_ue_unconnectable": {}
+    },
+    "Node name for S&R": "CheckpointLoaderSimple",
+    "__skeba_tags": {
+     "inputs": [],
+     "outputs": []
+    }
+   },
+   "widgets_values": [
+    "sam3.1_multiplex_fp16.safetensors"
+   ],
+   "_meta": {
+    "skeba_tags": {
+     "inputs": [],
+     "outputs": []
+    }
+   },
+   "extensions": {
+    "_meta": {
+     "skeba_tags": {
+      "inputs": [],
+      "outputs": []
+     }
+    }
+   }
+  },
+  {
+   "id": 4,
+   "type": "CLIPTextEncode",
+   "pos": [
+    1580,
+    268
+   ],
+   "size": [
+    400,
+    200
+   ],
+   "flags": {},
+   "order": 12,
+   "mode": 0,
+   "inputs": [
+    {
+     "localized_name": "clip",
+     "name": "clip",
+     "type": "CLIP",
+     "link": 48
+    },
+    {
+     "localized_name": "text",
+     "name": "text",
+     "type": "STRING",
+     "widget": {
+      "name": "text"
+     },
+     "link": null
+    }
+   ],
+   "outputs": [
+    {
+     "localized_name": "CONDITIONING",
+     "name": "CONDITIONING",
+     "type": "CONDITIONING",
+     "links": [
+      52,
+      119,
+      135
+     ],
+     "slot_index": 0
+    }
+   ],
+   "title": "SAM3 Text Prompt",
+   "properties": {
+    "cnr_id": "comfy-core",
+    "ver": "0.37.0",
+    "ue_properties": {
+     "widget_ue_connectable": {},
+     "input_ue_unconnectable": {}
+    },
+    "Node name for S&R": "CLIPTextEncode",
+    "__skeba_tags": {
+     "inputs": [],
+     "outputs": []
+    }
+   },
+   "widgets_values": [
+    "person"
+   ],
+   "_meta": {
+    "skeba_tags": {
+     "inputs": [],
+     "outputs": []
+    }
+   },
+   "extensions": {
+    "_meta": {
+     "skeba_tags": {
+      "inputs": [],
+      "outputs": []
+     }
+    }
+   }
+  },
+  {
+   "id": 5,
+   "type": "ImageScaleToTotalPixels",
+   "pos": [
+    1580,
+    538
+   ],
+   "size": [
+    340,
+    106
+   ],
+   "flags": {},
+   "order": 11,
+   "mode": 0,
+   "inputs": [
+    {
+     "localized_name": "image",
+     "name": "image",
+     "type": "IMAGE",
+     "link": 92
+    },
+    {
+     "localized_name": "upscale_method",
+     "name": "upscale_method",
+     "type": "COMBO",
+     "widget": {
+      "name": "upscale_method"
+     },
+     "link": null
+    },
+    {
+     "localized_name": "megapixels",
+     "name": "megapixels",
+     "type": "FLOAT",
+     "widget": {
+      "name": "megapixels"
+     },
+     "link": null
+    },
+    {
+     "localized_name": "resolution_steps",
+     "name": "resolution_steps",
+     "type": "INT",
+     "widget": {
+      "name": "resolution_steps"
+     },
+     "link": null
+    }
+   ],
+   "outputs": [
+    {
+     "localized_name": "IMAGE",
+     "name": "IMAGE",
+     "type": "IMAGE",
+     "links": [
+      50,
+      54,
+      55
+     ]
+    }
+   ],
+   "title": "Scale to 1 MP for SAM3",
+   "properties": {
+    "cnr_id": "comfy-core",
+    "ver": "0.37.0",
+    "ue_properties": {
+     "widget_ue_connectable": {},
+     "input_ue_unconnectable": {}
+    },
+    "Node name for S&R": "ImageScaleToTotalPixels",
+    "__skeba_tags": {
+     "inputs": [],
+     "outputs": []
+    }
+   },
+   "widgets_values": [
+    "bilinear",
+    1,
+    1
+   ],
+   "_meta": {
+    "skeba_tags": {
+     "inputs": [],
+     "outputs": []
+    }
+   },
+   "extensions": {
+    "_meta": {
+     "skeba_tags": {
+      "inputs": [],
+      "outputs": []
+     }
+    }
+   }
+  },
+  {
+   "id": 6,
+   "type": "SAM3_VideoTrack",
+   "pos": [
+    1580,
+    714
+   ],
+   "size": [
+    340,
+    166
+   ],
+   "flags": {},
+   "order": 15,
+   "mode": 0,
+   "inputs": [
+    {
+     "localized_name": "images",
+     "name": "images",
+     "type": "IMAGE",
+     "link": 50
+    },
+    {
+     "localized_name": "model",
+     "name": "model",
+     "type": "MODEL",
+     "link": 51
+    },
+    {
+     "localized_name": "initial_mask",
+     "name": "initial_mask",
+     "shape": 7,
+     "type": "MASK",
+     "link": null
+    },
+    {
+     "localized_name": "conditioning",
+     "name": "conditioning",
+     "shape": 7,
+     "type": "CONDITIONING",
+     "link": 52
+    },
+    {
+     "localized_name": "detection_threshold",
+     "name": "detection_threshold",
+     "type": "FLOAT",
+     "widget": {
+      "name": "detection_threshold"
+     },
+     "link": null
+    },
+    {
+     "localized_name": "max_objects",
+     "name": "max_objects",
+     "type": "INT",
+     "widget": {
+      "name": "max_objects"
+     },
+     "link": null
+    },
+    {
+     "localized_name": "detect_interval",
+     "name": "detect_interval",
+     "type": "INT",
+     "widget": {
+      "name": "detect_interval"
+     },
+     "link": null
+    }
+   ],
+   "outputs": [
+    {
+     "localized_name": "track_data",
+     "name": "track_data",
+     "type": "SAM3_TRACK_DATA",
+     "links": [
+      53
+     ]
+    }
+   ],
+   "title": "SAM3 Video Track",
+   "properties": {
+    "cnr_id": "comfy-core",
+    "ver": "0.37.0",
+    "ue_properties": {
+     "widget_ue_connectable": {},
+     "input_ue_unconnectable": {}
+    },
+    "Node name for S&R": "SAM3_VideoTrack",
+    "__skeba_tags": {
+     "inputs": [],
+     "outputs": []
+    }
+   },
+   "widgets_values": [
+    0.5,
+    1,
+    1
+   ],
+   "_meta": {
+    "skeba_tags": {
+     "inputs": [],
+     "outputs": []
+    }
+   },
+   "extensions": {
+    "_meta": {
+     "skeba_tags": {
+      "inputs": [],
+      "outputs": []
+     }
+    }
+   }
+  },
+  {
+   "id": 7,
+   "type": "SAM3_TrackToMask",
+   "pos": [
+    1580,
+    950
+   ],
+   "size": [
+    340,
+    58
+   ],
+   "flags": {},
+   "order": 17,
+   "mode": 0,
+   "inputs": [
+    {
+     "localized_name": "track_data",
+     "name": "track_data",
+     "type": "SAM3_TRACK_DATA",
+     "link": 53
+    },
+    {
+     "localized_name": "object_indices",
+     "name": "object_indices",
+     "type": "STRING",
+     "widget": {
+      "name": "object_indices"
+     },
+     "link": null
+    }
+   ],
+   "outputs": [
+    {
+     "localized_name": "masks",
+     "name": "masks",
+     "type": "MASK",
+     "links": [
+      129
+     ],
+     "slot_index": 0
+    }
+   ],
+   "properties": {
+    "cnr_id": "comfy-core",
+    "ver": "0.37.0",
+    "ue_properties": {
+     "widget_ue_connectable": {},
+     "input_ue_unconnectable": {}
+    },
+    "Node name for S&R": "SAM3_TrackToMask",
+    "__skeba_tags": {
+     "inputs": [],
+     "outputs": []
+    }
+   },
+   "widgets_values": [
+    ""
+   ],
+   "_meta": {
+    "skeba_tags": {
+     "inputs": [],
+     "outputs": []
+    }
+   },
+   "extensions": {
+    "_meta": {
+     "skeba_tags": {
+      "inputs": [],
+      "outputs": []
+     }
+    }
+   }
+  },
+  {
+   "id": 8,
+   "type": "ImageInvert",
+   "pos": [
+    1580,
+    1078
+   ],
+   "size": [
+    340,
+    26
+   ],
+   "flags": {},
+   "order": 14,
+   "mode": 0,
+   "inputs": [
+    {
+     "localized_name": "image",
+     "name": "image",
+     "type": "IMAGE",
+     "link": 54
+    }
+   ],
+   "outputs": [
+    {
+     "localized_name": "IMAGE",
+     "name": "IMAGE",
+     "type": "IMAGE",
+     "links": [
+      56
+     ]
+    }
+   ],
+   "title": "Invert Colours",
+   "properties": {
+    "cnr_id": "comfy-core",
+    "ver": "0.37.0",
+    "ue_properties": {
+     "widget_ue_connectable": {},
+     "input_ue_unconnectable": {}
+    },
+    "Node name for S&R": "ImageInvert",
+    "__skeba_tags": {
+     "inputs": [],
+     "outputs": []
+    }
+   },
+   "_meta": {
+    "skeba_tags": {
+     "inputs": [],
+     "outputs": []
+    }
+   },
+   "extensions": {
+    "_meta": {
+     "skeba_tags": {
+      "inputs": [],
+      "outputs": []
+     }
+    }
+   }
+  },
+  {
+   "id": 9,
+   "type": "ImageCompositeMasked",
+   "pos": [
+    1580,
+    1174
+   ],
+   "size": [
+    340,
+    146
+   ],
+   "flags": {},
+   "order": 19,
+   "mode": 0,
+   "inputs": [
+    {
+     "localized_name": "destination",
+     "name": "destination",
+     "type": "IMAGE",
+     "link": 55
+    },
+    {
+     "localized_name": "source",
+     "name": "source",
+     "type": "IMAGE",
+     "link": 56
+    },
+    {
+     "localized_name": "mask",
+     "name": "mask",
+     "shape": 7,
+     "type": "MASK",
+     "link": 130
+    },
+    {
+     "localized_name": "x",
+     "name": "x",
+     "type": "INT",
+     "widget": {
+      "name": "x"
+     },
+     "link": null
+    },
+    {
+     "localized_name": "y",
+     "name": "y",
+     "type": "INT",
+     "widget": {
+      "name": "y"
+     },
+     "link": null
+    },
+    {
+     "localized_name": "resize_source",
+     "name": "resize_source",
+     "type": "BOOLEAN",
+     "widget": {
+      "name": "resize_source"
+     },
+     "link": null
+    }
+   ],
+   "outputs": [
+    {
+     "localized_name": "IMAGE",
+     "name": "IMAGE",
+     "type": "IMAGE",
+     "links": [
+      59
+     ]
+    }
+   ],
+   "title": "Paste Inverted Person",
+   "properties": {
+    "cnr_id": "comfy-core",
+    "ver": "0.37.0",
+    "ue_properties": {
+     "widget_ue_connectable": {},
+     "input_ue_unconnectable": {}
+    },
+    "Node name for S&R": "ImageCompositeMasked",
+    "__skeba_tags": {
+     "inputs": [],
+     "outputs": []
+    }
+   },
+   "widgets_values": [
+    0,
+    0,
+    false
+   ],
+   "_meta": {
+    "skeba_tags": {
+     "inputs": [],
+     "outputs": []
+    }
+   },
+   "extensions": {
+    "_meta": {
+     "skeba_tags": {
+      "inputs": [],
+      "outputs": []
+     }
+    }
+   }
+  },
+  {
+   "id": 10,
+   "type": "ComfySwitchNode",
+   "pos": [
+    1580,
+    1794
+   ],
+   "size": [
+    340,
+    78
+   ],
+   "flags": {},
+   "order": 21,
+   "mode": 0,
+   "inputs": [
+    {
+     "localized_name": "on_false",
+     "name": "on_false",
+     "shape": 7,
+     "type": "IMAGE",
+     "link": 93
+    },
+    {
+     "localized_name": "on_true",
+     "name": "on_true",
+     "shape": 7,
+     "type": "IMAGE",
+     "link": 59
+    },
+    {
+     "localized_name": "switch",
+     "name": "switch",
+     "type": "BOOLEAN",
+     "widget": {
+      "name": "switch"
+     },
+     "link": 95
+    }
+   ],
+   "outputs": [
+    {
+     "localized_name": "output",
+     "name": "output",
+     "type": "IMAGE",
+     "links": [
+      60,
+      125
+     ],
+     "slot_index": 0
+    }
+   ],
+   "title": "MARK SOURCE? (false = plain, true = SAM3-marked)",
+   "properties": {
+    "cnr_id": "comfy-core",
+    "ver": "0.37.0",
+    "ue_properties": {
+     "widget_ue_connectable": {},
+     "input_ue_unconnectable": {}
+    },
+    "Node name for S&R": "ComfySwitchNode",
+    "__skeba_tags": {
+     "inputs": [],
+     "outputs": []
+    }
+   },
+   "widgets_values": [
+    true
+   ],
+   "_meta": {
+    "skeba_tags": {
+     "inputs": [],
+     "outputs": []
+    }
+   },
+   "extensions": {
+    "_meta": {
+     "skeba_tags": {
+      "inputs": [],
+      "outputs": []
+     }
+    }
+   }
+  },
+  {
+   "id": 11,
+   "type": "ImageScaleToTotalPixels",
+   "pos": [
+    1580,
+    1942
+   ],
+   "size": [
+    340,
+    106
+   ],
+   "flags": {},
+   "order": 25,
+   "mode": 0,
+   "inputs": [
+    {
+     "localized_name": "image",
+     "name": "image",
+     "type": "IMAGE",
+     "link": 60
+    },
+    {
+     "localized_name": "upscale_method",
+     "name": "upscale_method",
+     "type": "COMBO",
+     "widget": {
+      "name": "upscale_method"
+     },
+     "link": null
+    },
+    {
+     "localized_name": "megapixels",
+     "name": "megapixels",
+     "type": "FLOAT",
+     "widget": {
+      "name": "megapixels"
+     },
+     "link": null
+    },
+    {
+     "localized_name": "resolution_steps",
+     "name": "resolution_steps",
+     "type": "INT",
+     "widget": {
+      "name": "resolution_steps"
+     },
+     "link": null
+    }
+   ],
+   "outputs": [
+    {
+     "localized_name": "IMAGE",
+     "name": "IMAGE",
+     "type": "IMAGE",
+     "links": [
+      69
+     ]
+    }
+   ],
+   "title": "Shrink Guide to 0.75 MP",
+   "properties": {
+    "cnr_id": "comfy-core",
+    "ver": "0.37.0",
+    "ue_properties": {
+     "widget_ue_connectable": {},
+     "input_ue_unconnectable": {}
+    },
+    "Node name for S&R": "ImageScaleToTotalPixels",
+    "__skeba_tags": {
+     "inputs": [],
+     "outputs": []
+    }
+   },
+   "widgets_values": [
+    "bilinear",
+    0.75,
+    1
+   ],
+   "_meta": {
+    "skeba_tags": {
+     "inputs": [],
+     "outputs": []
+    }
+   },
+   "extensions": {
+    "_meta": {
+     "skeba_tags": {
+      "inputs": [],
+      "outputs": []
+     }
+    }
+   }
+  },
+  {
+   "id": 12,
+   "type": "UNETLoader",
+   "pos": [
+    2080,
+    100
+   ],
+   "size": [
+    340,
+    82
+   ],
+   "flags": {},
+   "order": 3,
+   "mode": 0,
+   "inputs": [
+    {
+     "localized_name": "unet_name",
+     "name": "unet_name",
+     "type": "COMBO",
+     "widget": {
+      "name": "unet_name"
+     },
+     "link": null
+    },
+    {
+     "localized_name": "weight_dtype",
+     "name": "weight_dtype",
+     "type": "COMBO",
+     "widget": {
+      "name": "weight_dtype"
+     },
+     "link": null
+    }
+   ],
+   "outputs": [
+    {
+     "localized_name": "MODEL",
+     "name": "MODEL",
+     "type": "MODEL",
+     "links": [
+      61
+     ]
+    }
+   ],
+   "title": "Load H3 Model (10Eros hybrid int8)",
+   "properties": {
+    "cnr_id": "comfy-core",
+    "ver": "0.37.0",
+    "ue_properties": {
+     "widget_ue_connectable": {},
+     "input_ue_unconnectable": {}
+    },
+    "Node name for S&R": "UNETLoader",
+    "__skeba_tags": {
+     "inputs": [],
+     "outputs": []
+    }
+   },
+   "widgets_values": [
+    "10Eros_Max_h3_hybrid_beta5_int8.safetensors",
+    "default"
+   ],
+   "_meta": {
+    "skeba_tags": {
+     "inputs": [],
+     "outputs": []
+    }
+   },
+   "extensions": {
+    "_meta": {
+     "skeba_tags": {
+      "inputs": [],
+      "outputs": []
+     }
+    }
+   }
+  },
+  {
+   "id": 13,
+   "type": "CLIPLoader",
+   "pos": [
+    2080,
+    252
+   ],
+   "size": [
+    340,
+    106
+   ],
+   "flags": {},
+   "order": 4,
+   "mode": 0,
+   "inputs": [
+    {
+     "localized_name": "clip_name",
+     "name": "clip_name",
+     "type": "COMBO",
+     "widget": {
+      "name": "clip_name"
+     },
+     "link": null
+    },
+    {
+     "localized_name": "type",
+     "name": "type",
+     "type": "COMBO",
+     "widget": {
+      "name": "type"
+     },
+     "link": null
+    },
+    {
+     "localized_name": "device",
+     "name": "device",
+     "shape": 7,
+     "type": "COMBO",
+     "widget": {
+      "name": "device"
+     },
+     "link": null
+    }
+   ],
+   "outputs": [
+    {
+     "localized_name": "CLIP",
+     "name": "CLIP",
+     "type": "CLIP",
+     "links": [
+      65
+     ]
+    }
+   ],
+   "title": "Load Qwen3-VL Text Encoder",
+   "properties": {
+    "cnr_id": "comfy-core",
+    "ver": "0.37.0",
+    "ue_properties": {
+     "widget_ue_connectable": {},
+     "input_ue_unconnectable": {}
+    },
+    "Node name for S&R": "CLIPLoader",
+    "__skeba_tags": {
+     "inputs": [],
+     "outputs": []
+    }
+   },
+   "widgets_values": [
+    "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
+    "minimax",
+    "default"
+   ],
+   "_meta": {
+    "skeba_tags": {
+     "inputs": [],
+     "outputs": []
+    }
+   },
+   "extensions": {
+    "_meta": {
+     "skeba_tags": {
+      "inputs": [],
+      "outputs": []
+     }
+    }
+   }
+  },
+  {
+   "id": 14,
+   "type": "VAELoader",
+   "pos": [
+    2080,
+    428
+   ],
+   "size": [
+    340,
+    58
+   ],
+   "flags": {},
+   "order": 5,
+   "mode": 0,
+   "inputs": [
+    {
+     "localized_name": "vae_name",
+     "name": "vae_name",
+     "type": "COMBO",
+     "widget": {
+      "name": "vae_name"
+     },
+     "link": null
+    }
+   ],
+   "outputs": [
+    {
+     "localized_name": "VAE",
+     "name": "VAE",
+     "type": "VAE",
+     "links": [
+      66,
+      90,
+      104,
+      110
+     ],
+     "slot_index": 0
+    }
+   ],
+   "title": "Load Video VAE (int8)",
+   "properties": {
+    "cnr_id": "comfy-core",
+    "ver": "0.37.0",
+    "ue_properties": {
+     "widget_ue_connectable": {},
+     "input_ue_unconnectable": {}
+    },
+    "Node name for S&R": "VAELoader",
+    "__skeba_tags": {
+     "inputs": [],
+     "outputs": []
+    }
+   },
+   "widgets_values": [
+    "minimax_h3_video_vae_int8_convrot.safetensors"
+   ],
+   "_meta": {
+    "skeba_tags": {
+     "inputs": [],
+     "outputs": []
+    }
+   },
+   "extensions": {
+    "_meta": {
+     "skeba_tags": {
+      "inputs": [],
+      "outputs": []
+     }
+    }
+   }
+  },
+  {
+   "id": 15,
+   "type": "VAELoader",
+   "pos": [
+    2080,
+    556
+   ],
+   "size": [
+    340,
+    58
+   ],
+   "flags": {},
+   "order": 6,
+   "mode": 0,
+   "inputs": [
+    {
+     "localized_name": "vae_name",
+     "name": "vae_name",
+     "type": "COMBO",
+     "widget": {
+      "name": "vae_name"
+     },
+     "link": null
+    }
+   ],
+   "outputs": [
+    {
+     "localized_name": "VAE",
+     "name": "VAE",
+     "type": "VAE",
+     "links": [
+      67
+     ]
+    }
+   ],
+   "title": "Load Audio VAE",
+   "properties": {
+    "cnr_id": "comfy-core",
+    "ver": "0.37.0",
+    "ue_properties": {
+     "widget_ue_connectable": {},
+     "input_ue_unconnectable": {}
+    },
+    "Node name for S&R": "VAELoader",
+    "__skeba_tags": {
+     "inputs": [],
+     "outputs": []
+    }
+   },
+   "widgets_values": [
+    "minimax_h3_audio_vae_fp32.safetensors"
+   ],
+   "_meta": {
+    "skeba_tags": {
+     "inputs": [],
+     "outputs": []
+    }
+   },
+   "extensions": {
+    "_meta": {
+     "skeba_tags": {
+      "inputs": [],
+      "outputs": []
+     }
+    }
+   }
+  },
+  {
+   "id": 16,
+   "type": "MiniMaxH3SigmaShift",
+   "pos": [
+    2080,
+    684
+   ],
+   "size": [
+    340,
+    82
+   ],
+   "flags": {},
+   "order": 13,
+   "mode": 0,
+   "inputs": [
+    {
+     "localized_name": "model",
+     "name": "model",
+     "type": "MODEL",
+     "link": 61
+    },
+    {
+     "localized_name": "shift_video",
+     "name": "shift_video",
+     "type": "FLOAT",
+     "widget": {
+      "name": "shift_video"
+     },
+     "link": null
+    },
+    {
+     "localized_name": "shift_audio",
+     "name": "shift_audio",
+     "type": "FLOAT",
+     "widget": {
+      "name": "shift_audio"
+     },
+     "link": null
+    }
+   ],
+   "outputs": [
+    {
+     "localized_name": "MODEL",
+     "name": "MODEL",
+     "type": "MODEL",
+     "links": [
+      62
+     ]
+    }
+   ],
+   "title": "H3 Sigma Shift",
+   "properties": {
+    "cnr_id": "comfy-core",
+    "ver": "0.37.0",
+    "ue_properties": {
+     "widget_ue_connectable": {},
+     "input_ue_unconnectable": {}
+    },
+    "Node name for S&R": "MiniMaxH3SigmaShift",
+    "__skeba_tags": {
+     "inputs": [],
+     "outputs": []
+    }
+   },
+   "widgets_values": [
+    12,
+    6
+   ],
+   "_meta": {
+    "skeba_tags": {
+     "inputs": [],
+     "outputs": []
+    }
+   },
+   "extensions": {
+    "_meta": {
+     "skeba_tags": {
+      "inputs": [],
+      "outputs": []
+     }
+    }
+   }
+  },
+  {
+   "id": 17,
+   "type": "ModelAttentionBackend",
+   "pos": [
+    2080,
+    836
+   ],
+   "size": [
+    340,
+    58
+   ],
+   "flags": {},
+   "order": 16,
+   "mode": 0,
+   "inputs": [
+    {
+     "localized_name": "model",
+     "name": "model",
+     "type": "MODEL",
+     "link": 62
+    },
+    {
+     "localized_name": "backend",
+     "name": "attention",
+     "type": "COMBO",
+     "widget": {
+      "name": "attention"
+     },
+     "link": null
+    }
+   ],
+   "outputs": [
+    {
+     "localized_name": "model",
+     "name": "model",
+     "type": "MODEL",
+     "links": [
+      63
+     ]
+    }
+   ],
+   "title": "Attention Backend",
+   "properties": {
+    "cnr_id": "comfy-core",
+    "ver": "0.37.0",
+    "ue_properties": {
+     "widget_ue_connectable": {},
+     "input_ue_unconnectable": {}
+    },
+    "Node name for S&R": "ModelAttentionBackend",
+    "__skeba_tags": {
+     "inputs": [],
+     "outputs": []
+    }
+   },
+   "widgets_values": [
+    "comfy kitchen attention"
+   ],
+   "_meta": {
+    "skeba_tags": {
+     "inputs": [],
+     "outputs": []
+    }
+   },
+   "extensions": {
+    "_meta": {
+     "skeba_tags": {
+      "inputs": [],
+      "outputs": []
+     }
+    }
+   }
+  },
+  {
+   "id": 18,
+   "type": "BlockSparseAttention",
+   "pos": [
+    2080,
+    964
+   ],
+   "size": [
+    340,
+    250
+   ],
+   "flags": {},
+   "order": 18,
+   "mode": 0,
+   "inputs": [
+    {
+     "localized_name": "model",
+     "name": "model",
+     "type": "MODEL",
+     "link": 63
+    },
+    {
+     "localized_name": "method",
+     "name": "selection",
+     "type": "COMFY_DYNAMICCOMBO_V3",
+     "widget": {
+      "name": "selection"
+     },
+     "link": null
+    },
+    {
+     "localized_name": "keep_percent",
+     "name": "selection.keep_percent",
+     "type": "FLOAT",
+     "widget": {
+      "name": "selection.keep_percent"
+     },
+     "link": null
+    },
+    {
+     "localized_name": "start_percent",
+     "name": "start_percent",
+     "type": "FLOAT",
+     "widget": {
+      "name": "start_percent"
+     },
+     "link": null
+    },
+    {
+     "localized_name": "end_percent",
+     "name": "end_percent",
+     "type": "FLOAT",
+     "widget": {
+      "name": "end_percent"
+     },
+     "link": null
+    },
+    {
+     "localized_name": "dense_blocks",
+     "name": "dense_blocks",
+     "type": "STRING",
+     "widget": {
+      "name": "dense_blocks"
+     },
+     "link": null
+    },
+    {
+     "localized_name": "min_tokens",
+     "name": "min_tokens",
+     "type": "INT",
+     "widget": {
+      "name": "min_tokens"
+     },
+     "link": null
+    },
+    {
+     "localized_name": "extra_tokens",
+     "name": "extra_tokens",
+     "type": "INT",
+     "widget": {
+      "name": "extra_tokens"
+     },
+     "link": null
+    },
+    {
+     "localized_name": "sink_conditioning",
+     "name": "sink_conditioning",
+     "type": "COMBO",
+     "widget": {
+      "name": "sink_conditioning"
+     },
+     "link": null
+    },
+    {
+     "localized_name": "verbose",
+     "name": "verbose",
+     "type": "BOOLEAN",
+     "widget": {
+      "name": "verbose"
+     },
+     "link": null
+    }
+   ],
+   "outputs": [
+    {
+     "localized_name": "model",
+     "name": "model",
+     "type": "MODEL",
+     "links": [
+      64
+     ]
+    }
+   ],
+   "title": "SLA Sparse Attention",
+   "properties": {
+    "cnr_id": "comfy-core",
+    "ver": "0.37.0",
+    "ue_properties": {
+     "widget_ue_connectable": {},
+     "input_ue_unconnectable": {}
+    },
+    "Node name for S&R": "BlockSparseAttention",
+    "__skeba_tags": {
+     "inputs": [],
+     "outputs": []
+    }
+   },
+   "widgets_values": [
+    "sla",
+    20,
+    0.2,
+    1,
+    "",
+    12288,
+    256,
+    "exact_kv_and_rows",
+    false
+   ],
+   "_meta": {
+    "skeba_tags": {
+     "inputs": [],
+     "outputs": []
+    }
+   },
+   "extensions": {
+    "_meta": {
+     "skeba_tags": {
+      "inputs": [],
+      "outputs": []
+     }
+    }
+   }
+  },
+  {
+   "id": 19,
+   "type": "LoraLoaderModelOnly",
+   "pos": [
+    2080,
+    1284
+   ],
+   "size": [
+    340,
+    82
+   ],
+   "flags": {},
+   "order": 20,
+   "mode": 0,
+   "inputs": [
+    {
+     "localized_name": "model",
+     "name": "model",
+     "type": "MODEL",
+     "link": 64
+    },
+    {
+     "localized_name": "lora_name",
+     "name": "lora_name",
+     "type": "COMBO",
+     "widget": {
+      "name": "lora_name"
+     },
+     "link": null
+    },
+    {
+     "localized_name": "strength_model",
+     "name": "strength_model",
+     "type": "FLOAT",
+     "widget": {
+      "name": "strength_model"
+     },
+     "link": null
+    }
+   ],
+   "outputs": [
+    {
+     "localized_name": "MODEL",
+     "name": "MODEL",
+     "type": "MODEL",
+     "links": [
+      71,
+      72,
+      83,
+      113
+     ],
+     "slot_index": 0
+    }
+   ],
+   "title": "8-step Turbo LoRA",
+   "properties": {
+    "cnr_id": "comfy-core",
+    "ver": "0.37.0",
+    "ue_properties": {
+     "widget_ue_connectable": {},
+     "input_ue_unconnectable": {}
+    },
+    "Node name for S&R": "LoraLoaderModelOnly",
+    "__skeba_tags": {
+     "inputs": [],
+     "outputs": []
+    }
+   },
+   "widgets_values": [
+    "Minimax\\minimax_h3_fl2v_turbo_8step_v1.0_comfyui_bf16.safetensors",
+    1
+   ],
+   "_meta": {
+    "skeba_tags": {
+     "inputs": [],
+     "outputs": []
+    }
+   },
+   "extensions": {
+    "_meta": {
+     "skeba_tags": {
+      "inputs": [],
+      "outputs": []
+     }
+    }
+   }
+  },
+  {
+   "id": 20,
+   "type": "MiniMaxH3ReferenceToVideo",
+   "pos": [
+    2520,
+    100
+   ],
+   "size": [
+    560,
+    364
+   ],
+   "flags": {},
+   "order": 26,
+   "mode": 0,
+   "inputs": [
+    {
+     "localized_name": "clip",
+     "name": "clip",
+     "type": "CLIP",
+     "link": 65
+    },
+    {
+     "localized_name": "vae",
+     "name": "vae",
+     "shape": 7,
+     "type": "VAE",
+     "link": 66
+    },
+    {
+     "localized_name": "audio_vae",
+     "name": "audio_vae",
+     "shape": 7,
+     "type": "VAE",
+     "link": 67
+    },
+    {
+     "localized_name": "ref_image_0",
+     "name": "ref_images.ref_image_0",
+     "shape": 7,
+     "type": "IMAGE",
+     "link": 68
+    },
+    {
+     "localized_name": "ref_image_1",
+     "name": "ref_images.ref_image_1",
+     "shape": 7,
+     "type": "IMAGE",
+     "link": null
+    },
+    {
+     "localized_name": "ref_video_0",
+     "name": "ref_videos.ref_video_0",
+     "shape": 7,
+     "type": "IMAGE",
+     "link": 69
+    },
+    {
+     "localized_name": "ref_video_1",
+     "name": "ref_videos.ref_video_1",
+     "shape": 7,
+     "type": "IMAGE",
+     "link": null
+    },
+    {
+     "localized_name": "ref_video_audio_0",
+     "name": "ref_video_audios.ref_video_audio_0",
+     "shape": 7,
+     "type": "AUDIO",
+     "link": 96
+    },
+    {
+     "localized_name": "ref_video_audio_1",
+     "name": "ref_video_audios.ref_video_audio_1",
+     "shape": 7,
+     "type": "AUDIO",
+     "link": null
+    },
+    {
+     "localized_name": "ref_audio_0",
+     "name": "ref_audios.ref_audio_0",
+     "shape": 7,
+     "type": "AUDIO",
+     "link": null
+    },
+    {
+     "localized_name": "prompt",
+     "name": "prompt",
+     "type": "STRING",
+     "widget": {
+      "name": "prompt"
+     },
+     "link": 97
+    },
+    {
+     "localized_name": "width",
+     "name": "width",
+     "type": "INT",
+     "widget": {
+      "name": "width"
+     },
+     "link": null
+    },
+    {
+     "localized_name": "height",
+     "name": "height",
+     "type": "INT",
+     "widget": {
+      "name": "height"
+     },
+     "link": null
+    },
+    {
+     "localized_name": "length",
+     "name": "length",
+     "type": "INT",
+     "widget": {
+      "name": "length"
+     },
+     "link": 98
+    },
+    {
+     "localized_name": "ref_image_size",
+     "name": "ref_image_size",
+     "type": "COMBO",
+     "widget": {
+      "name": "ref_image_size"
+     },
+     "link": null
+    }
+   ],
+   "outputs": [
+    {
+     "localized_name": "positive",
+     "name": "positive",
+     "type": "CONDITIONING",
+     "links": [
+      102,
+      108
+     ],
+     "slot_index": 0
+    },
+    {
+     "localized_name": "LATENT",
+     "name": "LATENT",
+     "type": "LATENT",
+     "links": [
+      78,
+      103
+     ],
+     "slot_index": 1
+    }
+   ],
+   "title": "H3 Reference to Video (pass 1 at 0.3 MP)",
+   "properties": {
+    "cnr_id": "comfy-core",
+    "ver": "0.37.0",
+    "ue_properties": {
+     "widget_ue_connectable": {},
+     "input_ue_unconnectable": {}
+    },
+    "Node name for S&R": "MiniMaxH3ReferenceToVideo",
+    "__skeba_tags": {
+     "inputs": [],
+     "outputs": []
+    }
+   },
+   "widgets_values": [
+    "",
+    736,
+    416,
+    209,
+    "max"
+   ],
+   "_meta": {
+    "skeba_tags": {
+     "inputs": [],
+     "outputs": []
+    }
+   },
+   "extensions": {
+    "_meta": {
+     "skeba_tags": {
+      "inputs": [],
+      "outputs": []
+     }
+    }
+   }
+  },
+  {
+   "id": 21,
+   "type": "RandomNoise",
+   "pos": [
+    2520,
+    534
+   ],
+   "size": [
+    340,
+    82
+   ],
+   "flags": {},
+   "order": 7,
+   "mode": 0,
+   "inputs": [
+    {
+     "localized_name": "noise_seed",
+     "name": "noise_seed",
+     "type": "INT",
+     "widget": {
+      "name": "noise_seed"
+     },
+     "link": 99
+    }
+   ],
+   "outputs": [
+    {
+     "localized_name": "NOISE",
+     "name": "NOISE",
+     "type": "NOISE",
+     "links": [
+      74
+     ]
+    }
+   ],
+   "title": "Seed (fixed)",
+   "properties": {
+    "cnr_id": "comfy-core",
+    "ver": "0.37.0",
+    "ue_properties": {
+     "widget_ue_connectable": {},
+     "input_ue_unconnectable": {}
+    },
+    "Node name for S&R": "RandomNoise",
+    "__skeba_tags": {
+     "inputs": [],
+     "outputs": []
+    }
+   },
+   "widgets_values": [
+    20260930,
+    "fixed"
+   ],
+   "_meta": {
+    "skeba_tags": {
+     "inputs": [],
+     "outputs": []
+    }
+   },
+   "extensions": {
+    "_meta": {
+     "skeba_tags": {
+      "inputs": [],
+      "outputs": []
+     }
+    }
+   }
+  },
+  {
+   "id": 22,
+   "type": "KSamplerSelect",
+   "pos": [
+    2520,
+    686
+   ],
+   "size": [
+    340,
+    58
+   ],
+   "flags": {},
+   "order": 8,
+   "mode": 0,
+   "inputs": [
+    {
+     "localized_name": "sampler_name",
+     "name": "sampler_name",
+     "type": "COMBO",
+     "widget": {
+      "name": "sampler_name"
+     },
+     "link": null
+    }
+   ],
+   "outputs": [
+    {
+     "localized_name": "SAMPLER",
+     "name": "SAMPLER",
+     "type": "SAMPLER",
+     "links": [
+      76,
+      86
+     ]
+    }
+   ],
+   "title": "Sampler",
+   "properties": {
+    "cnr_id": "comfy-core",
+    "ver": "0.37.0",
+    "ue_properties": {
+     "widget_ue_connectable": {},
+     "input_ue_unconnectable": {}
+    },
+    "Node name for S&R": "KSamplerSelect",
+    "__skeba_tags": {
+     "inputs": [],
+     "outputs": []
+    }
+   },
+   "widgets_values": [
+    "er_sde"
+   ],
+   "_meta": {
+    "skeba_tags": {
+     "inputs": [],
+     "outputs": []
+    }
+   },
+   "extensions": {
+    "_meta": {
+     "skeba_tags": {
+      "inputs": [],
+      "outputs": []
+     }
+    }
+   }
+  },
+  {
+   "id": 23,
+   "type": "BasicScheduler",
+   "pos": [
+    2520,
+    814
+   ],
+   "size": [
+    340,
+    106
+   ],
+   "flags": {},
+   "order": 23,
+   "mode": 0,
+   "inputs": [
+    {
+     "localized_name": "model",
+     "name": "model",
+     "type": "MODEL",
+     "link": 71
+    },
+    {
+     "localized_name": "scheduler",
+     "name": "scheduler",
+     "type": "COMBO",
+     "widget": {
+      "name": "scheduler"
+     },
+     "link": null
+    },
+    {
+     "localized_name": "steps",
+     "name": "steps",
+     "type": "INT",
+     "widget": {
+      "name": "steps"
+     },
+     "link": null
+    },
+    {
+     "localized_name": "denoise",
+     "name": "denoise",
+     "type": "FLOAT",
+     "widget": {
+      "name": "denoise"
+     },
+     "link": null
+    }
+   ],
+   "outputs": [
+    {
+     "localized_name": "SIGMAS",
+     "name": "SIGMAS",
+     "type": "SIGMAS",
+     "links": [
+      77
+     ]
+    }
+   ],
+   "title": "Scheduler (8 steps)",
+   "properties": {
+    "cnr_id": "comfy-core",
+    "ver": "0.37.0",
+    "ue_properties": {
+     "widget_ue_connectable": {},
+     "input_ue_unconnectable": {}
+    },
+    "Node name for S&R": "BasicScheduler",
+    "__skeba_tags": {
+     "inputs": [],
+     "outputs": []
+    }
+   },
+   "widgets_values": [
+    "beta",
+    8,
+    1
+   ],
+   "_meta": {
+    "skeba_tags": {
+     "inputs": [],
+     "outputs": []
+    }
+   },
+   "extensions": {
+    "_meta": {
+     "skeba_tags": {
+      "inputs": [],
+      "outputs": []
+     }
+    }
+   }
+  },
+  {
+   "id": 24,
+   "type": "BasicGuider",
+   "pos": [
+    2520,
+    990
+   ],
+   "size": [
+    340,
+    46
+   ],
+   "flags": {},
+   "order": 27,
+   "mode": 0,
+   "inputs": [
+    {
+     "localized_name": "model",
+     "name": "model",
+     "type": "MODEL",
+     "link": 72
+    },
+    {
+     "localized_name": "conditioning",
+     "name": "conditioning",
+     "type": "CONDITIONING",
+     "link": 107
+    }
+   ],
+   "outputs": [
+    {
+     "localized_name": "GUIDER",
+     "name": "GUIDER",
+     "type": "GUIDER",
+     "links": [
+      75
+     ]
+    }
+   ],
+   "title": "Guider",
+   "properties": {
+    "cnr_id": "comfy-core",
+    "ver": "0.37.0",
+    "ue_properties": {
+     "widget_ue_connectable": {},
+     "input_ue_unconnectable": {}
+    },
+    "Node name for S&R": "BasicGuider",
+    "__skeba_tags": {
+     "inputs": [],
+     "outputs": []
+    }
+   },
+   "_meta": {
+    "skeba_tags": {
+     "inputs": [],
+     "outputs": []
+    }
+   },
+   "extensions": {
+    "_meta": {
+     "skeba_tags": {
+      "inputs": [],
+      "outputs": []
+     }
+    }
+   }
+  },
+  {
+   "id": 25,
+   "type": "SamplerCustomAdvanced",
+   "pos": [
+    2520,
+    1106
+   ],
+   "size": [
+    340,
+    106
+   ],
+   "flags": {},
+   "order": 28,
+   "mode": 0,
+   "inputs": [
+    {
+     "localized_name": "noise",
+     "name": "noise",
+     "type": "NOISE",
+     "link": 74
+    },
+    {
+     "localized_name": "guider",
+     "name": "guider",
+     "type": "GUIDER",
+     "link": 75
+    },
+    {
+     "localized_name": "sampler",
+     "name": "sampler",
+     "type": "SAMPLER",
+     "link": 76
+    },
+    {
+     "localized_name": "sigmas",
+     "name": "sigmas",
+     "type": "SIGMAS",
+     "link": 77
+    },
+    {
+     "localized_name": "latent_image",
+     "name": "latent_image",
+     "type": "LATENT",
+     "link": 78
+    }
+   ],
+   "outputs": [
+    {
+     "localized_name": "output",
+     "name": "output",
+     "type": "LATENT",
+     "links": null
+    },
+    {
+     "localized_name": "denoised_output",
+     "name": "denoised_output",
+     "type": "LATENT",
+     "links": [
+      79
+     ]
+    }
+   ],
+   "title": "Pass 1 Sample",
+   "properties": {
+    "cnr_id": "comfy-core",
+    "ver": "0.37.0",
+    "ue_properties": {
+     "widget_ue_connectable": {},
+     "input_ue_unconnectable": {}
+    },
+    "Node name for S&R": "SamplerCustomAdvanced",
+    "__skeba_tags": {
+     "inputs": [],
+     "outputs": []
+    }
+   },
+   "_meta": {
+    "skeba_tags": {
+     "inputs": [],
+     "outputs": []
+    }
+   },
+   "extensions": {
+    "_meta": {
+     "skeba_tags": {
+      "inputs": [],
+      "outputs": []
+     }
+    }
+   }
+  },
+  {
+   "id": 26,
+   "type": "LTXVSeparateAVLatent",
+   "pos": [
+    3180,
+    100
+   ],
+   "size": [
+    340,
+    46
+   ],
+   "flags": {},
+   "order": 29,
+   "mode": 0,
+   "inputs": [
+    {
+     "localized_name": "av_latent",
+     "name": "av_latent",
+     "type": "LATENT",
+     "link": 79
+    }
+   ],
+   "outputs": [
+    {
+     "localized_name": "video_latent",
+     "name": "video_latent",
+     "type": "LATENT",
+     "links": [
+      80
+     ]
+    },
+    {
+     "localized_name": "audio_latent",
+     "name": "audio_latent",
+     "type": "LATENT",
+     "links": [
+      82
+     ]
+    }
+   ],
+   "title": "Split Video / Audio Latent",
+   "properties": {
+    "cnr_id": "comfy-core",
+    "ver": "0.37.0",
+    "ue_properties": {
+     "widget_ue_connectable": {},
+     "input_ue_unconnectable": {}
+    },
+    "Node name for S&R": "LTXVSeparateAVLatent",
+    "__skeba_tags": {
+     "inputs": [],
+     "outputs": []
+    }
+   },
+   "_meta": {
+    "skeba_tags": {
+     "inputs": [],
+     "outputs": []
+    }
+   },
+   "extensions": {
+    "_meta": {
+     "skeba_tags": {
+      "inputs": [],
+      "outputs": []
+     }
+    }
+   }
+  },
+  {
+   "id": 27,
+   "type": "MinimaxH3LatentUpscaler3D",
+   "pos": [
+    3180,
+    216
+   ],
+   "size": [
+    340,
+    226
+   ],
+   "flags": {},
+   "order": 30,
+   "mode": 0,
+   "inputs": [
+    {
+     "localized_name": "latent",
+     "name": "latent",
+     "type": "*",
+     "link": 80
+    },
+    {
+     "localized_name": "model_name",
+     "name": "model_name",
+     "type": "COMBO",
+     "widget": {
+      "name": "model_name"
+     },
+     "link": null
+    },
+    {
+     "localized_name": "mode",
+     "name": "mode",
+     "type": "COMFY_DYNAMICCOMBO_V3",
+     "widget": {
+      "name": "mode"
+     },
+     "link": null
+    },
+    {
+     "localized_name": "megapixels",
+     "name": "mode.megapixels",
+     "type": "FLOAT",
+     "widget": {
+      "name": "mode.megapixels"
+     },
+     "link": null
+    },
+    {
+     "localized_name": "align",
+     "name": "align",
+     "type": "INT",
+     "widget": {
+      "name": "align"
+     },
+     "link": null
+    },
+    {
+     "localized_name": "enable_temporal_chunking",
+     "name": "enable_temporal_chunking",
+     "type": "BOOLEAN",
+     "widget": {
+      "name": "enable_temporal_chunking"
+     },
+     "link": null
+    },
+    {
+     "localized_name": "force_unload",
+     "name": "force_unload",
+     "type": "BOOLEAN",
+     "widget": {
+      "name": "force_unload"
+     },
+     "link": null
+    },
+    {
+     "localized_name": "device",
+     "name": "device",
+     "type": "COMBO",
+     "widget": {
+      "name": "device"
+     },
+     "link": null
+    },
+    {
+     "localized_name": "precision",
+     "name": "precision",
+     "type": "COMBO",
+     "widget": {
+      "name": "precision"
+     },
+     "link": null
+    }
+   ],
+   "outputs": [
+    {
+     "localized_name": "latent",
+     "name": "latent",
+     "type": "*",
+     "links": [
+      81
+     ]
+    }
+   ],
+   "title": "H3 Latent Upscale to 1 MP",
+   "properties": {
+    "aux_id": "LBH-123-AI/Comfyui_Minimax_h3_latent_Upscaler",
+    "ver": "40316cf008b2fd8663263270669eb4da23f89d2c",
+    "ue_properties": {
+     "widget_ue_connectable": {},
+     "input_ue_unconnectable": {}
+    },
+    "Node name for S&R": "MinimaxH3LatentUpscaler3D",
+    "__skeba_tags": {
+     "inputs": [],
+     "outputs": []
+    }
+   },
+   "widgets_values": [
+    "minimax_h3_latent_upscaler_3d_conv_v1_fp16.safetensors",
+    "megapixels",
+    1,
+    32,
+    true,
+    false,
+    "cuda",
+    "fp16"
+   ],
+   "_meta": {
+    "skeba_tags": {
+     "inputs": [],
+     "outputs": []
+    }
+   },
+   "extensions": {
+    "_meta": {
+     "skeba_tags": {
+      "inputs": [],
+      "outputs": []
+     }
+    }
+   }
+  },
+  {
+   "id": 28,
+   "type": "LTXVConcatAVLatent",
+   "pos": [
+    3180,
+    512
+   ],
+   "size": [
+    340,
+    46
+   ],
+   "flags": {},
+   "order": 31,
+   "mode": 0,
+   "inputs": [
+    {
+     "localized_name": "video_latent",
+     "name": "video_latent",
+     "type": "LATENT",
+     "link": 81
+    },
+    {
+     "localized_name": "audio_latent",
+     "name": "audio_latent",
+     "type": "LATENT",
+     "link": 82
+    }
+   ],
+   "outputs": [
+    {
+     "localized_name": "latent",
+     "name": "latent",
+     "type": "LATENT",
+     "links": [
+      88,
+      109
+     ],
+     "slot_index": 0
+    }
+   ],
+   "title": "Rejoin Video / Audio Latent",
+   "properties": {
+    "cnr_id": "comfy-core",
+    "ver": "0.37.0",
+    "ue_properties": {
+     "widget_ue_connectable": {},
+     "input_ue_unconnectable": {}
+    },
+    "Node name for S&R": "LTXVConcatAVLatent",
+    "__skeba_tags": {
+     "inputs": [],
+     "outputs": []
+    }
+   },
+   "_meta": {
+    "skeba_tags": {
+     "inputs": [],
+     "outputs": []
+    }
+   },
+   "extensions": {
+    "_meta": {
+     "skeba_tags": {
+      "inputs": [],
+      "outputs": []
+     }
+    }
+   }
+  },
+  {
+   "id": 29,
+   "type": "RandomNoise",
+   "pos": [
+    3180,
+    628
+   ],
+   "size": [
+    340,
+    82
+   ],
+   "flags": {},
+   "order": 9,
+   "mode": 0,
+   "inputs": [
+    {
+     "localized_name": "noise_seed",
+     "name": "noise_seed",
+     "type": "INT",
+     "widget": {
+      "name": "noise_seed"
+     },
+     "link": null
+    }
+   ],
+   "outputs": [
+    {
+     "localized_name": "NOISE",
+     "name": "NOISE",
+     "type": "NOISE",
+     "links": [
+      84
+     ]
+    }
+   ],
+   "title": "Refine Seed (fixed)",
+   "properties": {
+    "cnr_id": "comfy-core",
+    "ver": "0.37.0",
+    "ue_properties": {
+     "widget_ue_connectable": {},
+     "input_ue_unconnectable": {}
+    },
+    "Node name for S&R": "RandomNoise",
+    "__skeba_tags": {
+     "inputs": [],
+     "outputs": []
+    }
+   },
+   "widgets_values": [
+    444,
+    "fixed"
+   ],
+   "_meta": {
+    "skeba_tags": {
+     "inputs": [],
+     "outputs": []
+    }
+   },
+   "extensions": {
+    "_meta": {
+     "skeba_tags": {
+      "inputs": [],
+      "outputs": []
+     }
+    }
+   }
+  },
+  {
+   "id": 30,
+   "type": "BasicScheduler",
+   "pos": [
+    3180,
+    780
+   ],
+   "size": [
+    340,
+    106
+   ],
+   "flags": {},
+   "order": 24,
+   "mode": 0,
+   "inputs": [
+    {
+     "localized_name": "model",
+     "name": "model",
+     "type": "MODEL",
+     "link": 83
+    },
+    {
+     "localized_name": "scheduler",
+     "name": "scheduler",
+     "type": "COMBO",
+     "widget": {
+      "name": "scheduler"
+     },
+     "link": null
+    },
+    {
+     "localized_name": "steps",
+     "name": "steps",
+     "type": "INT",
+     "widget": {
+      "name": "steps"
+     },
+     "link": null
+    },
+    {
+     "localized_name": "denoise",
+     "name": "denoise",
+     "type": "FLOAT",
+     "widget": {
+      "name": "denoise"
+     },
+     "link": null
+    }
+   ],
+   "outputs": [
+    {
+     "localized_name": "SIGMAS",
+     "name": "SIGMAS",
+     "type": "SIGMAS",
+     "links": [
+      87
+     ]
+    }
+   ],
+   "title": "Refine Scheduler (3 steps, denoise 0.4)",
+   "properties": {
+    "cnr_id": "comfy-core",
+    "ver": "0.37.0",
+    "ue_properties": {
+     "widget_ue_connectable": {},
+     "input_ue_unconnectable": {}
+    },
+    "Node name for S&R": "BasicScheduler",
+    "__skeba_tags": {
+     "inputs": [],
+     "outputs": []
+    }
+   },
+   "widgets_values": [
+    "linear_quadratic",
+    3,
+    0.4
+   ],
+   "_meta": {
+    "skeba_tags": {
+     "inputs": [],
+     "outputs": []
+    }
+   },
+   "extensions": {
+    "_meta": {
+     "skeba_tags": {
+      "inputs": [],
+      "outputs": []
+     }
+    }
+   }
+  },
+  {
+   "id": 31,
+   "type": "SamplerCustomAdvanced",
+   "pos": [
+    3180,
+    956
+   ],
+   "size": [
+    340,
+    106
+   ],
+   "flags": {},
+   "order": 32,
+   "mode": 0,
+   "inputs": [
+    {
+     "localized_name": "noise",
+     "name": "noise",
+     "type": "NOISE",
+     "link": 84
+    },
+    {
+     "localized_name": "guider",
+     "name": "guider",
+     "type": "GUIDER",
+     "link": 115
+    },
+    {
+     "localized_name": "sampler",
+     "name": "sampler",
+     "type": "SAMPLER",
+     "link": 86
+    },
+    {
+     "localized_name": "sigmas",
+     "name": "sigmas",
+     "type": "SIGMAS",
+     "link": 87
+    },
+    {
+     "localized_name": "latent_image",
+     "name": "latent_image",
+     "type": "LATENT",
+     "link": 88
+    }
+   ],
+   "outputs": [
+    {
+     "localized_name": "output",
+     "name": "output",
+     "type": "LATENT",
+     "links": [
+      89
+     ]
+    },
+    {
+     "localized_name": "denoised_output",
+     "name": "denoised_output",
+     "type": "LATENT",
+     "links": null
+    }
+   ],
+   "title": "Pass 2 Refine",
+   "properties": {
+    "cnr_id": "comfy-core",
+    "ver": "0.37.0",
+    "ue_properties": {
+     "widget_ue_connectable": {},
+     "input_ue_unconnectable": {}
+    },
+    "Node name for S&R": "SamplerCustomAdvanced",
+    "__skeba_tags": {
+     "inputs": [],
+     "outputs": []
+    }
+   },
+   "_meta": {
+    "skeba_tags": {
+     "inputs": [],
+     "outputs": []
+    }
+   },
+   "extensions": {
+    "_meta": {
+     "skeba_tags": {
+      "inputs": [],
+      "outputs": []
+     }
+    }
+   }
+  },
+  {
+   "id": 32,
+   "type": "VAEDecode",
+   "pos": [
+    3620,
+    100
+   ],
+   "size": [
+    340,
+    46
+   ],
+   "flags": {},
+   "order": 33,
+   "mode": 0,
+   "inputs": [
+    {
+     "localized_name": "samples",
+     "name": "samples",
+     "type": "LATENT",
+     "link": 89
+    },
+    {
+     "localized_name": "vae",
+     "name": "vae",
+     "type": "VAE",
+     "link": 90
+    }
+   ],
+   "outputs": [
+    {
+     "localized_name": "IMAGE",
+     "name": "IMAGE",
+     "type": "IMAGE",
+     "links": [
+      91
+     ]
+    }
+   ],
+   "title": "Decode Video (H3 audio discarded)",
+   "properties": {
+    "cnr_id": "comfy-core",
+    "ver": "0.37.0",
+    "ue_properties": {
+     "widget_ue_connectable": {},
+     "input_ue_unconnectable": {}
+    },
+    "Node name for S&R": "VAEDecode",
+    "__skeba_tags": {
+     "inputs": [],
+     "outputs": []
+    }
+   },
+   "_meta": {
+    "skeba_tags": {
+     "inputs": [],
+     "outputs": []
+    }
+   },
+   "extensions": {
+    "_meta": {
+     "skeba_tags": {
+      "inputs": [],
+      "outputs": []
+     }
+    }
+   }
+  },
+  {
+   "id": 33,
+   "type": "ImageScale",
+   "pos": [
+    3620,
+    216
+   ],
+   "size": [
+    340,
+    130
+   ],
+   "flags": {},
+   "order": 34,
+   "mode": 0,
+   "inputs": [
+    {
+     "localized_name": "image",
+     "name": "image",
+     "type": "IMAGE",
+     "link": 91
+    },
+    {
+     "localized_name": "upscale_method",
+     "name": "upscale_method",
+     "type": "COMBO",
+     "widget": {
+      "name": "upscale_method"
+     },
+     "link": null
+    },
+    {
+     "localized_name": "width",
+     "name": "width",
+     "type": "INT",
+     "widget": {
+      "name": "width"
+     },
+     "link": 100
+    },
+    {
+     "localized_name": "height",
+     "name": "height",
+     "type": "INT",
+     "widget": {
+      "name": "height"
+     },
+     "link": 101
+    },
+    {
+     "localized_name": "crop",
+     "name": "crop",
+     "type": "COMBO",
+     "widget": {
+      "name": "crop"
+     },
+     "link": null
+    }
+   ],
+   "outputs": [
+    {
+     "localized_name": "IMAGE",
+     "name": "IMAGE",
+     "type": "IMAGE",
+     "links": [
+      116,
+      122
+     ],
+     "slot_index": 0
+    }
+   ],
+   "title": "Resize to Source Size",
+   "properties": {
+    "cnr_id": "comfy-core",
+    "ver": "0.37.0",
+    "ue_properties": {
+     "widget_ue_connectable": {},
+     "input_ue_unconnectable": {}
+    },
+    "Node name for S&R": "ImageScale",
+    "__skeba_tags": {
+     "inputs": [],
+     "outputs": []
+    }
+   },
+   "widgets_values": [
+    "lanczos",
+    1920,
+    1080,
+    "disabled"
+   ],
+   "_meta": {
+    "skeba_tags": {
+     "inputs": [],
+     "outputs": []
+    }
+   },
+   "extensions": {
+    "_meta": {
+     "skeba_tags": {
+      "inputs": [],
+      "outputs": []
+     }
+    }
+   }
+  },
+  {
+   "id": 36,
+   "type": "Note",
+   "pos": [
+    1140,
+    628
+   ],
+   "size": [
+    340,
+    520
+   ],
+   "flags": {},
+   "order": 10,
+   "mode": 0,
+   "inputs": [],
+   "outputs": [],
+   "title": "About this workflow",
+   "properties": {},
+   "widgets_values": [
+    "Swap - Character Replace: whole-video character replacement with MiniMax H3, through the SeamStitch Swap nodes. See the SeamStitch README, section \"SeamStitch Swap\".\n\nSet first: on the Planner's strip, load your video (a new job is named after it); in group 1, your character sheet.\n\nSwap \u00b7 Plan: SeamStitch Swap Planner. The strip: the source with its cuts, splits and chunks, the mask row and the prompt row. Its buttons set the run and queue it: detect + plan, draft prompts, mark, render pending, a chunk's render / re-roll, assemble. Pins come from the neighbours' takes at execution.\n\nSwap Render \u00b7 Character Replace: H3 Ref2VA pass 1 at 0.3 MP, then the 1 MP refine and a resize to the source size. Its inputs come from the Planner: images / audio (on H3's 24 fps clock) / prompt / length / seed / width / height, the pins in both passes (SeamStitch MiniMax Guides, clip), and the chunk's mark option (Swap Option, default on: SAM3 paints the source person before H3 sees the guide).\n\nSwap Score (SAM3): the output's person mask, for the Take's scores.\nSwap \u00b7 Take: saves the take (FFV1 + FLAC, source fps, original audio), its lineage, masks, scores and review clip.\nSwap \u00b7 Assemble: runs on an assemble run only.\nSwap Mark (SAM3): a mark run tracks and caches the source person up front.\nSwap \u00b7 Draft: drafts the subject (from the sheet) and each chunk's prompt (QwenVL; Omni + faster-whisper for the dialogue).\n\nFree ComfyUI's memory before each render: render lengths over 209 frames failed at the refine on 64 GB of system RAM."
+   ],
+   "color": "#432",
+   "bgcolor": "#653"
+  },
+  {
+   "id": 37,
+   "type": "SeamStitchSwapPlanner",
+   "pos": [
+    20,
+    100
+   ],
+   "size": [
+    1040,
+    1180
+   ],
+   "flags": {},
+   "order": 0,
+   "mode": 0,
+   "inputs": [
+    {
+     "name": "job",
+     "type": "STRING",
+     "widget": {
+      "name": "job"
+     },
+     "link": null
+    },
+    {
+     "name": "source",
+     "type": "STRING",
+     "widget": {
+      "name": "source"
+     },
+     "link": null
+    },
+    {
+     "name": "target_render_frames",
+     "type": "INT",
+     "widget": {
+      "name": "target_render_frames"
+     },
+     "link": null
+    },
+    {
+     "name": "overlap_frames",
+     "type": "INT",
+     "widget": {
+      "name": "overlap_frames"
+     },
+     "link": null
+    },
+    {
+     "name": "anchor_frames",
+     "type": "INT",
+     "widget": {
+      "name": "anchor_frames"
+     },
+     "link": null
+    },
+    {
+     "name": "floor_frames",
+     "type": "INT",
+     "widget": {
+      "name": "floor_frames"
+     },
+     "link": null
+    },
+    {
+     "name": "ceiling_frames",
+     "type": "INT",
+     "widget": {
+      "name": "ceiling_frames"
+     },
+     "link": null
+    },
+    {
+     "name": "conform_to_24fps",
+     "type": "BOOLEAN",
+     "widget": {
+      "name": "conform_to_24fps"
+     },
+     "link": null
+    },
+    {
+     "name": "run",
+     "type": "STRING",
+     "widget": {
+      "name": "run"
+     },
+     "link": null
+    },
+    {
+     "name": "ui_state",
+     "type": "STRING",
+     "widget": {
+      "name": "ui_state"
+     },
+     "link": null
+    }
+   ],
+   "outputs": [
+    {
+     "name": "chunk",
+     "type": "SEAMSTITCH_SWAP_CHUNK",
+     "links": [
+      121
+     ],
+     "slot_index": 0
+    },
+    {
+     "name": "images",
+     "type": "IMAGE",
+     "links": [
+      92,
+      93
+     ],
+     "slot_index": 1
+    },
+    {
+     "name": "audio",
+     "type": "AUDIO",
+     "links": [
+      96
+     ],
+     "slot_index": 2
+    },
+    {
+     "name": "prompt",
+     "type": "STRING",
+     "links": [
+      97
+     ],
+     "slot_index": 3
+    },
+    {
+     "name": "seed",
+     "type": "INT",
+     "links": [
+      99
+     ],
+     "slot_index": 4
+    },
+    {
+     "name": "length",
+     "type": "INT",
+     "links": [
+      98
+     ],
+     "slot_index": 5
+    },
+    {
+     "name": "start_pins",
+     "type": "IMAGE",
+     "links": [
+      105,
+      111
+     ],
+     "slot_index": 6
+    },
+    {
+     "name": "end_pins",
+     "type": "IMAGE",
+     "links": [
+      106,
+      112
+     ],
+     "slot_index": 7
+    },
+    {
+     "name": "width",
+     "type": "INT",
+     "links": [
+      100
+     ],
+     "slot_index": 8
+    },
+    {
+     "name": "height",
+     "type": "INT",
+     "links": [
+      101
+     ],
+     "slot_index": 9
+    },
+    {
+     "name": "frame_rate",
+     "type": "INT",
+     "links": []
+    },
+    {
+     "name": "source_frame_rate",
+     "type": "INT",
+     "links": []
+    },
+    {
+     "name": "options",
+     "type": "STRING",
+     "links": [
+      94
+     ],
+     "slot_index": 12
+    },
+    {
+     "name": "draft_plan",
+     "type": "STRING",
+     "links": [
+      144
+     ],
+     "slot_index": 13
+    },
+    {
+     "name": "assemble_plan",
+     "type": "STRING",
+     "links": [
+      126
+     ],
+     "slot_index": 14
+    },
+    {
+     "name": "mark_chunk",
+     "type": "SEAMSTITCH_SWAP_MARK",
+     "links": [
+      141
+     ],
+     "slot_index": 15
+    },
+    {
+     "name": "mark_images",
+     "type": "IMAGE",
+     "links": [
+      132
+     ],
+     "slot_index": 16
+    },
+    {
+     "name": "source_mask",
+     "type": "MASK",
+     "links": [
+      128
+     ],
+     "slot_index": 17
+    },
+    {
+     "name": "has_source_mask",
+     "type": "BOOLEAN",
+     "links": [
+      127
+     ],
+     "slot_index": 18
+    }
+   ],
+   "properties": {
+    "Node name for S&R": "SeamStitchSwapPlanner"
+   },
+   "widgets_values": [
+    "",
+    "",
+    209,
+    12,
+    5,
+    124,
+    209,
+    true,
+    "",
+    ""
+   ],
+   "title": "Swap Planner"
+  },
+  {
+   "id": 38,
+   "type": "SeamStitchSwapOption",
+   "pos": [
+    1580,
+    1640
+   ],
+   "size": [
+    300,
+    130
+   ],
+   "flags": {},
+   "order": 0,
+   "mode": 0,
+   "inputs": [
+    {
+     "name": "options",
+     "type": "STRING",
+     "link": 94
+    },
+    {
+     "name": "key",
+     "type": "STRING",
+     "widget": {
+      "name": "key"
+     },
+     "link": null
+    },
+    {
+     "name": "default",
+     "type": "STRING",
+     "widget": {
+      "name": "default"
+     },
+     "link": null
+    }
+   ],
+   "outputs": [
+    {
+     "name": "boolean",
+     "type": "BOOLEAN",
+     "links": [
+      95
+     ],
+     "slot_index": 0
+    },
+    {
+     "name": "int",
+     "type": "INT",
+     "links": []
+    },
+    {
+     "name": "float",
+     "type": "FLOAT",
+     "links": []
+    },
+    {
+     "name": "string",
+     "type": "STRING",
+     "links": []
+    }
+   ],
+   "properties": {
+    "Node name for S&R": "SeamStitchSwapOption"
+   },
+   "widgets_values": [
+    "mark",
+    "true"
+   ],
+   "title": "Chunk option: mark (Swap Option)"
+  },
+  {
+   "id": 39,
+   "type": "SeamStitchMiniMaxGuides",
+   "pos": [
+    2520,
+    1300
+   ],
+   "size": [
+    360,
+    160
+   ],
+   "flags": {},
+   "order": 0,
+   "mode": 0,
+   "inputs": [
+    {
+     "name": "positive",
+     "type": "CONDITIONING",
+     "link": 102
+    },
+    {
+     "name": "latent",
+     "type": "LATENT",
+     "link": 103
+    },
+    {
+     "name": "vae",
+     "type": "VAE",
+     "link": 104
+    },
+    {
+     "name": "start_context",
+     "type": "IMAGE",
+     "link": 105
+    },
+    {
+     "name": "end_context",
+     "type": "IMAGE",
+     "link": 106
+    },
+    {
+     "name": "audio_vae",
+     "type": "VAE",
+     "link": null
+    },
+    {
+     "name": "anchor_mode",
+     "type": "COMBO",
+     "widget": {
+      "name": "anchor_mode"
+     },
+     "link": null
+    }
+   ],
+   "outputs": [
+    {
+     "name": "positive",
+     "type": "CONDITIONING",
+     "links": [
+      107
+     ],
+     "slot_index": 0
+    }
+   ],
+   "properties": {
+    "Node name for S&R": "SeamStitchMiniMaxGuides"
+   },
+   "widgets_values": [
+    "clip"
+   ],
+   "title": "Pins, pass 1 (SeamStitch MiniMax Guides, clip)"
+  },
+  {
+   "id": 40,
+   "type": "SeamStitchMiniMaxGuides",
+   "pos": [
+    3180,
+    1150
+   ],
+   "size": [
+    360,
+    160
+   ],
+   "flags": {},
+   "order": 0,
+   "mode": 0,
+   "inputs": [
+    {
+     "name": "positive",
+     "type": "CONDITIONING",
+     "link": 108
+    },
+    {
+     "name": "latent",
+     "type": "LATENT",
+     "link": 109
+    },
+    {
+     "name": "vae",
+     "type": "VAE",
+     "link": 110
+    },
+    {
+     "name": "start_context",
+     "type": "IMAGE",
+     "link": 111
+    },
+    {
+     "name": "end_context",
+     "type": "IMAGE",
+     "link": 112
+    },
+    {
+     "name": "audio_vae",
+     "type": "VAE",
+     "link": null
+    },
+    {
+     "name": "anchor_mode",
+     "type": "COMBO",
+     "widget": {
+      "name": "anchor_mode"
+     },
+     "link": null
+    }
+   ],
+   "outputs": [
+    {
+     "name": "positive",
+     "type": "CONDITIONING",
+     "links": [
+      114
+     ],
+     "slot_index": 0
+    }
+   ],
+   "properties": {
+    "Node name for S&R": "SeamStitchMiniMaxGuides"
+   },
+   "widgets_values": [
+    "clip"
+   ],
+   "title": "Pins, refine (on the upscaled latent)"
+  },
+  {
+   "id": 41,
+   "type": "BasicGuider",
+   "pos": [
+    3180,
+    1340
+   ],
+   "size": [
+    300,
+    60
+   ],
+   "flags": {},
+   "order": 0,
+   "mode": 0,
+   "inputs": [
+    {
+     "name": "model",
+     "type": "MODEL",
+     "link": 113
+    },
+    {
+     "name": "conditioning",
+     "type": "CONDITIONING",
+     "link": 114
+    }
+   ],
+   "outputs": [
+    {
+     "name": "GUIDER",
+     "type": "GUIDER",
+     "links": [
+      115
+     ],
+     "slot_index": 0
+    }
+   ],
+   "properties": {
+    "Node name for S&R": "BasicGuider"
+   },
+   "widgets_values": null,
+   "title": "Refine Guider (pinned)"
+  },
+  {
+   "id": 42,
+   "type": "ImageScaleToTotalPixels",
+   "pos": [
+    4080,
+    100
+   ],
+   "size": [
+    300,
+    110
+   ],
+   "flags": {},
+   "order": 0,
+   "mode": 0,
+   "inputs": [
+    {
+     "name": "image",
+     "type": "IMAGE",
+     "link": 116
+    },
+    {
+     "name": "upscale_method",
+     "type": "COMBO",
+     "widget": {
+      "name": "upscale_method"
+     },
+     "link": null
+    },
+    {
+     "name": "megapixels",
+     "type": "FLOAT",
+     "widget": {
+      "name": "megapixels"
+     },
+     "link": null
+    },
+    {
+     "name": "resolution_steps",
+     "type": "INT",
+     "widget": {
+      "name": "resolution_steps"
+     },
+     "link": null
+    }
+   ],
+   "outputs": [
+    {
+     "name": "IMAGE",
+     "type": "IMAGE",
+     "links": [
+      117
+     ],
+     "slot_index": 0
+    }
+   ],
+   "properties": {
+    "Node name for S&R": "ImageScaleToTotalPixels"
+   },
+   "widgets_values": [
+    "bilinear",
+    1,
+    1
+   ],
+   "title": "Scale Output to 1 MP for SAM3"
+  },
+  {
+   "id": 43,
+   "type": "SAM3_VideoTrack",
+   "pos": [
+    4080,
+    260
+   ],
+   "size": [
+    300,
+    180
+   ],
+   "flags": {},
+   "order": 0,
+   "mode": 0,
+   "inputs": [
+    {
+     "name": "images",
+     "type": "IMAGE",
+     "link": 117
+    },
+    {
+     "name": "model",
+     "type": "MODEL",
+     "link": 118
+    },
+    {
+     "name": "initial_mask",
+     "type": "MASK",
+     "link": null
+    },
+    {
+     "name": "conditioning",
+     "type": "CONDITIONING",
+     "link": 119
+    },
+    {
+     "name": "detection_threshold",
+     "type": "FLOAT",
+     "widget": {
+      "name": "detection_threshold"
+     },
+     "link": null
+    },
+    {
+     "name": "max_objects",
+     "type": "INT",
+     "widget": {
+      "name": "max_objects"
+     },
+     "link": null
+    },
+    {
+     "name": "detect_interval",
+     "type": "INT",
+     "widget": {
+      "name": "detect_interval"
+     },
+     "link": null
+    }
+   ],
+   "outputs": [
+    {
+     "name": "track_data",
+     "type": "SAM3_TRACK_DATA",
+     "links": [
+      120
+     ],
+     "slot_index": 0
+    }
+   ],
+   "properties": {
+    "Node name for S&R": "SAM3_VideoTrack"
+   },
+   "widgets_values": [
+    0.5,
+    1,
+    1
+   ],
+   "title": "SAM3 Track Output"
+  },
+  {
+   "id": 44,
+   "type": "SAM3_TrackToMask",
+   "pos": [
+    4080,
+    490
+   ],
+   "size": [
+    300,
+    80
+   ],
+   "flags": {},
+   "order": 0,
+   "mode": 0,
+   "inputs": [
+    {
+     "name": "track_data",
+     "type": "SAM3_TRACK_DATA",
+     "link": 120
+    },
+    {
+     "name": "object_indices",
+     "type": "STRING",
+     "widget": {
+      "name": "object_indices"
+     },
+     "link": null
+    }
+   ],
+   "outputs": [
+    {
+     "name": "masks",
+     "type": "MASK",
+     "links": [
+      124
+     ],
+     "slot_index": 0
+    }
+   ],
+   "properties": {
+    "Node name for S&R": "SAM3_TrackToMask"
+   },
+   "widgets_values": [
+    ""
+   ],
+   "title": "Output Person Mask"
+  },
+  {
+   "id": 45,
+   "type": "SeamStitchSwapTake",
+   "pos": [
+    4480,
+    100
+   ],
+   "size": [
+    560,
+    640
+   ],
+   "flags": {},
+   "order": 0,
+   "mode": 0,
+   "inputs": [
+    {
+     "name": "chunk",
+     "type": "SEAMSTITCH_SWAP_CHUNK",
+     "link": 121
+    },
+    {
+     "name": "images",
+     "type": "IMAGE",
+     "link": 122
+    },
+    {
+     "name": "source_mask",
+     "type": "MASK",
+     "link": 131
+    },
+    {
+     "name": "output_mask",
+     "type": "MASK",
+     "link": 124
+    },
+    {
+     "name": "marked_guide",
+     "type": "IMAGE",
+     "link": 125
+    },
+    {
+     "name": "take_codec",
+     "type": "COMBO",
+     "widget": {
+      "name": "take_codec"
+     },
+     "link": null
+    },
+    {
+     "name": "crf",
+     "type": "INT",
+     "widget": {
+      "name": "crf"
+     },
+     "link": null
+    },
+    {
+     "name": "score",
+     "type": "BOOLEAN",
+     "widget": {
+      "name": "score"
+     },
+     "link": null
+    },
+    {
+     "name": "mouth_sync",
+     "type": "BOOLEAN",
+     "widget": {
+      "name": "mouth_sync"
+     },
+     "link": null
+    },
+    {
+     "name": "review_clip",
+     "type": "BOOLEAN",
+     "widget": {
+      "name": "review_clip"
+     },
+     "link": null
+    }
+   ],
+   "outputs": [
+    {
+     "name": "take_path",
+     "type": "STRING",
+     "links": []
+    },
+    {
+     "name": "take_id",
+     "type": "STRING",
+     "links": []
+    },
+    {
+     "name": "report",
+     "type": "STRING",
+     "links": []
+    }
+   ],
+   "properties": {
+    "Node name for S&R": "SeamStitchSwapTake"
+   },
+   "widgets_values": [
+    "lossless (ffv1)",
+    12,
+    true,
+    true,
+    true
+   ],
+   "title": "Swap Take"
+  },
+  {
+   "id": 46,
+   "type": "SeamStitchSwapAssemble",
+   "pos": [
+    4480,
+    860
+   ],
+   "size": [
+    420,
+    260
+   ],
+   "flags": {},
+   "order": 0,
+   "mode": 0,
+   "inputs": [
+    {
+     "name": "assemble_plan",
+     "type": "STRING",
+     "widget": {
+      "name": "assemble_plan"
+     },
+     "link": 126
+    },
+    {
+     "name": "hand_back_frames",
+     "type": "INT",
+     "widget": {
+      "name": "hand_back_frames"
+     },
+     "link": null
+    },
+    {
+     "name": "format",
+     "type": "COMBO",
+     "widget": {
+      "name": "format"
+     },
+     "link": null
+    },
+    {
+     "name": "crf",
+     "type": "INT",
+     "widget": {
+      "name": "crf"
+     },
+     "link": null
+    },
+    {
+     "name": "pix_fmt",
+     "type": "COMBO",
+     "widget": {
+      "name": "pix_fmt"
+     },
+     "link": null
+    },
+    {
+     "name": "filename_prefix",
+     "type": "STRING",
+     "widget": {
+      "name": "filename_prefix"
+     },
+     "link": null
+    },
+    {
+     "name": "pending_chunks",
+     "type": "COMBO",
+     "widget": {
+      "name": "pending_chunks"
+     },
+     "link": null
+    },
+    {
+     "name": "require_reviewed",
+     "type": "BOOLEAN",
+     "widget": {
+      "name": "require_reviewed"
+     },
+     "link": null
+    }
+   ],
+   "outputs": [
+    {
+     "name": "video_path",
+     "type": "STRING",
+     "links": []
+    },
+    {
+     "name": "Filenames",
+     "type": "VHS_FILENAMES",
+     "links": []
+    },
+    {
+     "name": "report",
+     "type": "STRING",
+     "links": []
+    }
+   ],
+   "properties": {
+    "Node name for S&R": "SeamStitchSwapAssemble"
+   },
+   "widgets_values": [
+    "",
+    12,
+    "video/h264-mp4",
+    12,
+    "yuv420p",
+    "swap_%date:yyyyMMdd_hhmmss%",
+    "source frames (preview)",
+    false
+   ],
+   "title": "Swap Assemble"
+  },
+  {
+   "id": 47,
+   "type": "ComfySwitchNode",
+   "pos": [
+    1580,
+    1800
+   ],
+   "size": [
+    300,
+    100
+   ],
+   "flags": {},
+   "order": 0,
+   "mode": 0,
+   "inputs": [
+    {
+     "name": "switch",
+     "type": "BOOLEAN",
+     "link": 127
+    },
+    {
+     "name": "on_false",
+     "type": "*",
+     "link": 129
+    },
+    {
+     "name": "on_true",
+     "type": "*",
+     "link": 128
+    }
+   ],
+   "outputs": [
+    {
+     "name": "output",
+     "type": "*",
+     "links": [
+      130,
+      131
+     ],
+     "slot_index": 0
+    }
+   ],
+   "properties": {
+    "Node name for S&R": "ComfySwitchNode"
+   },
+   "widgets_values": null,
+   "title": "Source mask: cached? (Planner) else track"
+  },
+  {
+   "id": 48,
+   "type": "ImageScaleToTotalPixels",
+   "pos": [
+    40,
+    1400
+   ],
+   "size": [
+    320,
+    110
+   ],
+   "flags": {},
+   "order": 0,
+   "mode": 0,
+   "inputs": [
+    {
+     "name": "image",
+     "type": "IMAGE",
+     "link": 132
+    },
+    {
+     "name": "upscale_method",
+     "type": "COMBO",
+     "widget": {
+      "name": "upscale_method"
+     },
+     "link": null
+    },
+    {
+     "name": "megapixels",
+     "type": "FLOAT",
+     "widget": {
+      "name": "megapixels"
+     },
+     "link": null
+    },
+    {
+     "name": "resolution_steps",
+     "type": "INT",
+     "widget": {
+      "name": "resolution_steps"
+     },
+     "link": null
+    }
+   ],
+   "outputs": [
+    {
+     "name": "IMAGE",
+     "type": "IMAGE",
+     "links": [
+      133,
+      137,
+      138
+     ],
+     "slot_index": 0
+    }
+   ],
+   "properties": {
+    "Node name for S&R": "ImageScaleToTotalPixels"
+   },
+   "widgets_values": [
+    "bilinear",
+    1,
+    1
+   ],
+   "title": "Scale Source to 1 MP for SAM3 (mark run)"
+  },
+  {
+   "id": 49,
+   "type": "SAM3_VideoTrack",
+   "pos": [
+    400,
+    1400
+   ],
+   "size": [
+    300,
+    180
+   ],
+   "flags": {},
+   "order": 0,
+   "mode": 0,
+   "inputs": [
+    {
+     "name": "images",
+     "type": "IMAGE",
+     "link": 133
+    },
+    {
+     "name": "model",
+     "type": "MODEL",
+     "link": 134
+    },
+    {
+     "name": "initial_mask",
+     "type": "MASK",
+     "link": null
+    },
+    {
+     "name": "conditioning",
+     "type": "CONDITIONING",
+     "link": 135
+    },
+    {
+     "name": "detection_threshold",
+     "type": "FLOAT",
+     "widget": {
+      "name": "detection_threshold"
+     },
+     "link": null
+    },
+    {
+     "name": "max_objects",
+     "type": "INT",
+     "widget": {
+      "name": "max_objects"
+     },
+     "link": null
+    },
+    {
+     "name": "detect_interval",
+     "type": "INT",
+     "widget": {
+      "name": "detect_interval"
+     },
+     "link": null
+    }
+   ],
+   "outputs": [
+    {
+     "name": "track_data",
+     "type": "SAM3_TRACK_DATA",
+     "links": [
+      136
+     ],
+     "slot_index": 0
+    }
+   ],
+   "properties": {
+    "Node name for S&R": "SAM3_VideoTrack"
+   },
+   "widgets_values": [
+    0.5,
+    1,
+    1
+   ],
+   "title": "SAM3 Track Source (mark run)"
+  },
+  {
+   "id": 50,
+   "type": "SAM3_TrackToMask",
+   "pos": [
+    400,
+    1640
+   ],
+   "size": [
+    300,
+    80
+   ],
+   "flags": {},
+   "order": 0,
+   "mode": 0,
+   "inputs": [
+    {
+     "name": "track_data",
+     "type": "SAM3_TRACK_DATA",
+     "link": 136
+    },
+    {
+     "name": "object_indices",
+     "type": "STRING",
+     "widget": {
+      "name": "object_indices"
+     },
+     "link": null
+    }
+   ],
+   "outputs": [
+    {
+     "name": "masks",
+     "type": "MASK",
+     "links": [
+      140,
+      142
+     ],
+     "slot_index": 0
+    }
+   ],
+   "properties": {
+    "Node name for S&R": "SAM3_TrackToMask"
+   },
+   "widgets_values": [
+    ""
+   ],
+   "title": "Source Person Mask (mark run)"
+  },
+  {
+   "id": 51,
+   "type": "ImageInvert",
+   "pos": [
+    40,
+    1570
+   ],
+   "size": [
+    240,
+    50
+   ],
+   "flags": {},
+   "order": 0,
+   "mode": 0,
+   "inputs": [
+    {
+     "name": "image",
+     "type": "IMAGE",
+     "link": 137
+    }
+   ],
+   "outputs": [
+    {
+     "name": "IMAGE",
+     "type": "IMAGE",
+     "links": [
+      139
+     ],
+     "slot_index": 0
+    }
+   ],
+   "properties": {
+    "Node name for S&R": "ImageInvert"
+   },
+   "widgets_values": null,
+   "title": "Invert (preview)"
+  },
+  {
+   "id": 52,
+   "type": "ImageCompositeMasked",
+   "pos": [
+    40,
+    1670
+   ],
+   "size": [
+    320,
+    160
+   ],
+   "flags": {},
+   "order": 0,
+   "mode": 0,
+   "inputs": [
+    {
+     "name": "destination",
+     "type": "IMAGE",
+     "link": 138
+    },
+    {
+     "name": "source",
+     "type": "IMAGE",
+     "link": 139
+    },
+    {
+     "name": "mask",
+     "type": "MASK",
+     "link": 140
+    },
+    {
+     "name": "x",
+     "type": "INT",
+     "widget": {
+      "name": "x"
+     },
+     "link": null
+    },
+    {
+     "name": "y",
+     "type": "INT",
+     "widget": {
+      "name": "y"
+     },
+     "link": null
+    },
+    {
+     "name": "resize_source",
+     "type": "BOOLEAN",
+     "widget": {
+      "name": "resize_source"
+     },
+     "link": null
+    }
+   ],
+   "outputs": [
+    {
+     "name": "IMAGE",
+     "type": "IMAGE",
+     "links": [
+      143
+     ],
+     "slot_index": 0
+    }
+   ],
+   "properties": {
+    "Node name for S&R": "ImageCompositeMasked"
+   },
+   "widgets_values": [
+    0,
+    0,
+    false
+   ],
+   "title": "Marked guide (preview)"
+  },
+  {
+   "id": 53,
+   "type": "SeamStitchSwapMask",
+   "pos": [
+    740,
+    1400
+   ],
+   "size": [
+    300,
+    120
+   ],
+   "flags": {},
+   "order": 0,
+   "mode": 0,
+   "inputs": [
+    {
+     "name": "mark_chunk",
+     "type": "SEAMSTITCH_SWAP_MARK",
+     "link": 141
+    },
+    {
+     "name": "mask",
+     "type": "MASK",
+     "link": 142
+    },
+    {
+     "name": "preview",
+     "type": "IMAGE",
+     "link": 143
+    },
+    {
+     "name": "save_preview",
+     "type": "BOOLEAN",
+     "widget": {
+      "name": "save_preview"
+     },
+     "link": null
+    },
+    {
+     "name": "fill_holes",
+     "type": "INT",
+     "widget": {
+      "name": "fill_holes"
+     },
+     "link": null
+    }
+   ],
+   "outputs": [
+    {
+     "name": "mask_id",
+     "type": "STRING",
+     "links": []
+    }
+   ],
+   "properties": {
+    "Node name for S&R": "SeamStitchSwapMask"
+   },
+   "widgets_values": [
+    true,
+    6
+   ],
+   "title": "Swap Mask (cache)"
+  },
+  {
+   "id": 54,
+   "type": "SeamStitchSwapDraft",
+   "pos": [
+    20,
+    1960
+   ],
+   "size": [
+    520,
+    420
+   ],
+   "flags": {},
+   "order": 0,
+   "mode": 0,
+   "inputs": [
+    {
+     "name": "draft_plan",
+     "type": "STRING",
+     "link": 144
+    },
+    {
+     "name": "sheet",
+     "type": "IMAGE",
+     "link": 145
+    },
+    {
+     "name": "chunks",
+     "type": "COMBO",
+     "widget": {
+      "name": "chunks"
+     },
+     "link": null
+    },
+    {
+     "name": "qwen_model",
+     "type": "COMBO",
+     "widget": {
+      "name": "qwen_model"
+     },
+     "link": null
+    },
+    {
+     "name": "quantization",
+     "type": "COMBO",
+     "widget": {
+      "name": "quantization"
+     },
+     "link": null
+    },
+    {
+     "name": "frames_per_chunk",
+     "type": "INT",
+     "widget": {
+      "name": "frames_per_chunk"
+     },
+     "link": null
+    },
+    {
+     "name": "transcribe",
+     "type": "BOOLEAN",
+     "widget": {
+      "name": "transcribe"
+     },
+     "link": null
+    },
+    {
+     "name": "word_timings",
+     "type": "BOOLEAN",
+     "widget": {
+      "name": "word_timings"
+     },
+     "link": null
+    },
+    {
+     "name": "template",
+     "type": "COMBO",
+     "widget": {
+      "name": "template"
+     },
+     "link": null
+    },
+    {
+     "name": "extra_instructions",
+     "type": "STRING",
+     "widget": {
+      "name": "extra_instructions"
+     },
+     "link": null
+    },
+    {
+     "name": "max_tokens",
+     "type": "INT",
+     "widget": {
+      "name": "max_tokens"
+     },
+     "link": null
+    }
+   ],
+   "outputs": [
+    {
+     "name": "report",
+     "type": "STRING",
+     "links": []
+    }
+   ],
+   "properties": {
+    "Node name for S&R": "SeamStitchSwapDraft"
+   },
+   "widgets_values": [
+    "empty only",
+    "Qwen3-VL-8B-Unredacted-MAX (Captioner)",
+    "None (FP16)",
+    24,
+    true,
+    true,
+    "character replace (Ref2VA, timeline)",
+    "",
+    2048
+   ],
+   "title": "Swap Draft Prompts"
+  }
+ ],
+ "links": [
+  [
+   48,
+   3,
+   1,
+   4,
+   0,
+   "CLIP"
+  ],
+  [
+   50,
+   5,
+   0,
+   6,
+   0,
+   "IMAGE"
+  ],
+  [
+   51,
+   3,
+   0,
+   6,
+   1,
+   "MODEL"
+  ],
+  [
+   52,
+   4,
+   0,
+   6,
+   3,
+   "CONDITIONING"
+  ],
+  [
+   53,
+   6,
+   0,
+   7,
+   0,
+   "SAM3_TRACK_DATA"
+  ],
+  [
+   54,
+   5,
+   0,
+   8,
+   0,
+   "IMAGE"
+  ],
+  [
+   55,
+   5,
+   0,
+   9,
+   0,
+   "IMAGE"
+  ],
+  [
+   56,
+   8,
+   0,
+   9,
+   1,
+   "IMAGE"
+  ],
+  [
+   59,
+   9,
+   0,
+   10,
+   1,
+   "IMAGE"
+  ],
+  [
+   60,
+   10,
+   0,
+   11,
+   0,
+   "IMAGE"
+  ],
+  [
+   61,
+   12,
+   0,
+   16,
+   0,
+   "MODEL"
+  ],
+  [
+   62,
+   16,
+   0,
+   17,
+   0,
+   "MODEL"
+  ],
+  [
+   63,
+   17,
+   0,
+   18,
+   0,
+   "MODEL"
+  ],
+  [
+   64,
+   18,
+   0,
+   19,
+   0,
+   "MODEL"
+  ],
+  [
+   65,
+   13,
+   0,
+   20,
+   0,
+   "CLIP"
+  ],
+  [
+   66,
+   14,
+   0,
+   20,
+   1,
+   "VAE"
+  ],
+  [
+   67,
+   15,
+   0,
+   20,
+   2,
+   "VAE"
+  ],
+  [
+   68,
+   2,
+   0,
+   20,
+   3,
+   "IMAGE"
+  ],
+  [
+   69,
+   11,
+   0,
+   20,
+   5,
+   "IMAGE"
+  ],
+  [
+   71,
+   19,
+   0,
+   23,
+   0,
+   "MODEL"
+  ],
+  [
+   72,
+   19,
+   0,
+   24,
+   0,
+   "MODEL"
+  ],
+  [
+   74,
+   21,
+   0,
+   25,
+   0,
+   "NOISE"
+  ],
+  [
+   75,
+   24,
+   0,
+   25,
+   1,
+   "GUIDER"
+  ],
+  [
+   76,
+   22,
+   0,
+   25,
+   2,
+   "SAMPLER"
+  ],
+  [
+   77,
+   23,
+   0,
+   25,
+   3,
+   "SIGMAS"
+  ],
+  [
+   78,
+   20,
+   1,
+   25,
+   4,
+   "LATENT"
+  ],
+  [
+   79,
+   25,
+   1,
+   26,
+   0,
+   "LATENT"
+  ],
+  [
+   80,
+   26,
+   0,
+   27,
+   0,
+   "LATENT"
+  ],
+  [
+   81,
+   27,
+   0,
+   28,
+   0,
+   "LATENT"
+  ],
+  [
+   82,
+   26,
+   1,
+   28,
+   1,
+   "LATENT"
+  ],
+  [
+   83,
+   19,
+   0,
+   30,
+   0,
+   "MODEL"
+  ],
+  [
+   84,
+   29,
+   0,
+   31,
+   0,
+   "NOISE"
+  ],
+  [
+   86,
+   22,
+   0,
+   31,
+   2,
+   "SAMPLER"
+  ],
+  [
+   87,
+   30,
+   0,
+   31,
+   3,
+   "SIGMAS"
+  ],
+  [
+   88,
+   28,
+   0,
+   31,
+   4,
+   "LATENT"
+  ],
+  [
+   89,
+   31,
+   0,
+   32,
+   0,
+   "LATENT"
+  ],
+  [
+   90,
+   14,
+   0,
+   32,
+   1,
+   "VAE"
+  ],
+  [
+   91,
+   32,
+   0,
+   33,
+   0,
+   "IMAGE"
+  ],
+  [
+   92,
+   37,
+   1,
+   5,
+   0,
+   "IMAGE"
+  ],
+  [
+   93,
+   37,
+   1,
+   10,
+   0,
+   "IMAGE"
+  ],
+  [
+   94,
+   37,
+   12,
+   38,
+   0,
+   "STRING"
+  ],
+  [
+   95,
+   38,
+   0,
+   10,
+   2,
+   "BOOLEAN"
+  ],
+  [
+   96,
+   37,
+   2,
+   20,
+   7,
+   "AUDIO"
+  ],
+  [
+   97,
+   37,
+   3,
+   20,
+   10,
+   "STRING"
+  ],
+  [
+   98,
+   37,
+   5,
+   20,
+   13,
+   "INT"
+  ],
+  [
+   99,
+   37,
+   4,
+   21,
+   0,
+   "INT"
+  ],
+  [
+   100,
+   37,
+   8,
+   33,
+   2,
+   "INT"
+  ],
+  [
+   101,
+   37,
+   9,
+   33,
+   3,
+   "INT"
+  ],
+  [
+   102,
+   20,
+   0,
+   39,
+   0,
+   "CONDITIONING"
+  ],
+  [
+   103,
+   20,
+   1,
+   39,
+   1,
+   "LATENT"
+  ],
+  [
+   104,
+   14,
+   0,
+   39,
+   2,
+   "VAE"
+  ],
+  [
+   105,
+   37,
+   6,
+   39,
+   3,
+   "IMAGE"
+  ],
+  [
+   106,
+   37,
+   7,
+   39,
+   4,
+   "IMAGE"
+  ],
+  [
+   107,
+   39,
+   0,
+   24,
+   1,
+   "CONDITIONING"
+  ],
+  [
+   108,
+   20,
+   0,
+   40,
+   0,
+   "CONDITIONING"
+  ],
+  [
+   109,
+   28,
+   0,
+   40,
+   1,
+   "LATENT"
+  ],
+  [
+   110,
+   14,
+   0,
+   40,
+   2,
+   "VAE"
+  ],
+  [
+   111,
+   37,
+   6,
+   40,
+   3,
+   "IMAGE"
+  ],
+  [
+   112,
+   37,
+   7,
+   40,
+   4,
+   "IMAGE"
+  ],
+  [
+   113,
+   19,
+   0,
+   41,
+   0,
+   "MODEL"
+  ],
+  [
+   114,
+   40,
+   0,
+   41,
+   1,
+   "CONDITIONING"
+  ],
+  [
+   115,
+   41,
+   0,
+   31,
+   1,
+   "GUIDER"
+  ],
+  [
+   116,
+   33,
+   0,
+   42,
+   0,
+   "IMAGE"
+  ],
+  [
+   117,
+   42,
+   0,
+   43,
+   0,
+   "IMAGE"
+  ],
+  [
+   118,
+   3,
+   0,
+   43,
+   1,
+   "MODEL"
+  ],
+  [
+   119,
+   4,
+   0,
+   43,
+   3,
+   "CONDITIONING"
+  ],
+  [
+   120,
+   43,
+   0,
+   44,
+   0,
+   "SAM3_TRACK_DATA"
+  ],
+  [
+   121,
+   37,
+   0,
+   45,
+   0,
+   "SEAMSTITCH_SWAP_CHUNK"
+  ],
+  [
+   122,
+   33,
+   0,
+   45,
+   1,
+   "IMAGE"
+  ],
+  [
+   124,
+   44,
+   0,
+   45,
+   3,
+   "MASK"
+  ],
+  [
+   125,
+   10,
+   0,
+   45,
+   4,
+   "IMAGE"
+  ],
+  [
+   126,
+   37,
+   14,
+   46,
+   0,
+   "STRING"
+  ],
+  [
+   127,
+   37,
+   18,
+   47,
+   0,
+   "BOOLEAN"
+  ],
+  [
+   128,
+   37,
+   17,
+   47,
+   2,
+   "MASK"
+  ],
+  [
+   129,
+   7,
+   0,
+   47,
+   1,
+   "MASK"
+  ],
+  [
+   130,
+   47,
+   0,
+   9,
+   2,
+   "MASK"
+  ],
+  [
+   131,
+   47,
+   0,
+   45,
+   2,
+   "MASK"
+  ],
+  [
+   132,
+   37,
+   16,
+   48,
+   0,
+   "IMAGE"
+  ],
+  [
+   133,
+   48,
+   0,
+   49,
+   0,
+   "IMAGE"
+  ],
+  [
+   134,
+   3,
+   0,
+   49,
+   1,
+   "MODEL"
+  ],
+  [
+   135,
+   4,
+   0,
+   49,
+   3,
+   "CONDITIONING"
+  ],
+  [
+   136,
+   49,
+   0,
+   50,
+   0,
+   "SAM3_TRACK_DATA"
+  ],
+  [
+   137,
+   48,
+   0,
+   51,
+   0,
+   "IMAGE"
+  ],
+  [
+   138,
+   48,
+   0,
+   52,
+   0,
+   "IMAGE"
+  ],
+  [
+   139,
+   51,
+   0,
+   52,
+   1,
+   "IMAGE"
+  ],
+  [
+   140,
+   50,
+   0,
+   52,
+   2,
+   "MASK"
+  ],
+  [
+   141,
+   37,
+   15,
+   53,
+   0,
+   "SEAMSTITCH_SWAP_MARK"
+  ],
+  [
+   142,
+   50,
+   0,
+   53,
+   1,
+   "MASK"
+  ],
+  [
+   143,
+   52,
+   0,
+   53,
+   2,
+   "IMAGE"
+  ],
+  [
+   144,
+   37,
+   13,
+   54,
+   0,
+   "STRING"
+  ],
+  [
+   145,
+   2,
+   0,
+   54,
+   1,
+   "IMAGE"
+  ]
+ ],
+ "groups": [
+  {
+   "id": 100,
+   "title": "Swap Render \u00b7 Character Replace",
+   "bounding": [
+    1100,
+    -80,
+    2900,
+    2198
+   ],
+   "color": "#3f789e",
+   "font_size": 28,
+   "flags": {}
+  },
+  {
+   "id": 1,
+   "title": "1. Sheet (your character, Picture 1)",
+   "bounding": [
+    1120,
+    0,
+    380,
+    1208
+   ],
+   "color": "#3f789e",
+   "flags": {}
+  },
+  {
+   "id": 2,
+   "title": "2. SAM3 Marking + Guide Shrink",
+   "bounding": [
+    1560,
+    0,
+    440,
+    2098
+   ],
+   "color": "#3f789e",
+   "flags": {}
+  },
+  {
+   "id": 3,
+   "title": "3. Models (Eros, SLA, 8-step LoRA, RIFE off)",
+   "bounding": [
+    2060,
+    0,
+    380,
+    1416
+   ],
+   "color": "#3f789e",
+   "flags": {}
+  },
+  {
+   "id": 4,
+   "title": "4. Pass 1 - H3 Ref2VA at 0.3 MP (209 frames)",
+   "bounding": [
+    2500,
+    0,
+    600,
+    1502
+   ],
+   "color": "#3f789e",
+   "flags": {}
+  },
+  {
+   "id": 5,
+   "title": "5. Pass 2 - Upscale to 1 MP + 3-step Refine",
+   "bounding": [
+    3160,
+    0,
+    380,
+    1452
+   ],
+   "color": "#3f789e",
+   "flags": {}
+  },
+  {
+   "id": 6,
+   "title": "6. Output (1080p, source fps, original audio)",
+   "bounding": [
+    3600,
+    0,
+    380,
+    800
+   ],
+   "color": "#3f789e",
+   "flags": {}
+  },
+  {
+   "id": 101,
+   "title": "Swap \u00b7 Plan",
+   "bounding": [
+    0,
+    0,
+    1080,
+    1300
+   ],
+   "color": "#8A8",
+   "font_size": 24,
+   "flags": {}
+  },
+  {
+   "id": 105,
+   "title": "Swap Mark (SAM3)",
+   "bounding": [
+    0,
+    1340,
+    1080,
+    520
+   ],
+   "color": "#2e7d5b",
+   "font_size": 24,
+   "flags": {}
+  },
+  {
+   "id": 106,
+   "title": "Swap \u00b7 Draft",
+   "bounding": [
+    0,
+    1900,
+    1080,
+    520
+   ],
+   "color": "#5b6fb0",
+   "font_size": 24,
+   "flags": {}
+  },
+  {
+   "id": 102,
+   "title": "Swap Score (SAM3)",
+   "bounding": [
+    4060,
+    0,
+    340,
+    620
+   ],
+   "color": "#a1309b",
+   "font_size": 24,
+   "flags": {}
+  },
+  {
+   "id": 103,
+   "title": "Swap \u00b7 Take",
+   "bounding": [
+    4460,
+    0,
+    600,
+    780
+   ],
+   "color": "#b58b2a",
+   "font_size": 24,
+   "flags": {}
+  },
+  {
+   "id": 104,
+   "title": "Swap \u00b7 Assemble",
+   "bounding": [
+    4460,
+    800,
+    460,
+    360
+   ],
+   "color": "#b06634",
+   "font_size": 24,
+   "flags": {}
+  }
+ ],
+ "config": {},
+ "extra": {
+  "ds": {
+   "scale": 1,
+   "offset": [
+    0,
+    0
+   ]
+  }
+ },
+ "version": 0.4
+}

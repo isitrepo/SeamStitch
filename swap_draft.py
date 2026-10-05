@@ -1241,7 +1241,7 @@ def _sing(w):
 
 _AFTER = {"steady", "still", "upright", "open", "closed", "level", "flat", "tight", "up", "aside", "away", "forward",
           "remains", "rests", "stays", "moves", "turns", "holds", "lifts", "reaches", "lowers", "raises", "shows",
-          "held", "without", "free", "aloft", "toward", "inside", "back"}
+          "held", "without", "free", "aloft", "toward", "inside", "back", "angled", "tilted", "propped"}
 
 
 def named_nouns(text):
@@ -1286,6 +1286,19 @@ def prop_check(shots, objects, prev_shots=()):
         if h in prev:
             carried.setdefault(h, phrase)
     return {"unseen": sorted(unseen.items()), "carried_over": sorted(carried.items())}
+
+
+def drop_unseen_hands(moments, objects):
+    """Blank each moment's hands that name a prop the chunk's object list doesn't contain, so the shot
+    block never puts it in her hands (B5b c2: a knife read as a "cigar" and a "box lid", rendered as
+    such on two seeds). Returns the dropped phrases for the chunk's warnings."""
+    dropped = []
+    for _, m in moments:
+        unseen = prop_check([m.get("hands") or ""], objects)["unseen"]
+        if unseen:
+            dropped += [p for _, p in unseen if p not in dropped]
+            m["hands"] = ""
+    return dropped
 
 
 def dialogue_check(shots_text, lines):
@@ -1877,6 +1890,10 @@ def run_draft(plan_file, *, sheet=None, mode=CHUNK_MODES[0], named=(), qwen_mode
                         ci["lines"] = [ln for ln in ci["lines"] if ln not in said]
                         ci.setdefault("empty_shots", []).append(i)
                     else:
+                        dropped = drop_unseen_hands(moments, objs["objects"])
+                        if dropped:
+                            ci["warnings"].append(f"shot {i + 1}: left out of her hands (not in the frames' object "
+                                                  f"list): " + ", ".join(dropped))
                         body = merge_moments(moments, rel, fps, pronoun, ci["language"])
                     log += [f"==== shot {i + 1}: moments (frames {[r0 + f for f in mf]}) ====",
                             "\n".join(f"{t:.1f} s: {json.dumps(m, ensure_ascii=False)}" for t, m in moments), "",

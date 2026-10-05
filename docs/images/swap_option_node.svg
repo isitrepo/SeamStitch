@@ -1,0 +1,26 @@
+<svg width="620" height="229" viewBox="0 0 620 229" xmlns="http://www.w3.org/2000/svg" font-family="Segoe UI, Helvetica, Arial, sans-serif">
+<rect x="0" y="0" width="620" height="229" fill="#1a1a1a"/>
+<rect x="24" y="10" width="572" height="209" rx="10" fill="#2a2a2a" stroke="#454545" stroke-width="1.5"/>
+<path d="M 24 40 Q 24 10 34 10 L 586 10 Q 596 10 596 40 Z" fill="#5a6b7b"/>
+<text x="38" y="30" fill="#ffffff" font-size="14" font-weight="600">SeamStitch Swap Option</text>
+<rect x="25" y="39" width="570" height="24" fill="#242424" opacity="0.4"/>
+<circle cx="24" cy="51.0" r="5.5" fill="#b0bec5" stroke="#1a1a1a" stroke-width="1.5"/>
+<text x="36" y="55.0" fill="#e8e8e8" font-size="12">options</text>
+<circle cx="596" cy="51.0" r="5.5" fill="#b0bec5" stroke="#1a1a1a" stroke-width="1.5"/>
+<text x="584" y="55.0" fill="#e8e8e8" font-size="12" text-anchor="end">boolean</text>
+<circle cx="596" cy="75.0" r="5.5" fill="#b0bec5" stroke="#1a1a1a" stroke-width="1.5"/>
+<text x="584" y="79.0" fill="#e8e8e8" font-size="12" text-anchor="end">int</text>
+<rect x="25" y="87" width="570" height="24" fill="#242424" opacity="0.4"/>
+<circle cx="596" cy="99.0" r="5.5" fill="#b0bec5" stroke="#1a1a1a" stroke-width="1.5"/>
+<text x="584" y="103.0" fill="#e8e8e8" font-size="12" text-anchor="end">float</text>
+<circle cx="596" cy="123.0" r="5.5" fill="#b0bec5" stroke="#1a1a1a" stroke-width="1.5"/>
+<text x="584" y="127.0" fill="#e8e8e8" font-size="12" text-anchor="end">string</text>
+<line x1="34" y1="144" x2="586" y2="144" stroke="#454545" stroke-width="1"/>
+<rect x="34" y="147" width="552" height="19" rx="4" fill="#3a3a3a" stroke="#555" stroke-width="1"/>
+<text x="42" y="160" fill="#9a9a9a" font-size="11">key</text>
+<text x="578" y="160" fill="#e8e8e8" font-size="11" text-anchor="end">mark</text>
+<rect x="25" y="168" width="570" height="24" fill="#242424" opacity="0.4"/>
+<rect x="34" y="171" width="552" height="19" rx="4" fill="#3a3a3a" stroke="#555" stroke-width="1"/>
+<text x="42" y="184" fill="#9a9a9a" font-size="11">default</text>
+<text x="578" y="184" fill="#e8e8e8" font-size="11" text-anchor="end">true</text>
+</svg>

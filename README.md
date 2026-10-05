@@ -13,6 +13,7 @@ with picture and audio kept in sync, then saves it and tells you how smooth the 
 | **SeamStitch Recombine** | Splices the regenerated frames (and audio) back into the source video. |
 | **SeamStitch Result Preview** | Saves the final video, plays it with the new span marked, rates the joins. |
 | **SeamStitch LTX Guides** / **MiniMax Guides** | Pin the real frames around the gap onto the generator's latent, so motion carries through the join. |
+| **SeamStitch Swap** nodes | Replace the person in a whole video with a character, in planned MiniMax H3 chunks joined back over the original audio. See [SeamStitch Swap](#seamstitch-swap). |
 | *SeamStitch Loader* and *SeamStitch Combine* | **Legacy** — the original two-node way in, replaced by the Timeline. Still supported; see [Legacy nodes](#legacy-nodes). |
 
 > The diagrams here are labelled layout illustrations, not screenshots (so no real footage ships in the
@@ -317,6 +318,213 @@ H3 support; without it only this node is skipped.
 
 ---
 
+## SeamStitch Swap
+
+Whole-video character replacement with MiniMax H3. H3 renders about 8 s at a time, so the video is
+planned as chunks: each chunk renders the source's motion with your character sheet, each take is
+scored, joins are repaired on the CPU, and the chosen takes are assembled over the source's
+**original audio**, frame for frame with the source. Nothing picks a take for you: the nodes rate,
+you choose.
+
+Example workflow: [`example_workflows/Swap - Character Replace.json`](example_workflows/Swap%20-%20Character%20Replace.json).
+Set the source video and the job on the Planner's strip, and your character sheet in the Load Image of
+group *Swap Render · Character Replace*.
+
+| Group | Nodes |
+| --- | --- |
+| **Swap · Plan** | SeamStitch Swap Planner: the strip, the plan and every button below. |
+| **Swap Render · Character Replace** | The render (a graph group, not a node): the sheet, SAM3 marking, H3 Ref2VA pass 1, the 1 MP refine, both SeamStitch MiniMax Guides on the Planner's pins, SeamStitch Swap Option (`mark`). Any render with the same inputs and the same Take at the end can replace it. |
+| **Swap Score (SAM3)** | Tracks the person in the render, for the Take's scores. |
+| **Swap · Take** | SeamStitch Swap Take: saves, scores and registers each take. |
+| **Swap · Assemble** | SeamStitch Swap Assemble (the Planner's assemble button runs the same code off the queue). |
+| **Swap Mark (SAM3)** | Tracks the source person up front (the strip's *mark* button); SeamStitch Swap Mask caches it. |
+| **Swap · Draft** | SeamStitch Swap Draft Prompts. |
+
+**Needs**, besides ComfyUI with MiniMax H3 and SAM3 support and VideoHelperSuite:
+- the render group: [Comfyui_Minimax_h3_latent_Upscaler](https://github.com/LBH-123-AI/Comfyui_Minimax_h3_latent_Upscaler)
+  (`MinimaxH3LatentUpscaler3D`), and the H3 model, text encoder, VAEs and LoRA the group's loaders name;
+- drafting: [ComfyUI-QwenVL](https://github.com/1038lab/ComfyUI-QwenVL) (required by the Draft node);
+  optionally an `OmniCaptionerTranscribe` node (ComfyUI-OmniCaptioner-GGUF) for the words and audio
+  events, and `faster-whisper` in ComfyUI's Python for word timings (each is skipped with a warning
+  when missing);
+- the mouth score (optional): `mediapipe` and `models/mediapipe/face_landmarker.task`.
+
+### A run, end to end
+
+1. **Plan.** Load the video on the strip (a new job is named after it), then **detect + plan**: the
+   cuts come in confirmed (ffmpeg scene > 0.15) and splits are placed for 209-frame renders. Fainter
+   ticks (scene 0.10-0.15, often jump cuts in the same room) are only suggestions: confirm or delete
+   each; only confirmed cuts move splits, fills and warnings. Drag splits, and make each one a
+   **straight cut** (on a real cut) or **anchored** (12 frames of overlap, the right chunk's first 5
+   frames pinned to the left chunk's take).
+2. **Keep original** where nobody needs replacing: drag the strip's start or end handle in (or set
+   *keep original* on a chunk). Kept chunks are never drafted, marked or rendered; the assembly uses
+   the source frames.
+3. **Draft prompts**, then edit them. One queue item drafts every empty chunk: the subject from the
+   sheet, each shot's pose, gaze and hands, and the dialogue as timed `<d>` lines. Read each chunk's
+   warnings: a hand-held object the frames' own object list doesn't contain is left out and named.
+   Nothing renders while a rendered chunk's prompt is empty.
+4. **Render pending.** Every chunk without a take renders left to right; each anchored chunk is
+   pinned to its left neighbour's take at execution. Free ComfyUI's memory before each render.
+5. **Review.** Each take gets dots: **F** following (the render's person outline against the
+   source's), **R** replaced (is the person inside it really the character?), **C** cuts (were the
+   source's cuts copied?), **M** mouth (information only, never a gate). Each join gets a pill:
+   **F** forward, **E** re-roll entry, **X** re-roll exit, **✂** straight cut, coloured by its
+   measured step; amber *stale* means a take was swapped under it. ▶ on a take plays its review clip
+   (the chunk ± 2 s, both joins as if it were chosen).
+6. **Re-roll** what the dots or your eye reject: with both neighbours rendered the re-roll is pinned to
+   both (two-sided), so it fits without re-rendering them. Choose a take; joins are recomputed on the
+   CPU in seconds.
+7. **Assemble.** The effective takes (chosen, else the first) with each join's repair, over the
+   original audio, in one streamed encode: as many frames as the source, never the whole video in RAM.
+
+### Compass
+
+- **Render length:** 209 frames (~8 s at 25 fps). Over 209, two-pass renders failed or crashed ComfyUI
+  at the 1 MP refine on a 32 GB card with 64 GB of system RAM (226 failed, then crashed; 243 crashed;
+  260 failed), so the Planner warns above `ceiling_frames` 209, and auto placement makes a split a
+  straight cut on a nearby cut rather than nudge a render past it. Under `floor_frames` 124 a render
+  can come back unreplaced or head-only. **Free ComfyUI's memory before each render**: system RAM,
+  not the card, is the limit (a 209 render without a free left 0.3 GB).
+- **Grid fill:** H3 renders 17k+5 frames. The surplus extends the render into the next chunk (tail),
+  into its own overlap (head), or holds the last frame (hold); the extra frames are discarded.
+- **Joins:** forward joins use the **level lock**, handing back to the right take's grade over 12
+  frames. Its heading is the left take's last 3 frames, each carried by the source's own change to
+  the splice; a split's repair `{"heading": "line"}` uses a line through the left take's last 12
+  frames instead. A fade passes on the numbers but blends two poses (a ghost) where they differ: a
+  hard cut you can SeamStitch later is better. Hand-back 25 changed nothing measurable. A re-roll's
+  entry is a level-matched fade, its exit a lock.
+- **First chunk:** its re-roll has end pins only, and fits its right neighbour like any other.
+- **Marking** (SAM3 paints the source person before H3 sees the guide) is on by default: it followed
+  better with faces to camera and with hands and objects in front.
+- **Kept → rendered:** a straight split on a real cut is clean. Mid-shot, a straight split (warned).
+  *Anchored onto the original* pins the source person too, carries them past the splice and swaps in
+  one frame: not recommended mid-shot.
+- **R dot:** under 30 red (the source came back), 30-60 amber (partly replaced), 60 and over green.
+  Re-roll red and amber; it happens on short chunks.
+- **Props:** a take with an object in her hands that the source doesn't have came from the prompt,
+  not the seed: edit it out of the shot block and re-roll.
+- **Budget** (RTX 5090): a 209 render 8-10 min, a 978-frame clip (five 209s) ~45 GPU-min per pass;
+  drafting five chunks ~11 min; joins and assembly CPU only.
+
+### SeamStitch Swap Planner
+
+![Swap Planner](docs/images/swap_planner_node.svg)
+
+<!-- gen:inputs SeamStitchSwapPlanner -->
+*The job's plan: splits, chunks, prompts and takes. Each run emits one chunk's render inputs (pins decoded from the neighbours' takes at execution), or routes an assemble or draft run.*
+
+| Input | Default | What it does |
+| --- | --- | --- |
+| `target_render_frames` | `209` | Auto-placement render length (on H3's 17k+5 grid). 209 = about 8 s. |
+| `overlap_frames` | `12` | An anchored split's overlap: the right chunk renders from J - overlap. |
+| `anchor_frames` | `5` | Pins per side (clip anchors: 5 or 22). |
+| `floor_frames` | `124` | Warn below this render length (H3's trained minimum). |
+| `ceiling_frames` | `209` | Warn above this render length: two-pass renders over 209 frames failed or crashed ComfyUI at the 1 MP refine on a 32 GB card with 64 GB RAM (B5b: 226 failed, then crashed; B5a: 243 crashed, 260 failed). |
+| `conform_to_24fps` | `True` | The render's reference audio on H3's 24 fps clock (frames stay 1:1). Takes keep the original audio. |
+<!-- /gen -->
+
+Each queue run does one thing, set by the strip: emit one chunk's render inputs (the outputs feeding
+the render group), a draft run (`draft_plan`), a mark run (`mark_chunk`, `mark_images`) or an assemble
+run (`assemble_plan`). Outputs a run doesn't use are blocked, so the other branches don't execute.
+The job lives in `output/seamstitch_swap/<job>/`: `plan.json` (with the last 50 revisions in
+`history/`), `drafts/`, `chunks/<chunk>/<take>/`, `assembled/`, and `trash/` (deleted takes are moved
+there, never erased).
+
+### SeamStitch Swap Option
+
+![Swap Option](docs/images/swap_option_node.svg)
+
+<!-- gen:inputs SeamStitchSwapOption -->
+*Reads one per-chunk option from the Swap Planner (e.g. mark) as a boolean, int, float and string.*
+
+| Input | Default | What it does |
+| --- | --- | --- |
+| `options` | socket (STRING) | The Swap Planner's options output. |
+| `key` | `mark` | The option to read, e.g. mark. |
+| `default` | `true` | Its value when the chunk doesn't set it. |
+<!-- /gen -->
+
+### SeamStitch Swap Take
+
+![Swap Take](docs/images/swap_take_node.svg)
+
+<!-- gen:inputs SeamStitchSwapTake -->
+*Saves a render as a take of its chunk (lossless, source frame rate, original audio), with its lineage, masks, scores and a review clip of both joins. Refuses anything that isn't 1:1.*
+
+| Input | Default | What it does |
+| --- | --- | --- |
+| `chunk` | socket (SEAMSTITCH_SWAP_CHUNK) | The Swap Planner's chunk output. |
+| `images` | socket (IMAGE) | The render, at the source size, frames 1:1 with the chunk's render length. |
+| `take_codec` | `lossless (ffv1)` (`lossless (ffv1)` / `h264`) | lossless (ffv1): RGB planes + FLAC, about 0.4-0.5 GB per 209 frames at 1080p; pins and the assembly read the exact model output. h264: crf below, one lossy generation. |
+| `crf` | `12` |  |
+| `score` | `True` | Score the take (design §4.5): following (pose IoU of the two SAM3 person masks), lost cuts and the scene alarm. Information for you: nothing picks a take. |
+| `mouth_sync` | `True` | Mouth sync, a secondary signal (never a gate). Needs mediapipe and models/mediapipe/face_landmarker.task; n/a without them. |
+| `review_clip` | `True` | review.mp4: the chunk +- 2 s with both joins as if this take were chosen. |
+| `source_mask` *(opt.)* | socket (MASK) | SAM3 person mask of the source frames (the marking group's). |
+| `output_mask` *(opt.)* | socket (MASK) | SAM3 person mask of the render (group Swap Score). |
+| `marked_guide` *(opt.)* | socket (IMAGE) | What H3 saw as its guide; saved when the chunk's mark option is on. |
+<!-- /gen -->
+
+### SeamStitch Swap Assemble
+
+![Swap Assemble](docs/images/swap_assemble_node.svg)
+
+<!-- gen:inputs SeamStitchSwapAssemble -->
+*Joins every chunk's effective take (lock, fade or cut per its lineage), over the source's original audio, in one streamed encode. CPU only.*
+
+| Input | Default | What it does |
+| --- | --- | --- |
+| `assemble_plan` | empty | The job's plan: wire the Swap Planner's assemble_plan, or give a plan.json path, a job folder, or a job name under output/seamstitch_swap/. |
+| `hand_back_frames` | `12` | Frames the level lock (and the fade's level match) take to hand back to the right take's own grade, where a split has no override. 12 (picked by eye); 25 leaves a smaller dip. |
+| `format` | `video/h264-mp4` | VHS's own formats and encode path, as Result Preview. video/ffv1-mkv for a lossless master. |
+| `crf` | `12` |  |
+| `pix_fmt` | `yuv420p` (`yuv420p` / `yuv420p10le`) |  |
+| `filename_prefix` | `swap_%date:yyyyMMdd_hhmmss%` | Written to the job's assembled/ folder. %date:yyyyMMdd_hhmmss% is replaced. |
+| `pending_chunks` | `source frames (preview)` (`source frames (preview)` / `refuse`) | A chunk with no take: fill it with source frames (flagged), or refuse to assemble. |
+| `require_reviewed` | `False` | Off: an unreviewed take (a chunk's first, never chosen) is used and flagged. On: refuse. |
+<!-- /gen -->
+
+### SeamStitch Swap Draft Prompts
+
+![Swap Draft Prompts](docs/images/swap_draft_node.svg)
+
+<!-- gen:inputs SeamStitchSwapDraft -->
+*Drafts the subject from the sheet and every chunk's prompt from its frames and dialogue (QwenVL + Omni + faster-whisper, one model at a time). A draft fills an empty prompt; otherwise it waits in the chunk's draft field.*
+
+| Input | Default | What it does |
+| --- | --- | --- |
+| `draft_plan` | socket (STRING) | The Planner's draft_plan output: carries the plan only in a draft run. |
+| `chunks` | `empty only` (`empty only` / `all (into the draft field)` / `selected`) | empty only: chunks with no prompt. all: every rendered chunk (a chunk with a prompt gets the draft in its draft field, never over the prompt). selected: the chunk a redraft names (a redraft always drafts its chunk, whatever this says). |
+| `qwen_model` | `Qwen3-VL-8B-Unredacted-MAX (Captioner)` | A QwenVL model on disk. |
+| `quantization` | `None (FP16)` (`None (FP16)` / `8-bit (Balanced)` / `4-bit (VRAM-friendly)`) |  |
+| `frames_per_chunk` | `24` | Frames Qwen sees, spread over the chunk's render range (per shot: shared out by shot length, at least 4 each). The QwenVL node itself uses 16. |
+| `transcribe` | `True` | Omni Captioner Transcribe on each chunk's audio: the words and the audio events. |
+| `word_timings` | `True` | faster-whisper large-v3-turbo: word timings, so each line lands in its shot and moment. |
+| `template` | `character replace (Ref2VA, timeline)` (`character replace (Ref2VA)` / `character replace (Ref2VA, per shot)` / `character replace (Ref2VA, timeline)`) | timeline (the default): one full-size picture every half second, a caption each, merged into each shot with its lines at their times. per shot: each shot from its own frames in one call. The first: one call for the whole chunk. |
+| `extra_instructions` | empty | Added to Qwen's rules for every chunk. |
+| `max_tokens` | `2048` |  |
+| `sheet` *(opt.)* | socket (IMAGE) | The character sheet (the render group's Load Image): the subject is drafted from it once per job. |
+<!-- /gen -->
+
+### SeamStitch Swap Mask
+
+![Swap Mask](docs/images/swap_mask_node.svg)
+
+<!-- gen:inputs SeamStitchSwapMask -->
+*Caches a mark run's source person mask in the job (lossless), so the Planner's mask row shows it before any render and render runs reuse it instead of tracking again.*
+
+| Input | Default | What it does |
+| --- | --- | --- |
+| `mark_chunk` | socket (SEAMSTITCH_SWAP_MARK) | The Swap Planner's mark_chunk output. |
+| `mask` | socket (MASK) | The source person mask over the run's range (SAM3), frames 1:1. |
+| `save_preview` | `True` | preview.mp4 for the Planner's mask row: the marked guide if wired, else the mask. |
+| `fill_holes` | `6` | Fill a tracking hole up to this many frames long from the nearer frame's mask (at the range's start or end, from its one side); the mask row shows them amber. Longer holes stay empty (red). 0 = off. |
+| `preview` *(opt.)* | socket (IMAGE) | What to show on the mask row: the marked guide (the person inverted). |
+<!-- /gen -->
+
+---
+
 ## Legacy nodes
 
 The Timeline replaces these, and its outputs match the Loader's, so a graph built on the Loader still
@@ -393,8 +601,10 @@ SeamStitch builds on other GPL-3.0 projects:
   [Kosinkadink](https://github.com/kosinkadink) — Recombine is a fork of `VHS_VideoCombine`'s encode
   pipeline; Recombine and Result Preview depend on VHS at runtime.
 - **[comfyui-obvpm-timeline](https://github.com/chanon/comfyui-obvpm-timeline)** by
-  [chanon](https://github.com/chanon) — the idea and control set behind the Timeline and Result Preview.
-  The code here was written independently for SeamStitch's splice model.
+  [chanon](https://github.com/chanon) — the idea and control set behind the Timeline and Result Preview
+  (the code here was written independently for SeamStitch's splice model); for the Swap nodes, the
+  model of takes and their pin lineage, and the level lock and level-matched crossfade, ported from its
+  `levellock.py` and `crossfade.py`.
 
 Please consider starring or crediting those projects too.
 

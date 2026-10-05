@@ -10,7 +10,9 @@ Usage:
 returns from a running ComfyUI instance with this pack installed (a sandboxed
 instance is fine - see docs/CHANGELOG.md for the recipe used to capture one).
 
-This regenerates the per-node diagrams (see NODE_OUTPUT_FILE below). The other files in
+This regenerates the per-node diagrams (see NODE_OUTPUT_FILE below), and the README's input
+tables between `<!-- gen:inputs <NodeId> -->` and `<!-- /gen -->` (each input's default and the
+node's own tooltip). The other files in
 docs/images/ (wiring_overview.svg, wiring_legacy.svg, timeline_ui.svg, result_preview_ui.svg)
 are hand-drawn explanatory diagrams and are not derived from object_info - they are left
 untouched.
@@ -22,6 +24,7 @@ INPUT_TYPES, so drawing them would mean hardcoding facts this script can't
 verify from the snapshot. A caption on the affected diagrams says so instead.
 """
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -32,7 +35,7 @@ DOCS_IMAGES = Path(__file__).parent / "images"
 SOCKET_TYPES = {
     "IMAGE", "AUDIO", "LATENT", "MASK", "MODEL", "VAE", "CLIP",
     "CONDITIONING", "CONTROL_NET", "STYLE_MODEL", "CLIP_VISION",
-    "VHS_FILENAMES", "VHS_VIDEOINFO",
+    "VHS_FILENAMES", "VHS_VIDEOINFO", "SEAMSTITCH_SWAP_CHUNK", "SEAMSTITCH_SWAP_MARK",
 }
 # Inputs with forceInput are sockets even when their type (INT, STRING...) is normally a widget.
 
@@ -43,6 +46,9 @@ SOCKET_COLOR = {
     "LATENT": "#ff80ab",
     "VAE": "#ef5350",
     "VHS_FILENAMES": "#ce93d8",
+    "MASK": "#81c784",
+    "SEAMSTITCH_SWAP_CHUNK": "#ffd54f",
+    "SEAMSTITCH_SWAP_MARK": "#ffd54f",
 }
 WIDGET_TYPE_COLOR = {
     "STRING": "#b0bec5",
@@ -62,6 +68,8 @@ HIDDEN_WIDGETS = {
     },
     # The strip UI edits these two; they are hidden widgets, not something to type into.
     "SeamStitchTimeline": {"sequence", "target"},
+    # js/swap_planner.js hides all four: job and source are picked in the strip's header, run and ui_state are set by it.
+    "SeamStitchSwapPlanner": {"job", "source", "run", "ui_state"},
 }
 
 # Buttons added at runtime by each node's JS extension (onNodeCreated) -
@@ -73,6 +81,7 @@ DYNAMIC_BUTTONS = {
     "SeamStitchRecombine": [],
     "SeamStitchTimeline": ["+ add", "play", "quick/full", "zoom", "fit", "I", "O", "clear mark", "edit text"],
     "SeamStitchResultPreview": ["seam 1", "seam 2", "worst inside", "stop", "save frame", "use as timeline"],
+    "SeamStitchSwapPlanner": ["load video", "detect + plan", "cuts", "draft prompts", "mark", "render pending", "assemble"],
 }
 
 CAPTIONS = {
@@ -83,6 +92,12 @@ CAPTIONS = {
     "SeamStitchResultPreview": "The player, verdict panel and buttons render below the widgets shown here.",
     "SeamStitchLTXGuides": None,
     "SeamStitchMiniMaxGuides": None,
+    "SeamStitchSwapPlanner": "The strip (cuts, splits, chunks, mask and prompt rows), the chunk panel and the next-run bar render below.",
+    "SeamStitchSwapTake": "The take's review clip, its flag dots and join pills render below the widgets shown here.",
+    "SeamStitchSwapAssemble": "The assembly's player and per-join chips render below the widgets shown here.",
+    "SeamStitchSwapDraft": None,
+    "SeamStitchSwapOption": None,
+    "SeamStitchSwapMask": None,
 }
 
 NODE_HEADER_COLOR = {
@@ -93,6 +108,12 @@ NODE_HEADER_COLOR = {
     "SeamStitchResultPreview": "#2f8f8f",
     "SeamStitchLTXGuides": "#8f7a2f",
     "SeamStitchMiniMaxGuides": "#a84f6b",
+    "SeamStitchSwapPlanner": "#7b4fa8",
+    "SeamStitchSwapOption": "#5a6b7b",
+    "SeamStitchSwapTake": "#2f8f8f",
+    "SeamStitchSwapAssemble": "#a15a2f",
+    "SeamStitchSwapDraft": "#2f6fa5",
+    "SeamStitchSwapMask": "#2f8f5b",
 }
 
 NODE_OUTPUT_FILE = {
@@ -103,6 +124,12 @@ NODE_OUTPUT_FILE = {
     "SeamStitchResultPreview": "result_preview_node.svg",
     "SeamStitchLTXGuides": "ltx_guides_node.svg",
     "SeamStitchMiniMaxGuides": "minimax_guides_node.svg",
+    "SeamStitchSwapPlanner": "swap_planner_node.svg",
+    "SeamStitchSwapOption": "swap_option_node.svg",
+    "SeamStitchSwapTake": "swap_take_node.svg",
+    "SeamStitchSwapAssemble": "swap_assemble_node.svg",
+    "SeamStitchSwapDraft": "swap_draft_node.svg",
+    "SeamStitchSwapMask": "swap_mask_node.svg",
 }
 
 ROW_H = 24
@@ -215,6 +242,51 @@ def _render_svg(title, header_color, left_sockets, right_outputs, widgets, capti
     return "\n".join(p)
 
 
+def _md(text):
+    return str(text).replace("|", "\\|").replace("\n", " ")
+
+
+def _inputs_table(node_id, node_info):
+    """The node's visible inputs as a Markdown table: the socket type or the default, and the node's
+    own tooltip. Combos list their choices when there are at most 4 (longer lists depend on the install)."""
+    hidden = HIDDEN_WIDGETS.get(node_id, set())
+    inputs = node_info["input"]
+    optional = inputs.get("optional", {})
+    rows = ["| Input | Default | What it does |", "| --- | --- | --- |"]
+    for name, spec in list(inputs.get("required", {}).items()) + list(optional.items()):
+        if name in hidden:
+            continue
+        type_spec = spec[0]
+        opts = spec[1] if len(spec) > 1 and isinstance(spec[1], dict) else {}
+        label = f"`{name}`" + (" *(opt.)*" if name in optional else "")
+        if (isinstance(type_spec, str) and type_spec in SOCKET_TYPES) or opts.get("forceInput"):
+            default = f"socket ({type_spec})"
+        else:
+            default = f"`{_widget_default_text(spec)}`" if _widget_default_text(spec) != "" else "empty"
+            if isinstance(type_spec, list) and len(type_spec) <= 4:
+                default += " (" + " / ".join(f"`{c}`" for c in type_spec) + ")"
+        rows.append(f"| {label} | {_md(default)} | {_md(opts.get('tooltip', ''))} |")
+    return "\n".join(rows)
+
+
+def write_readme_tables(object_info, readme):
+    """Fill each `<!-- gen:inputs <NodeId> -->` ... `<!-- /gen -->` block in the README from object_info."""
+    text = readme.read_text(encoding="utf-8")
+
+    def fill(m):
+        node_id = m.group(1)
+        if node_id not in object_info:
+            print(f"skipping table {node_id}: not present in the snapshot", file=sys.stderr)
+            return m.group(0)
+        info = object_info[node_id]
+        body = (f"*{_md(info['description'])}*\n\n" if info.get("description") else "") + _inputs_table(node_id, info)
+        return f"<!-- gen:inputs {node_id} -->\n{body}\n<!-- /gen -->"
+
+    new = re.sub(r"<!-- gen:inputs (\w+) -->.*?<!-- /gen -->", fill, text, flags=re.S)
+    readme.write_text(new, encoding="utf-8", newline="\n")
+    print(f"wrote tables in {readme}")
+
+
 def main():
     if len(sys.argv) != 2:
         print("usage: gen_diagrams.py <object_info.json>", file=sys.stderr)
@@ -222,6 +294,8 @@ def main():
 
     with open(sys.argv[1], encoding="utf-8") as f:
         object_info = json.load(f)
+
+    write_readme_tables(object_info, Path(__file__).parent.parent / "README.md")
 
     for node_id, out_file in NODE_OUTPUT_FILE.items():
         if node_id not in object_info:
