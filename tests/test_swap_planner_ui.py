@@ -326,3 +326,13 @@ def test_a_named_target_reaches_sam3_and_keys_the_mask_cache(nodes):
     spl.do_op({"job": "t", "op": "set_options", "chunk": c[1]["id"], "options": {"invert": False}}, jobs)
     assert "invert" not in json.loads(_run(nodes, "render", chunk=c[1]["id"], seed=3)["result"][12])
     assert sp.load_plan(nodes["plan"])["target"] == "woman in a purple top"      # an invert edit leaves the target
+
+
+def test_the_strip_refuses_a_target_the_workflow_cant_pass_on():
+    # B7: a workflow from before the target option marked "person" and cached the mask under the target's name
+    src = open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "js", "swap_planner.js"), encoding="utf-8").read()
+    queue_run = src[src.index("async function queueRun("):src.index("function emptyPrompts(")]
+    guard = queue_run[queue_run.index("const named = "):queue_run.index("// The frontend's own queuePrompt")]
+    assert '(kind === "render" || kind === "mark") && named' in guard and '"SeamStitchSwapOption"' in guard
+    assert '["target", "invert"]' in guard and "throw new Error" in guard
+    assert queue_run.index("const named = ") < queue_run.index("queue.call(api")

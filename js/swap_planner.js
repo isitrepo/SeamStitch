@@ -649,6 +649,13 @@ function buildPlanner(node) {
             const p = await app.graphToPrompt();
             if (!p.output[graphPlannerId()]) throw new Error("this Planner isn't in the queued graph (bypassed or muted?)");
             const targets = targetsFor(p.output, OUT[kind]);
+            // a target or invert the graph can't pass on would be marked as "person" and cached under the target's name (B7)
+            const named = P() && (P().target || P().invert || chunks().some(c => (c.options || {}).target || (c.options || {}).invert != null));
+            if ((kind === "render" || kind === "mark") && named) {
+                const keys = new Set(Object.values(p.output).filter(n => n.class_type === "SeamStitchSwapOption").map(n => n.inputs?.key));
+                const lack = ["target", "invert"].filter(k => !keys.has(k));
+                if (lack.length) throw new Error(`this workflow has no Swap Option for ${lack.join(" / ")}, so SAM3 would mark "person": open the example workflow again (or add the option to your render and mark groups)`);
+            }
             if (!targets.length) {
                 const need = { render: "a render group ending in SeamStitch Swap Take", draft: "SeamStitch Swap Draft Prompts on draft_plan",
                     assemble: "SeamStitch Swap Assemble on assemble_plan", mark: "a mark group ending in SeamStitch Swap Mask on mark_chunk / mark_images" }[kind];
