@@ -613,7 +613,19 @@ function buildPlanner(node) {
         for (const [pid] of rest) delete S.queued[pid];
         return rest.map(([, x]) => x.run.chunk);
     }
+    // Renders and drafts start on a clear machine: ComfyUI drops its models and its cache (which holds them in
+    // RAM), as its own /free does. Only ComfyUI can drop its cache, between queue items: so before queueing,
+    // and again when a render starts with another waiting behind it (B4: Qwen ran out of the paging file right
+    // after a render; B6: a strip render bottomed at 0.7 GB free RAM). Each render reloads its models.
+    async function freeMemory(wait) {
+        try {
+            await api.fetchApi("/free", { method: "POST", headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ unload_models: true, free_memory: true }) });
+            if (wait) await new Promise(r => setTimeout(r, 1500));     // an idle worker applies it at once
+        } catch { }
+    }
     async function queueRun(run, kind, quiet, batch) {
+        if (kind === "render" || kind === "draft") await freeMemory(true);
         run = Object.assign({}, run, { nonce: uid() });
         runW.value = JSON.stringify(run);
         try {
@@ -686,20 +698,8 @@ function buildPlanner(node) {
         if (k) toast(`queued ${k} render${k === 1 ? "" : "s"} of chunk ${label(cid)}${n === 1 && fixed && !fresh ? ` (fixed seed ${c.seed_mode.fixed})` : ""}`, "green");
         refresh();
     }
-    // A draft run needs none of the render's models: ComfyUI drops them (and its cache, which holds them in
-    // RAM) before the run, as its own /free does, so Qwen, Omni and Whisper load into a clear machine. Only ComfyUI
-    // can drop its cache, between queue items: hence before queueing, not inside the node (B4: Qwen ran out of the
-    // paging file right after a render). The next render reloads its models, as it would anyway.
-    async function freeForDraft() {
-        try {
-            await api.fetchApi("/free", { method: "POST", headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ unload_models: true, free_memory: true }) });
-            await new Promise(r => setTimeout(r, 1500));     // the worker applies it when it's between items
-        } catch { }
-    }
     async function queueDraft(chunk) {
         if (!P()) return;
-        await freeForDraft();
         await queueRun(chunk ? { action: "draft", chunk } : { action: "draft" }, "draft");
     }
     function openMarkMenu(ev) {
@@ -739,7 +739,10 @@ function buildPlanner(node) {
     function onQueueEvent(type, d) {
         const pid = d?.prompt_id;
         const q = pid && S.queued[pid];
-        if (type === "execution_start" && q) { S.running = pid; S.progress = null; }
+        if (type === "execution_start" && q) {
+            S.running = pid; S.progress = null;
+            if (q.kind === "render" && Object.entries(S.queued).some(([p, x]) => p !== pid && x.kind === "render")) freeMemory();
+        }
         else if (type === "progress" && q) { S.progress = { value: d.value, max: d.max, node: d.node }; drawCanvas(); }
         else if (type === "execution_error" && q) {
             const msg = `${d.node_type || ""}: ${d.exception_message || "error"}`.trim();
