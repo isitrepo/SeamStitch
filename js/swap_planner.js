@@ -162,6 +162,38 @@ function parseShots(prompt) {
     return blocks;
 }
 
+// ---------------------------------------------------------------- prompt colours
+// Who and what each tag stands for, at a glance (B7): Subject 1 yellow, Subject 2 green, Video blue, ...
+const PROMPT_TOKENS = /(<Subject 1>|\(S1\))|(<Subject 2>|\(S2\))|(<Subject \d+>|\(S\d+\))|(<Video \d+>)|(<Picture \d+>)|(<Audio \d+>)|(<d>[\s\S]*?<\/d>)|(\[Shot \d+\])|(^[a-z_]+:[ \t]*$)/gm;
+const PROMPT_STYLES = ["color:#facc15", "color:#4ade80", "color:#fb923c", "color:#60a5fa", "color:#fb7185", "color:#c084fc",
+    "color:#67e8f9", "color:#f3f4f6;font-weight:bold", "color:#9ca3af;font-weight:bold"];
+function escapeHtml(t) { return t.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); }
+function colourPrompt(text) {
+    let html = "", at = 0;
+    for (const m of text.matchAll(PROMPT_TOKENS)) {
+        const k = m.slice(1).findIndex(g => g !== undefined);
+        html += escapeHtml(text.slice(at, m.index)) + `<span style="${PROMPT_STYLES[k]}">${escapeHtml(m[0])}</span>`;
+        at = m.index + m[0].length;
+    }
+    return html + escapeHtml(text.slice(at)) + "\n";
+}
+// A textarea drawn over its own coloured copy: the text is transparent, the caret and selection are the textarea's.
+function colouredTextarea(style, height, onHeight) {
+    const font = { fontFamily: "monospace", fontSize: style.fontSize || "0.95em", lineHeight: "1.35", padding: "3px 5px",
+        boxSizing: "border-box", whiteSpace: "pre-wrap", overflowWrap: "break-word", overflowY: "scroll", margin: "0" };
+    const wrap = el("div", { position: "relative", flex: "1 1 auto", minWidth: "300px", height, resize: "vertical", overflow: "hidden",
+        background: "#111", border: style.border, borderRadius: "4px" });
+    const back = el("div", Object.assign({ position: "absolute", inset: "0", color: "#e5e7eb", pointerEvents: "none", border: "0" }, font));
+    const ta = el("textarea", Object.assign({ position: "absolute", inset: "0", width: "100%", height: "100%", background: "transparent",
+        color: "transparent", caretColor: "#e5e7eb", border: "0", outline: "none", resize: "none", userSelect: "text" }, font));
+    const paint = () => { back.innerHTML = colourPrompt(ta.value); back.scrollTop = ta.scrollTop; };
+    ta.addEventListener("input", paint);
+    ta.addEventListener("scroll", () => { back.scrollTop = ta.scrollTop; });
+    if (onHeight) new ResizeObserver(() => { if (wrap.offsetHeight) onHeight(wrap.style.height); }).observe(wrap);
+    wrap.append(back, ta);
+    return { wrap, ta, paint };
+}
+
 // ---------------------------------------------------------------- the node
 
 app.registerExtension({
@@ -212,6 +244,7 @@ function buildPlanner(node) {
         playhead: 0, pxPerFrame: 1, scroll: 0, sel: null, mode: "quick", playing: false,
         hover: null, drag: null, popup: null, queued: {}, running: null, progress: null,
         promptDirty: false, loading: 0, fitted: true, needFit: true,
+        layout: { hide: {} },        // the sections' collapsed state and dragged heights, kept in ui_state
     };
 
     // ------------------------------------------------------------ geometry (scales with the node)
@@ -311,12 +344,32 @@ function buildPlanner(node) {
     // Fixed heights below the strip: a panel that grew with its content shrank the player and moved
     // the strip under the pointer whenever the selection changed.
     const selBox = el("div", { display: "flex", flexDirection: "column", gap: "4px", flex: "0 0 auto", height: "19em",
-        overflowY: "auto", borderTop: "1px solid #2b3040", paddingTop: "3px" });
+        overflowY: "auto", borderTop: "1px solid #2b3040", paddingTop: "3px", resize: "vertical" });
     const nextBar = el("div", { display: "flex", gap: "6px", alignItems: "center", height: "1.9em", overflow: "hidden", padding: "2px 6px", flexShrink: "0",
         background: "#1e1b2e", border: "1px solid #3b2d5c", borderRadius: "4px", flexWrap: "wrap" });
     // The warnings: a titled panel, one readable row each (wrapped, not cut off), click one to jump to it.
     const warnBox = el("div", { display: "flex", flexDirection: "column", gap: "2px", flex: "0 0 auto", height: "8.5em", overflowY: "auto",
-        background: "#17140d", border: "1px solid #4a3b12", borderRadius: "4px", padding: "3px 6px", boxSizing: "border-box" });
+        background: "#17140d", border: "1px solid #4a3b12", borderRadius: "4px", padding: "3px 6px", boxSizing: "border-box", resize: "vertical" });
+    // The three sections under the player collapse from the toolbar; the panel and the warnings drag taller or shorter
+    // (their corner), and the player takes what's left.
+    const SECTIONS = [["strip", "the strip (cuts, splits, chunks, mask and prompt rows)", () => [canvas, nextBar]],
+        ["panel", "the selection panel (a chunk's prompt and takes)", () => [selBox]], ["warnings", "the warnings", () => [warnBox]]];
+    const secButtons = SECTIONS.map(([k, what]) => button(k, `Show or hide ${what}`, () => {
+        S.layout.hide[k] = !S.layout.hide[k]; applyLayout(); saveUiSoon(); }));
+    function applyLayout() {
+        SECTIONS.forEach(([k, , els], i) => {
+            for (const e of els()) e.style.display = S.layout.hide[k] ? "none" : (e === canvas ? "block" : "flex");
+            secButtons[i].textContent = `${S.layout.hide[k] ? "▸" : "▾"} ${k}`;
+        });
+        if (S.layout.selH) selBox.style.height = S.layout.selH;
+        if (S.layout.warnH) warnBox.style.height = S.layout.warnH;
+    }
+    status.before(gap(), ...secButtons);
+    applyLayout();
+    for (const [box, key] of [[selBox, "selH"], [warnBox, "warnH"]]) {
+        new ResizeObserver(() => { if (box.offsetHeight && box.style.height !== S.layout[key] && box.style.display !== "none") {
+            S.layout[key] = box.style.height; saveUiSoon(); } }).observe(box);
+    }
 
     const fileInput = el("input", { display: "none" });
     fileInput.type = "file";
@@ -1255,9 +1308,11 @@ function buildPlanner(node) {
 
         // the prompt editor (adopt draft, redraft)
         const pr = row();
-        const ta = el("textarea", { flex: "1 1 auto", minWidth: "300px", height: "7.5em", background: "#111", color: C.text,
-            border: `1px solid ${(c.prompt || "").trim() ? "#444" : C.red}`, borderRadius: "4px", fontFamily: "monospace", fontSize: "0.95em", boxSizing: "border-box", userSelect: "text" });
+        const box = colouredTextarea({ border: `1px solid ${(c.prompt || "").trim() ? "#444" : C.red}` }, S.layout.promptH || "7.5em",
+            (h) => { S.layout.promptH = h; saveUiSoon(); });
+        const ta = box.ta;
         ta.value = c.prompt || "";
+        box.paint();
         ta.placeholder = "No prompt: a render won't start. Draft prompts, or write the six-section Ref2VA prompt with a [Shot n] block per shot.";
         ta.oninput = () => { S.promptDirty = true; pSave.style.borderColor = C.amber; };
         ta.onblur = () => { if (S.promptDirty) savePrompt(); };
@@ -1279,14 +1334,15 @@ function buildPlanner(node) {
             side.append(dv);
         }
         side.append(button("redraft", "Queue a draft run of this chunk: SeamStitch Swap Draft Prompts drafts it into the prompt if that's empty, otherwise into the draft field (never over your prompt)", () => queueDraft(c.id)));
-        pr.append(ta, side);
+        pr.append(box.wrap, side);
         selBox.append(pr);
 
         // the subject: one per job, shared by every chunk's subject_definitions (an edit replaces it in each prompt)
         const sr = row();
-        const subj = el("textarea", { flex: "1 1 auto", minWidth: "300px", height: "3.2em", background: "#111", color: C.text,
-            border: "1px solid #444", borderRadius: "4px", fontFamily: "monospace", fontSize: "0.9em", boxSizing: "border-box", userSelect: "text" });
+        const sbox = colouredTextarea({ border: "1px solid #444", fontSize: "0.9em" }, "3.2em");
+        const subj = sbox.ta;
         subj.value = P().subject || "";
+        sbox.paint();
         subj.placeholder = "Subject (one per job): drafted from the sheet by Draft Prompts, or write '<Subject 1> (S1) is the ... whose motion comes from <Video 1> and whose appearance comes from <Picture 1>: ...'";
         subj.title = "The job's subject, shared by every chunk: saving an edit replaces the old subject text in every chunk's prompt and draft";
         const saveSubj = () => { if (subj.value.trim() !== (P().subject || "").trim()) op({ op: "set_subject", subject: subj.value }, true).then(r => { if (r) toast(`subject saved${r.result?.subject_replaced_in ? `, replaced in ${r.result.subject_replaced_in} prompt(s)` : ""}`, "green"); }); };
@@ -1303,7 +1359,7 @@ function buildPlanner(node) {
 ${P().subject_draft}`;
             sSide.append(ad);
         }
-        sr.append(subj, sSide);
+        sr.append(sbox.wrap, sSide);
         selBox.append(sr);
 
         // the takes list: chosen radio, ▶ in context, use this prompt and seed, delete to trash
@@ -1608,7 +1664,7 @@ ${P().subject_draft}`;
         uiTimer = setTimeout(() => {
             if (!uiW || !P()) return;
             const v = JSON.stringify({ job: job(), zoom: S.fitted ? "fit" : +S.pxPerFrame.toFixed(4), scroll: Math.round(S.scroll),
-                sel: S.sel, playhead: S.playhead, view: S.mode });
+                sel: S.sel, playhead: S.playhead, view: S.mode, layout: S.layout });
             if (uiW.value !== v) uiW.value = v;
         }, 400);
     }
@@ -1618,6 +1674,7 @@ ${P().subject_draft}`;
             if (!u || u.job !== job()) return;
             if (u.zoom !== "fit" && u.zoom > 0) { S.pxPerFrame = u.zoom; S.scroll = u.scroll || 0; S.fitted = false; S.needFit = false; }
             S.sel = u.sel || null; S.playhead = u.playhead || 0; S.mode = u.view || "quick";
+            if (u.layout) { S.layout = Object.assign({ hide: {} }, u.layout); applyLayout(); }
             if (S.sel && !selValid()) S.sel = null;
         } catch { }
     }
