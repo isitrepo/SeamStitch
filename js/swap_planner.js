@@ -178,10 +178,10 @@ function colourPrompt(text) {
     return html + escapeHtml(text.slice(at)) + "\n";
 }
 // A textarea drawn over its own coloured copy: the text is transparent, the caret and selection are the textarea's.
-function colouredTextarea(style, height, onHeight) {
+function colouredTextarea(style, height) {
     const font = { fontFamily: "monospace", fontSize: style.fontSize || "0.95em", lineHeight: "1.35", padding: "3px 5px",
         boxSizing: "border-box", whiteSpace: "pre-wrap", overflowWrap: "break-word", overflowY: "scroll", margin: "0" };
-    const wrap = el("div", { position: "relative", flex: "1 1 auto", minWidth: "300px", height, resize: "vertical", overflow: "hidden",
+    const wrap = el("div", { position: "relative", flex: "1 1 auto", minWidth: "300px", minHeight: height, overflow: "hidden",
         background: "#111", border: style.border, borderRadius: "4px" });
     const back = el("div", Object.assign({ position: "absolute", inset: "0", color: "#e5e7eb", pointerEvents: "none", border: "0" }, font));
     const ta = el("textarea", Object.assign({ position: "absolute", inset: "0", width: "100%", height: "100%", background: "transparent",
@@ -189,7 +189,6 @@ function colouredTextarea(style, height, onHeight) {
     const paint = () => { back.innerHTML = colourPrompt(ta.value); back.scrollTop = ta.scrollTop; };
     ta.addEventListener("input", paint);
     ta.addEventListener("scroll", () => { back.scrollTop = ta.scrollTop; });
-    if (onHeight) new ResizeObserver(() => { if (wrap.offsetHeight) onHeight(wrap.style.height); }).observe(wrap);
     wrap.append(back, ta);
     return { wrap, ta, paint };
 }
@@ -344,21 +343,35 @@ function buildPlanner(node) {
     // Fixed heights below the strip: a panel that grew with its content shrank the player and moved
     // the strip under the pointer whenever the selection changed.
     const selBox = el("div", { display: "flex", flexDirection: "column", gap: "4px", flex: "0 0 auto", height: "19em",
-        overflowY: "auto", borderTop: "1px solid #2b3040", paddingTop: "3px", resize: "vertical" });
+        overflowY: "auto", borderTop: "1px solid #2b3040", paddingTop: "3px" });
     const nextBar = el("div", { display: "flex", gap: "6px", alignItems: "center", height: "1.9em", overflow: "hidden", padding: "2px 6px", flexShrink: "0",
         background: "#1e1b2e", border: "1px solid #3b2d5c", borderRadius: "4px", flexWrap: "wrap" });
     // The warnings: a titled panel, one readable row each (wrapped, not cut off), click one to jump to it.
     const warnBox = el("div", { display: "flex", flexDirection: "column", gap: "2px", flex: "0 0 auto", height: "8.5em", overflowY: "auto",
-        background: "#17140d", border: "1px solid #4a3b12", borderRadius: "4px", padding: "3px 6px", boxSizing: "border-box", resize: "vertical" });
+        background: "#17140d", border: "1px solid #4a3b12", borderRadius: "4px", padding: "3px 6px", boxSizing: "border-box" });
     // The three sections under the player collapse from the toolbar; the panel and the warnings drag taller or shorter
     // (their corner), and the player takes what's left.
+    // A drag bar under a section. CSS resize corners were drawn but never started a drag inside the node (the canvas
+    // takes the pointer), so the bar captures the pointer itself; the canvas zoom scales the DOM widget.
+    function grip(box, key) {
+        const g = el("div", { height: "7px", flex: "0 0 auto", cursor: "ns-resize", background: "#343b4d", borderRadius: "3px", margin: "0 35%" });
+        g.title = "Drag to make this section taller or shorter (a taller node gives everything more room)";
+        g.onpointerdown = (e) => {
+            e.stopPropagation(); e.preventDefault(); g.setPointerCapture(e.pointerId);
+            const y0 = e.clientY, h0 = box.offsetHeight, k = app.canvas?.ds?.scale || 1;
+            g.onpointermove = (m) => { box.style.height = `${Math.round(Math.max(48, h0 + (m.clientY - y0) / k))}px`; };
+            g.onpointerup = () => { g.onpointermove = null; S.layout[key] = box.style.height; saveUiSoon(); };
+        };
+        return g;
+    }
+    const selGrip = grip(selBox, "selH"), warnGrip = grip(warnBox, "warnH");
     const SECTIONS = [["strip", "the strip (cuts, splits, chunks, mask and prompt rows)", () => [canvas, nextBar]],
-        ["panel", "the selection panel (a chunk's prompt and takes)", () => [selBox]], ["warnings", "the warnings", () => [warnBox]]];
+        ["panel", "the selection panel (a chunk's prompt and takes)", () => [selBox, selGrip]], ["warnings", "the warnings", () => [warnBox, warnGrip]]];
     const secButtons = SECTIONS.map(([k, what]) => button(k, `Show or hide ${what}`, () => {
         S.layout.hide[k] = !S.layout.hide[k]; applyLayout(); saveUiSoon(); }));
     function applyLayout() {
         SECTIONS.forEach(([k, , els], i) => {
-            for (const e of els()) e.style.display = S.layout.hide[k] ? "none" : (e === canvas ? "block" : "flex");
+            for (const e of els()) e.style.display = S.layout.hide[k] ? "none" : (e === canvas || e === selGrip || e === warnGrip ? "block" : "flex");
             secButtons[i].textContent = `${S.layout.hide[k] ? "▸" : "▾"} ${k}`;
         });
         if (S.layout.selH) selBox.style.height = S.layout.selH;
@@ -366,17 +379,14 @@ function buildPlanner(node) {
     }
     status.before(gap(), ...secButtons);
     applyLayout();
-    for (const [box, key] of [[selBox, "selH"], [warnBox, "warnH"]]) {
-        new ResizeObserver(() => { if (box.offsetHeight && box.style.height !== S.layout[key] && box.style.display !== "none") {
-            S.layout[key] = box.style.height; saveUiSoon(); } }).observe(box);
-    }
+
 
     const fileInput = el("input", { display: "none" });
     fileInput.type = "file";
     fileInput.accept = "video/*";
     fileInput.onchange = async () => { if (fileInput.files[0]) await setSourceFile(fileInput.files[0]); fileInput.value = ""; };
 
-    root.append(head, targetRow, videoBox, bar1, canvas, nextBar, selBox, warnBox, fileInput);
+    root.append(head, targetRow, videoBox, bar1, canvas, nextBar, selBox, selGrip, warnBox, warnGrip, fileInput);
 
     const widget = node.addDOMWidget("swap_planner_ui", "div", root, { serialize: false, hideOnZoom: false });
     // Keep the panel out of widgets_values (a saved blank shifted onto later widgets: timeline.js).
@@ -1308,8 +1318,9 @@ function buildPlanner(node) {
 
         // the prompt editor (adopt draft, redraft)
         const pr = row();
-        const box = colouredTextarea({ border: `1px solid ${(c.prompt || "").trim() ? "#444" : C.red}` }, S.layout.promptH || "7.5em",
-            (h) => { S.layout.promptH = h; saveUiSoon(); });
+        const box = colouredTextarea({ border: `1px solid ${(c.prompt || "").trim() ? "#444" : C.red}` }, "7.5em");
+        pr.style.flex = "1 0 auto";
+        pr.style.alignItems = "stretch";
         const ta = box.ta;
         ta.value = c.prompt || "";
         box.paint();

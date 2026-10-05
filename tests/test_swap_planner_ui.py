@@ -390,3 +390,12 @@ def test_the_prompt_colours_each_tag(tmp_path):
     assert '<span style="color:#fb7185">&lt;Picture 1&gt;</span>' in out and '<span style="color:#c084fc">&lt;Audio 1&gt;</span>' in out
     assert '<span style="color:#67e8f9">&lt;d&gt;Hi &amp; bye&lt;/d&gt;</span>' in out
     assert 'font-weight:bold">[Shot 1]</span>' in out and 'font-weight:bold">summary:</span>' in out
+
+
+def test_the_sections_resize_with_drag_bars_not_css_corners():
+    # B7: CSS resize corners were drawn but the node took the drag; the bars capture the pointer themselves
+    src = open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "js", "swap_planner.js"), encoding="utf-8").read()
+    assert 'resize: "vertical"' not in src
+    g = src[src.index("function grip(box, key)"):src.index("const selGrip")]
+    assert "setPointerCapture" in g and "stopPropagation" in g and "ds?.scale" in g and "S.layout[key]" in g
+    assert "selBox, selGrip, warnBox, warnGrip" in src
