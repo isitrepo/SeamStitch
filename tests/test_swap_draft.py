@@ -788,9 +788,15 @@ def test_a_line_another_face_says_is_theirs_as_subject_2(monkeypatch):
     lines = [{"text": "Okay, stop right there.", "frames": [0, 3]}, {"text": "What?", "frames": [4, 7]},
              {"text": "Sounds good.", "frames": [2, 2]}, {"text": "untimed"}]
     monkeypatch.setattr(ss, "face_mouths", lambda frames, masks, path, fps: (
-        [0.2, 0.27, 0.21, 0.28, 0.30, 0.31, 0.30, 0.32], [None, None, None, None, 0.20, 0.38, 0.22, 0.40]))
+        [0.2, 0.27, 0.21, 0.28, 0.30, 0.31, 0.30, 0.32], [None, None, None, None, 0.20, 0.38, 0.22, 0.40], [0.8] * 8))
     assert sd.attribute_lines(lines, [None] * 8, [None] * 8, "x.task", 24) == 1
-    assert [ln.get("by") for ln in lines] == [None, "other", None, None]
+    assert [ln.get("by") for ln in lines] == [None, "other", None, None] and lines[1]["by_x"] == 0.8
+    # with two others named, the talking face's place in frame picks the one described there (B7: c18)
+    two = [("<Subject 2>", "a man laughing reclined on the same couch to the right"),
+           ("<Subject 3>", "another person partially visible behind him near the back wall")]
+    assert sd.subject_at(0.8, two) == "<Subject 2>" and sd.subject_at(0.2, two) is None and sd.subject_at(None, two) is None
+    assert sd.subject_at(0.5, [("<Subject 2>", "a man in the middle"), ("<Subject 3>", "a woman on the left")]) == "<Subject 2>"
+    assert sd.subject_at(0.8, [("<Subject 2>", "a man on the right"), ("<Subject 3>", "a woman to the right")]) is None
     lines[1]["speaker_label"] = "<Subject 2>"
     sd.speaker_ids(lines)
     # a tag Qwen wrote as hers is put back as his where the words are his line
@@ -825,7 +831,7 @@ def test_the_timeline_draft_writes_another_speaker_as_their_own_subject(job, mon
     import torch
     monkeypatch.setattr(sd.spl, "cached_mask", lambda plan, jd, a, b, held=0, target="": (torch.ones((b - a + 1, 8, 8)), None))
     monkeypatch.setattr(ss, "face_mouths", lambda frames, masks, path, fps: (
-        [0.20] * len(frames), [0.20 if i % 2 else 0.45 for i in range(len(frames))]))
+        [0.20] * len(frames), [0.20 if i % 2 else 0.45 for i in range(len(frames))], [0.7] * len(frames)))
     rep = _draft(job, sheet=_sheet(), qwen_cls=TimelineQwen(), template=sd.TEMPLATES[2])
     p = sp.load_plan(job["plan"])
     sec = sd.parse_sections(p["chunks"][0]["prompt"])

@@ -898,16 +898,30 @@ def speaker_ids(lines):
 
 
 def attribute_lines(lines, frames, masks, model_path, fps):
-    """Marks the timed lines another face says ("by": "other"), from whose mouth moves over each line's
-    frames (swap_scores.face_mouths / speaker_of). frames and masks: the chunk's render range. -> count."""
-    tgt, oth = ss.face_mouths(frames, masks, model_path, fps)
+    """Marks the timed lines another face says ("by": "other", and "by_x": where that face is across the
+    frame, 0 left - 1 right), from whose mouth moves over each line's frames (swap_scores.face_mouths /
+    speaker_of). frames and masks: the chunk's render range. -> count."""
+    tgt, oth, oth_x = ss.face_mouths(frames, masks, model_path, fps)
     n = 0
     for ln in lines:
-        if "frames" in ln and ss.speaker_of(tgt[ln["frames"][0]:ln["frames"][1] + 1],
-                                            oth[ln["frames"][0]:ln["frames"][1] + 1]) == "other":
+        a, b = ln["frames"] if "frames" in ln else (0, -1)
+        if "frames" in ln and ss.speaker_of(tgt[a:b + 1], oth[a:b + 1]) == "other":
+            xs = [x for x in oth_x[a:b + 1] if x is not None]
             ln["by"] = "other"
+            ln["by_x"] = float(np.median(xs)) if xs else None
             n += 1
     return n
+
+
+def subject_at(x, people):
+    """The one subject whose description puts them where the talking face is ("on the right" for a face
+    right of centre), or None when none or several fit. people: [(label, description)]."""
+    if x is None:
+        return None
+    side = "left" if x < 0.4 else "right" if x > 0.6 else "centre"
+    words = {"left": ("left",), "right": ("right",), "centre": ("centre", "center", "middle")}[side]
+    fit = [lab for lab, desc in people if any(re.search(rf"\b{w}\b", desc.lower()) for w in words)]
+    return fit[0] if len(fit) == 1 else None
 
 
 def _verb3(v, pr):
@@ -1953,7 +1967,10 @@ def run_draft(plan_file, *, sheet=None, mode=CHUNK_MODES[0], named=(), qwen_mode
                                             why, fps)
                         for ln in ci["lines"]:
                             if ln.get("by") == "other":
-                                ln["speaker_label"] = labels[0] if len(labels) == 1 else "another person's voice"
+                                # one other person: theirs; several: whoever the talking face's place in frame fits
+                                ln["speaker_label"] = (labels[0] if len(labels) == 1 else
+                                                       subject_at(ln.get("by_x"), list(zip(labels, people)))
+                                                       or "another person's voice")
                         if k:
                             ci["warnings"].append(f"{k} line(s) said by {people[0] if len(people) == 1 else 'someone else'}"
                                                   f": not hers (check them against the clip)")
