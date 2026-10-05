@@ -363,9 +363,10 @@ group *Swap Render · Character Replace*.
    scene, another person). Re-mark and redraft after a change. *mark* tracks a chunk shot by shot (SAM3
    doesn't find the person again after a cut): mark chunks with cuts in them before rendering, since a
    render without a cached mask tracks its whole chunk in one go. With other people in a chunk, mark it
-   before drafting: the drafter names everyone it sees, and gives a line to whoever's mouth moves during it
-   (mediapipe's face landmarks, her face being the one inside the mask). One other speaker is written as
-   `<Subject 2> (S2)`, keeping their own look; with several, their lines go into the soundscape. *invert* marks everything but them, for a
+   before drafting: the drafter names everyone it sees (each a `<Subject N>` kept as they are), and gives a
+   line to whoever's mouth moves during it (mediapipe's face landmarks, her face being the one inside the
+   mask). Speaker IDs `(S1)`, `(S2)` follow the order the voices first speak, and every line stays in its
+   shot's `<d>`, as MiniMax's Ref2VA prompt guide lays out. *invert* marks everything but them, for a
    background swap; the drafted prompt and the R score still describe a person swap, so write that prompt
    yourself.
 2. **Keep original** where nobody needs replacing: drag the strip's start or end handle in (or set
