@@ -267,35 +267,38 @@ def mouth_series(frames, model_path, fps=25.0):
 
 def face_mouths(frames, masks, model_path, fps=25.0):
     """Who speaks in a shot with more than one person (B7): the mouth opening per frame of the face whose
-    centre is inside `masks` (the target) and of the largest face outside it, None where there's none.
-    frames: RGB uint8; masks: [n, h, w] in 0-1 at any size."""
+    centre is inside `masks` (the target) and of the largest face outside it, None where there's none, and
+    where that other face's centre is across the frame (0 left - 1 right). frames: RGB uint8; masks: [n, h, w]
+    in 0-1 at any size. -> (target, other, other_x)."""
     import mediapipe as mp
     from mediapipe.tasks.python import BaseOptions, vision
     opts = vision.FaceLandmarkerOptions(base_options=BaseOptions(model_asset_path=str(model_path)),
                                         running_mode=vision.RunningMode.VIDEO, num_faces=4)
-    tgt, oth = [], []
+    tgt, oth, oth_x = [], [], []
     step = 1000.0 / float(fps or 25.0)
     with vision.FaceLandmarker.create_from_options(opts) as lm:
         for t, (f, m) in enumerate(zip(frames, masks)):
             f = thumb(f, interp=cv2.INTER_CUBIC)
             r = lm.detect_for_video(mp.Image(image_format=mp.ImageFormat.SRGB, data=np.ascontiguousarray(f)),
                                     int(round(t * step)))
-            ti = oi = None
+            ti = oi = ox = None
             widest = 0.0
             for p in r.face_landmarks:
                 gap = np.hypot((p[13].x - p[14].x) * AN_W, (p[13].y - p[14].y) * AN_H)
                 wid = np.hypot((p[78].x - p[308].x) * AN_W, (p[78].y - p[308].y) * AN_H)
                 if wid <= 1:
                     continue
-                cx = min(m.shape[1] - 1, max(0, int(np.mean([q.x for q in p]) * m.shape[1])))
+                fx = float(np.mean([q.x for q in p]))
+                cx = min(m.shape[1] - 1, max(0, int(fx * m.shape[1])))
                 cy = min(m.shape[0] - 1, max(0, int(np.mean([q.y for q in p]) * m.shape[0])))
                 if m[cy, cx] > 0.5:
                     ti = float(gap / wid)
                 elif wid > widest:
-                    widest, oi = wid, float(gap / wid)
+                    widest, oi, ox = wid, float(gap / wid), fx
             tgt.append(ti)
             oth.append(oi)
-    return tgt, oth
+            oth_x.append(ox)
+    return tgt, oth, oth_x
 
 
 def speaker_of(target, other):
