@@ -58,6 +58,43 @@ function formatSequence(entries) {
     }).join("\n");
 }
 
+// A Swap job's joins on the strip. `L` is layout() ({e, strip, len} per entry), `swap` maps a
+// clip path to its assembly's joins (/seamstitch/timeline/swap_joins). A join at assembly
+// frame f shows on every clip of that file that plays f, at strip x.strip + (f - enter):
+// trimmed, split or placed after other clips, the mark stays on the same picture. At a strip
+// rate `fr` other than the assembly's own, f lands on the strip frame at the same time.
+function joinMarks(L, swap, fr) {
+    const out = [];
+    for (const x of L) {
+        if (x.e.kind !== "clip") continue;
+        const sw = swap[x.e.path];
+        if (!sw || !sw.joins) continue;
+        const enter = x.e.enter || 0;
+        const k = fr && sw.fps && Math.abs(fr - sw.fps) > 1e-6 ? fr / sw.fps : 1;
+        for (const j of sw.joins) {
+            const f = Math.round(j.frame * k);
+            if (f < enter || f >= enter + x.len) continue;
+            out.push(Object.assign({}, j, { i: x.i, strip: x.strip + (f - enter) }));
+        }
+    }
+    return out;
+}
+// The mark after (dir 1) or before (dir -1) strip frame f, or null: browsing the marks moves
+// the playhead only, nothing is marked to regenerate.
+function nextMark(marks, f, dir) {
+    let best = null;
+    for (const m of marks) {
+        if (dir > 0 ? m.strip > f && (!best || m.strip < best.strip) : m.strip < f && (!best || m.strip > best.strip)) best = m;
+    }
+    return best;
+}
+const JOIN_KINDS = { straight: "straight", forward: "forward lock", entry: "entry lock", exit: "exit lock", pending: "pending" };
+function joinColour(j) {
+    return j.verdict === "red" ? "#f87171" : j.verdict === "amber" ? "#fbbf24" : j.verdict === "green" ? "#34d399" : "#9ca3af";
+}
+// Only paths that could be a Swap assembly are asked about; the server decides.
+const maybeSwapPath = (p) => /(^|[\\/])seamstitch_swap[\\/][^\\/]+[\\/]assembled[\\/]/.test(p || "");
+
 function snapUp(n, grid) {
     n = Math.max(1, Math.round(n));
     if (grid === GRID_NONE) return n;
@@ -180,7 +217,7 @@ function buildTimeline(node) {
     const S = {
         entries: [], info: {}, fr: 24, target: {}, sel: -1, playhead: 0, pxPerFrame: 3, scroll: 0,
         mode: "quick", full: null, fullKey: "", playing: false, hover: null, drag: null,
-        msg: "", msgKind: "dim", loadingProbe: 0,
+        msg: "", msgKind: "dim", loadingProbe: 0, swap: {},
     };
 
     // ------------------------------------------------------------ geometry (scales with the node)
@@ -232,12 +269,15 @@ function buildTimeline(node) {
     const bFit = button("fit", "Fit the whole strip into the node", () => fit());
     const bAdd = button("+ add", "Add a video from the input folder, or upload one", (ev) => openAddMenu(ev));
     const bText = button("✎", "Edit the strip as text", () => openTextEditor());
+    const bPrevJoin = button("◂ join", "Jump to the previous Swap join mark ([) - moves the playhead only", () => stepJoin(-1));
+    const bNextJoin = button("join ▸", "Jump to the next Swap join mark (]) - moves the playhead only", () => stepJoin(1));
+    const bSwap = button("Swap job ▾", "Put a Swap job's assembly on the strip with its joins marked above the ruler (click a mark to jump or bridge it)", (ev) => openSwapMenu(ev));
     const bIn = button("I", "Mark in: the replace range starts at the playhead", () => markIn());
     const bOut = button("O", "Mark out: the replace range ends at the playhead", () => markOut());
     const bClear = button("✕ mark", "Clear what is marked to regenerate", () => setTarget({}));
     const status = el("span", { marginLeft: "auto", color: C.dim, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "45%" });
     bar1.append(bPlay, bMode, el("span", { width: "6px" }), bZoomOut, bZoomIn, bFit, el("span", { width: "6px" }),
-        bAdd, bText, el("span", { width: "6px" }), bIn, bOut, bClear, status);
+        bAdd, bSwap, bPrevJoin, bNextJoin, bText, el("span", { width: "6px" }), bIn, bOut, bClear, status);
 
     const canvas = el("canvas", { width: "100%", height: `${CANVAS_H}px`, display: "block", cursor: "default",
         borderRadius: "4px", touchAction: "none", flex: "0 0 auto" });
@@ -350,7 +390,20 @@ function buildTimeline(node) {
         S.fr = fr || 24;
         const token = ++S.loadingProbe;
         await Promise.all(paths.map(async p => { const inf = await probeOne(p, S.fr); if (inf && token === S.loadingProbe) S.info[p] = inf; }));
+        await loadSwapJoins(paths);
         refresh();
+    }
+    // Marks are read from each clip's own path, so they come back after a reload with nothing
+    // saved in the workflow. Re-read every time (an assembly's report can be rewritten).
+    async function loadSwapJoins(paths) {
+        const swap = {};
+        await Promise.all(paths.filter(maybeSwapPath).map(async p => {
+            try {
+                const r = await api.fetchApi(`/seamstitch/timeline/swap_joins?path=${encodeURIComponent(p)}`);
+                if (r.ok) swap[p] = await r.json();
+            } catch { }
+        }));
+        S.swap = swap;
     }
     const probeCache = {};
     async function probeOne(path, fr) {
@@ -425,6 +478,8 @@ function buildTimeline(node) {
         drawNextBar();
         const hasClips = S.entries.some(e => e.kind === "clip");
         emptyHint.style.display = hasClips ? "none" : "flex";
+        const joins = joinMarks(layout(), S.swap, S.fr).length > 0;
+        bPrevJoin.style.display = bNextJoin.style.display = joins ? "" : "none";
         bMode.textContent = S.mode === "full" ? "full ●" : "quick";
         bMode.style.borderColor = S.mode === "full" ? C.ok : "#3b4252";
         updateOverlay();
@@ -454,6 +509,28 @@ function buildTimeline(node) {
             if (x < 0) continue;
             g.beginPath(); g.moveTo(x, RULER_H - 6 * U); g.lineTo(x, RULER_H); g.stroke();
             g.fillText(stepSec < 1 ? `${s.toFixed(2)}s` : `${s}s`, x + 2, 3 * U);
+        }
+        // Swap joins: a coloured flag on the ruler (verdict colour; straight joins small) and a
+        // faint line down the track.
+        let lastLabel = -1e9;
+        for (const m of joinMarks(t.L, S.swap, S.fr)) {
+            const x = Math.round(f2x(m.strip)) + 0.5;
+            if (x < -10 || x > w + 10) continue;
+            const hot = S.hover && S.hover.kind === "join" && S.hover.m.strip === m.strip;
+            const col = joinColour(m), r = (m.type === "straight" ? 3.5 : 5.5) * U * (hot ? 1.4 : 1);
+            g.strokeStyle = col; g.globalAlpha = 0.45;
+            g.beginPath(); g.moveTo(x, RULER_H); g.lineTo(x, TRACK_Y + TRACK_H); g.stroke(); g.globalAlpha = 1;
+            g.fillStyle = col;
+            g.beginPath(); g.moveTo(x - r, RULER_H - 2 * r); g.lineTo(x + r, RULER_H - 2 * r); g.lineTo(x, RULER_H); g.fill();
+            if (m.type !== "straight" || hot) {
+                const label = `${m.frame}`;
+                g.font = font(9, true);
+                const lw = g.measureText(label).width;
+                if (x - lw / 2 > lastLabel + 4 || hot) {
+                    g.fillStyle = col; g.textAlign = "center"; g.fillText(label, x, 2 * U); g.textAlign = "left";
+                    lastLabel = x + lw / 2;
+                }
+            }
         }
         // track
         g.textBaseline = "middle";
@@ -754,6 +831,80 @@ function buildTimeline(node) {
         ]);
     }
 
+    async function openSwapMenu(ev) {
+        let jobs = [];
+        try {
+            const r = await api.fetchApi("/seamstitch/timeline/swap_jobs");
+            jobs = (await r.json()).jobs || [];
+        } catch (e) { toast(`Swap jobs: ${e}`, "err"); }
+        const items = [];
+        if (!jobs.length) items.push({ label: "no Swap job has an assembly yet (output/seamstitch_swap/<job>/assembled)" });
+        for (const j of jobs.slice(0, 30)) {
+            if (items.length) items.push({ sep: true });
+            items.push({ label: j.job });
+            j.assemblies.slice(0, 8).forEach((a, k) => items.push({
+                text: `${k === 0 ? "latest · " : ""}${a.file}`,
+                title: `Adds this line to the end of the strip:\n${a.path}`,
+                run: () => addSwapAssembly(a),
+            }));
+        }
+        popup(ev, items);
+    }
+    async function addSwapAssembly(a) {
+        const at = S.entries.length;
+        await addPath(a.path, at);
+        const x = layout()[at];
+        const marks = joinMarks(layout(), S.swap, S.fr).filter(m => m.i === at);
+        const worst = marks.find(m => m.verdict === "red") || marks.find(m => m.verdict === "amber");
+        S.sel = at;
+        if (worst) seekStrip(worst.strip); else if (x) seekStrip(x.strip);
+        refresh();
+        toast(`added ${a.path} · ${marks.length} join${marks.length === 1 ? "" : "s"} marked${worst ? ` · at the ${worst.verdict} one, frame ${worst.frame}` : ""}`, "ok");
+    }
+
+    function joinLabel(m) {
+        const chunks = m.left_chunk && m.right_chunk ? ` · ${m.left_chunk} → ${m.right_chunk}` : "";
+        return `Swap join at frame ${m.frame} · ${JOIN_KINDS[m.type] || m.type}${m.verdict ? ` · ${m.verdict}` : ""}${chunks}`;
+    }
+    // Returns false when the strip has no marks (so the [ / ] keys stay free on any other strip).
+    function stepJoin(dir) {
+        const marks = joinMarks(layout(), S.swap, S.fr);
+        if (!marks.length) return false;
+        const m = nextMark(marks, S.playhead, dir);
+        if (!m) { toast(dir > 0 ? "no join after the playhead" : "no join before the playhead", "warn"); return true; }
+        seekStrip(m.strip);
+        toast(`${joinLabel(m)} - click its mark to bridge it`, m.verdict === "red" ? "err" : m.verdict === "amber" ? "warn" : "ok");
+        return true;
+    }
+
+    function joinMenu(ev, m) {
+        const each = Math.max(4, Math.round(S.fr / 4));
+        popup(ev, [
+            { label: joinLabel(m) },
+            { text: `bridge this join: regenerate ${each} frames each side`, title: "Replace mode across the join, as ✂ does between two clips", run: () => bridgeJoin(m, each) },
+            { text: `bridge this join: regenerate ${each * 2} frames each side`, run: () => bridgeJoin(m, each * 2) },
+            { text: "open a gap here (insert new frames)", title: "Splits the clip at the join and opens a gap there", run: () => gapAtJoin(m) },
+            { sep: true },
+            { text: "jump here", run: () => seekStrip(m.strip) },
+        ]);
+    }
+    function bridgeJoin(m, each) {
+        const c = stripToCut(m.strip);
+        setTarget({ mode: "replace", start: c - each, end: c + each - 1 });
+        seekStrip(Math.max(0, m.strip - each - 12));
+        toast(`marked ${each} frames either side of the join at ${m.frame} - drag the purple row's edges to adjust`, "ok");
+    }
+    function gapAtJoin(m) {
+        const x = layout()[m.i];
+        if (!x || x.e.kind !== "clip") return;
+        const at = x.e.enter + (m.strip - x.strip);
+        if (at > x.e.enter) {
+            S.entries.splice(x.i + 1, 0, { kind: "clip", path: x.e.path, enter: at, exit: x.e.exit });
+            x.e.exit = at;
+            openGapAt(x.i + 1);
+        } else openGapAt(x.i);
+    }
+
     function openTextEditor() {
         const box = el("div", { position: "fixed", inset: "0", background: "rgba(0,0,0,.55)", zIndex: 10000, display: "flex", alignItems: "center", justifyContent: "center" });
         const card = el("div", { background: "#1f2330", border: "1px solid #3b4252", borderRadius: "8px", padding: "12px", width: "min(720px, 90vw)", color: C.text, fontFamily: "sans-serif", fontSize: "12px" });
@@ -913,7 +1064,14 @@ function buildTimeline(node) {
     }
     function hit(p) {
         const t = totals();
-        if (p.y < RULER_H) return { kind: "ruler" };
+        if (p.y < RULER_H) {
+            let best = null;
+            for (const m of joinMarks(t.L, S.swap, S.fr)) {
+                const d = Math.abs(p.x - f2x(m.strip));
+                if (d < 7 * U && (!best || d < best.d)) best = { d, m };
+            }
+            return best ? { kind: "join", m: best.m } : { kind: "ruler" };
+        }
         if (p.y >= BAND_Y) {
             const pl = plan();
             if (pl.mode === "replace" || pl.mode === "gap") {
@@ -948,7 +1106,7 @@ function buildTimeline(node) {
         if (S.drag) { onDrag(p, ev); return; }
         const h = hit(p);
         S.hover = h;
-        canvas.style.cursor = h.kind === "edge" || h.kind === "bandEdge" ? "ew-resize" : h.kind === "seam" ? "pointer" :
+        canvas.style.cursor = h.kind === "edge" || h.kind === "bandEdge" ? "ew-resize" : h.kind === "seam" || h.kind === "join" ? "pointer" :
             h.kind === "label" ? "grab" : h.kind === "body" || h.kind === "ruler" ? "col-resize" : h.kind === "band" ? "crosshair" : "default";
         drawCanvas();
     });
@@ -962,6 +1120,7 @@ function buildTimeline(node) {
         const L = layout();
         if (h.kind === "ruler") { S.drag = { kind: "scrub" }; seekStrip(x2f(p.x)); return; }
         if (h.kind === "seam") { seamMenu(ev, h.i); return; }
+        if (h.kind === "join") { seekStrip(h.m.strip); joinMenu(ev, h.m); return; }
         if (h.kind === "edge") {
             const x = L[h.i];
             S.sel = h.i;
@@ -1095,6 +1254,7 @@ function buildTimeline(node) {
         else if (k === "ArrowRight") { handled(); seekStrip(S.playhead + (ev.shiftKey ? 10 : 1)); }
         else if (k === "Home") { handled(); seekStrip(0); }
         else if (k === "End") { handled(); seekStrip(totals().strip - 1); }
+        else if ((k === "[" || k === "]") && stepJoin(k === "]" ? 1 : -1)) handled();
     };
     window.addEventListener("keydown", onKey, true);
 

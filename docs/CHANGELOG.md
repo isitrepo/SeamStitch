@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+### New
+
+- **Timeline: Swap job ▾ and join marks.** The Timeline lists the Swap jobs that have an assembly and
+  puts one on the strip with every join marked on the ruler (frame, kind, verdict colour). Clicking a
+  mark jumps there, bridges N frames either side of it, or opens a gap at it, with the Timeline's own
+  marking; **◂ join / join ▸** (or `[` / `]`) step the playhead from mark to mark without marking
+  anything. The marks come from the clip's path, so they survive a reload and follow a trimmed, split or
+  moved clip. Two read-only routes, `/seamstitch/timeline/swap_jobs` and `/seamstitch/timeline/swap_joins`:
+  they answer only for a Swap job's own `assembled/` files, matched against the server's own listing
+  (a client path is never opened). No widget added or moved: a saved Timeline workflow loads and builds
+  the same cut.
+
 ## 0.4.0 — SeamStitch Swap
 
 ### New
