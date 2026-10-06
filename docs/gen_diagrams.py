@@ -35,7 +35,7 @@ DOCS_IMAGES = Path(__file__).parent / "images"
 SOCKET_TYPES = {
     "IMAGE", "AUDIO", "LATENT", "MASK", "MODEL", "VAE", "CLIP",
     "CONDITIONING", "CONTROL_NET", "STYLE_MODEL", "CLIP_VISION",
-    "VHS_FILENAMES", "VHS_VIDEOINFO", "SEAMSTITCH_SWAP_CHUNK", "SEAMSTITCH_SWAP_MARK",
+    "VHS_FILENAMES", "VHS_VIDEOINFO", "SEAMSTITCH_SWAP_CHUNK", "SEAMSTITCH_SWAP_MARK", "SAM3_TRACK_DATA",
 }
 # Inputs with forceInput are sockets even when their type (INT, STRING...) is normally a widget.
 

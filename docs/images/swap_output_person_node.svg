@@ -1,0 +1,24 @@
+<svg width="620" height="205" viewBox="0 0 620 205" xmlns="http://www.w3.org/2000/svg" font-family="Segoe UI, Helvetica, Arial, sans-serif">
+<rect x="0" y="0" width="620" height="205" fill="#1a1a1a"/>
+<rect x="24" y="10" width="572" height="185" rx="10" fill="#2a2a2a" stroke="#454545" stroke-width="1.5"/>
+<path d="M 24 40 Q 24 10 34 10 L 586 10 Q 596 10 596 40 Z" fill="#2f8f8f"/>
+<text x="38" y="30" fill="#ffffff" font-size="14" font-weight="600">SeamStitch Swap Output Person</text>
+<rect x="25" y="39" width="570" height="24" fill="#242424" opacity="0.4"/>
+<circle cx="24" cy="51.0" r="5.5" fill="#ffd54f" stroke="#1a1a1a" stroke-width="1.5"/>
+<text x="36" y="55.0" fill="#e8e8e8" font-size="12">chunk</text>
+<circle cx="596" cy="51.0" r="5.5" fill="#81c784" stroke="#1a1a1a" stroke-width="1.5"/>
+<text x="584" y="55.0" fill="#e8e8e8" font-size="12" text-anchor="end">output_mask</text>
+<circle cx="24" cy="75.0" r="5.5" fill="#b0bec5" stroke="#1a1a1a" stroke-width="1.5"/>
+<text x="36" y="79.0" fill="#e8e8e8" font-size="12">track_data</text>
+<circle cx="596" cy="75.0" r="5.5" fill="#b0bec5" stroke="#1a1a1a" stroke-width="1.5"/>
+<text x="584" y="79.0" fill="#e8e8e8" font-size="12" text-anchor="end">report</text>
+<rect x="25" y="87" width="570" height="24" fill="#242424" opacity="0.4"/>
+<circle cx="24" cy="99.0" r="5.5" fill="#81c784" stroke="#1a1a1a" stroke-width="1.5"/>
+<text x="36" y="103.0" fill="#e8e8e8" font-size="12">source_mask</text>
+<circle cx="24" cy="123.0" r="5.5" fill="#64b5f6" stroke="#1a1a1a" stroke-width="1.5"/>
+<text x="36" y="127.0" fill="#e8e8e8" font-size="12" font-style="italic">images</text>
+<rect x="25" y="135" width="570" height="24" fill="#242424" opacity="0.4"/>
+<circle cx="24" cy="147.0" r="5.5" fill="#64b5f6" stroke="#1a1a1a" stroke-width="1.5"/>
+<text x="36" y="151.0" fill="#e8e8e8" font-size="12" font-style="italic">sheet</text>
+<line x1="34" y1="168" x2="586" y2="168" stroke="#454545" stroke-width="1"/>
+</svg>
