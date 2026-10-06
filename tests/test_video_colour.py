@@ -88,7 +88,7 @@ def test_recombine_decodes_a_small_bt709_clip_with_its_own_matrix(clip, tmp_path
     pkg = root / "ss_colour"
     pkg.mkdir()
     open(str(pkg / "__init__.py"), "w").close()
-    for name in ("recombine.py", "audio_splice.py", "video_colour.py"):
+    for name in ("recombine.py", "audio_splice.py", "video_colour.py", "bridge_match.py"):
         shutil.copyfile(os.path.join(ROOT, name), str(pkg / name))
     sys.path.insert(0, str(root))
     try:

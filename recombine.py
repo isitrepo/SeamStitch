@@ -66,6 +66,7 @@ from videohelpersuite.nodes import (
 
 from .audio_splice import splice_audio, match_format, frame_sample
 from .video_colour import color_args
+from .bridge_match import match_bridge
 
 
 def pack_video_formats():
@@ -483,6 +484,9 @@ class SeamStitchRecombine:
                 # Appended last, for the positional widget_values reason above.
                 "skip_encode": ("BOOLEAN", {"default": False,
                                 "tooltip": "On: splice only - combined_images and audio come out, but no video is written (Filenames is empty). Use it when SeamStitch Result Preview (or VHS Video Combine) saves the final video, so the splice is not encoded twice."}),
+                # Appended last, for the positional widget_values reason above.
+                "match_to_source": ("BOOLEAN", {"default": False,
+                                    "tooltip": "On: the regenerated frames' detail and colour are ramped from the source frames just before them to the source frames just after them, so a soft bridge (or two sides that differ, like two Swap takes) changes gradually instead of jumping at one frame. Detail by a per-frame unsharp mask, colour by a per-channel offset. Replace mode only; off by default."}),
             },
             "hidden": {
                 "prompt": "PROMPT",
@@ -500,8 +504,8 @@ class SeamStitchRecombine:
                   frame_rate, dedup_threshold, max_dedup_frames, filename_prefix, format,
                   save_output=True, original_audio_override=None, bridge_audio=None,
                   audio_mode="original", audio_bridge_weight=0.35, audio_crossfade_ms=20.0,
-                  insert=False, context_frames=0, skip_encode=False, prompt=None, extra_pnginfo=None,
-                  **kwargs):
+                  insert=False, context_frames=0, skip_encode=False, match_to_source=False, prompt=None,
+                  extra_pnginfo=None, **kwargs):
 
         if not original_video_path or not os.path.exists(original_video_path):
             raise FileNotFoundError(f"original_video_path not found: {original_video_path}")
@@ -579,6 +583,13 @@ class SeamStitchRecombine:
         # few GB and tens of GB of transient peak memory.
         deduped_u8 = _fit_to_source(deduped.clamp(0, 1).mul(255).round().to(torch.uint8),
                                     src_w, src_h)
+        if match_to_source and not insert and deduped_u8.shape[0] > 0                 and before is not None and before.shape[0] > 0 and after is not None and after.shape[0] > 0:
+            matched, rows = match_bridge(deduped_u8.numpy(), before[-6:].numpy(), after[:6].numpy())
+            deduped_u8 = torch.from_numpy(matched)
+            if rows:
+                print(f"[SeamStitch] Match to source: detail {rows[0]['detail_before']:.0f}..{rows[-1]['detail_before']:.0f} "
+                      f"-> {rows[0]['detail_after']:.0f}..{rows[-1]['detail_after']:.0f} (ramped between the sides), "
+                      f"colour offsets {rows[0]['offset']} .. {rows[-1]['offset']}.")
         chunks = [t for t in (before, deduped_u8, after) if t is not None and t.shape[0] > 0]
         if not chunks:
             raise RuntimeError("Nothing to combine — before/regenerated/after all produced zero frames.")
