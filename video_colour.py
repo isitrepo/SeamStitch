@@ -86,3 +86,63 @@ def color_args(cc, w, h):
     c_range = getattr(cc, "color_range", None) if cc is not None else None
     dst = ColorRange.JPEG if ColorRange else "jpeg"
     return stream_colorspace(c_space, w, h), stream_color_range(c_range), dst
+
+
+# ---------------------------------------------------------------------------
+# rotation: a phone stores the sensor's picture as shot and tags the file with a display
+# matrix ("rotate 180" when held upside down) instead of turning the pixels. Players and
+# ffmpeg follow the tag; PyAV hands back the stored picture, so a phone clip decoded upside
+# down or on its side. Every decoder in the pack turns its frames by the tag (ffmpeg's rule)
+# and reports the turned size.
+# ---------------------------------------------------------------------------
+
+_ROTATION_CACHE = {}
+
+
+def frame_turns(frame):
+    """Counter-clockwise quarter turns (0-3) that put a decoded frame upright: its display
+    matrix's rotation / 90 (PyAV's VideoFrame.rotation, counter-clockwise degrees)."""
+    try:
+        r = float(getattr(frame, "rotation", 0) or 0)
+    except (TypeError, ValueError):
+        return 0
+    return int(round(r / 90.0)) % 4
+
+
+def upright(rgb, turns):
+    """An HxWxC array turned upright (np.rot90 is counter-clockwise, the same as the tag)."""
+    if not turns:
+        return rgb
+    import numpy as np
+    return np.ascontiguousarray(np.rot90(rgb, turns))
+
+
+def file_turns(path):
+    """The quarter turns of a file's first video stream, from its first decoded frame (the
+    tag rides on every frame's side data; PyAV doesn't expose it on the stream). Cached."""
+    import os
+    import av
+    try:
+        st = os.stat(path)
+    except OSError:
+        return 0
+    key = (os.path.abspath(path), st.st_mtime_ns, st.st_size)
+    if key not in _ROTATION_CACHE:
+        turns = 0
+        try:
+            with av.open(path) as c:
+                if c.streams.video:
+                    for frame in c.decode(c.streams.video[0]):
+                        turns = frame_turns(frame)
+                        break
+        except Exception:
+            turns = 0
+        if len(_ROTATION_CACHE) > 512:
+            _ROTATION_CACHE.clear()
+        _ROTATION_CACHE[key] = turns
+    return _ROTATION_CACHE[key]
+
+
+def display_size(w, h, turns):
+    """(width, height) as shown: a quarter turn swaps them."""
+    return (h, w) if turns % 2 else (w, h)
