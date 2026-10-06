@@ -13,6 +13,20 @@
   they answer only for a Swap job's own `assembled/` files, matched against the server's own listing
   (a client path is never opened). No widget added or moved: a saved Timeline workflow loads and builds
   the same cut.
+- **Recombine: `match_to_source`** (appended, off by default). Ramps the regenerated frames' detail
+  (an unsharp amount solved per frame) and colour (a per-channel offset) from the source frames before
+  them to the ones after, so a soft bridge, or a seam between two different takes, changes gradually
+  instead of jumping at one frame. On a Swap seam: bridge detail 360-700 -> 900-1550 between sides of
+  ~820 and ~1630; the biggest frame-to-frame step 1.17x where the seam had 2.25x.
+
+### Fixed
+
+- **Colour: a tagged BT.709 video under 720 wide decoded with the BT.601 matrix** (Loader, Recombine)
+  when PyAV returns the stream's tags as plain ints (PyAV 17), so every Recombine result came out 1-3
+  levels darker in the midtones (-2.7 luma measured on a 624x352 Swap assembly; -1.0 now, the
+  4:2:0 save's own loss). One helper (`video_colour.py`) now serves Loader, Recombine and Timeline.
+- Docs: MiniMax Guides' `clip` anchors flash the first new frame of a short bridge; `per frame`
+  doesn't.
 
 ## 0.4.0 — SeamStitch Swap
 

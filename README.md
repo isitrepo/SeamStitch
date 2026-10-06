@@ -104,6 +104,13 @@ clip's path each time the node loads, so they survive a reload, follow the clip 
 or placed after other clips, and save nothing new in the workflow. Read only: nothing is written back to
 the Swap job, and the fixed video is a new file (Recombine's), not a new assembly.
 
+What made a Swap seam (two takes, the right one much crisper) bridge cleanly with MiniMax H3, measured on
+a 12-frame bridge with 5 context frames: Motion Guides `anchor_mode` **per frame** (a `clip` anchor flashed
+the first new frame), the generator at **2× the source size** (its frames come out soft at the source's own
+size; Recombine scales them back), and Recombine's **`match_to_source`** on, which ramps the bridge's detail
+and colour from one take to the other. Without it the bridge is softer than both sides and the jump in
+sharpness only moves to the bridge's far edge.
+
 ### Widgets
 
 | Widget | Meaning |
@@ -215,6 +222,7 @@ audio at the same frames so sound and picture stay in sync → encode.
 | `insert` | Off: the new frames **replace** `[start_frame, end_frame]`. On: they are **inserted** at the join and nothing is removed (`end_frame` may equal `start_frame − 1`); the clip's first/last frame are always dropped; the gap's audio is `bridge_audio` or silence — never the source's audio from around the join. Needs ≥ 3 frames. Wire from the Timeline's `insert`. |
 | `context_frames` | Wire from the Timeline's `context_frames`: drops K frames from each end of the clip before anything else. Replace mode only. |
 | `skip_encode` | Splice only: no video is written (`Filenames` is empty). Turn on when Result Preview saves the video, so it isn't encoded twice. |
+| `match_to_source` | Off by default. On: the new frames' **detail and colour ramp** from the 6 source frames before them to the 6 after (an unsharp amount solved per frame, a per-channel colour offset), so a bridge softer than the footage, or two sides that differ (two Swap takes), changes gradually instead of jumping at one frame. Replace mode only. |
 
 If you extend the bridge (longer than the original gap), set `audio_mode` to `bridge` or `combined` —
 `original` plays silence under the extra frames.
@@ -320,7 +328,7 @@ anchors). Output: `positive`.
 | `anchor_mode` | Meaning |
 | --- | --- |
 | `per frame` (default) | Every context frame is its own single-frame anchor, at any K. Places frames exactly like the LTX node. |
-| `clip` | Each side is one multi-frame clip anchor (H3's native motion anchor, fewer tokens) — only for K = 5, 22, 39… (**17k+5**); other K is refused. |
+| `clip` | Each side is one multi-frame clip anchor (H3's native motion anchor, fewer tokens) — only for K = 5, 22, 39… (**17k+5**); other K is refused. Measured on a 12-frame bridge: the first new frame after the start clip came out **brighter** (a flash of +7 to +18 luma levels, worse at 2× size); `per frame` gave +1. Prefer `per frame` for bridges. |
 
 Set the Timeline's `bridge_frame_grid` to `minimax (17k+5)` so `frame_count` lands on H3's grid.
 For `MiniMaxH3ReferenceToVideo`'s reference images ("Picture 1" / "Picture 2" in the prompt), take
