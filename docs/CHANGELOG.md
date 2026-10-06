@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.4.1 — Timeline finds Swap joins; match_to_source; colour fix
 
 ### New
 
