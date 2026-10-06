@@ -431,6 +431,9 @@ group *Swap Render · Character Replace*.
 
 - **The replacement is found by the sheet's colours:** a character dressed like someone else in the shot
   can be mistaken for them (a near-tie goes to whoever stands where the source person stood).
+- **M needs her face in the source:** where the source person faces away and the render turns the character
+  round (her face shown), M has nothing to compare and shows empty, and F can read low on a take that looks
+  right: F measures following the source's pose and place.
 - **Who speaks** is read from faces: in a wide shot with small faces no one is seen and the line stays
   hers; set it in *who says each line*.
 - **Frame rates** are whole numbers: 23.976 runs at 24 (about one frame repeated per thousand, audio in
