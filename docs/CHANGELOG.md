@@ -32,6 +32,16 @@
     dropdowns show its input folder's first file (capture from a sandbox with `input/` emptied).
   - `SeamStitchMiniMaxGuides`: a side with 0 frames is skipped instead of refused (a chunk with pins
     on one side only).
+  - Who to replace: the strip's *replace* field (and a chunk's own) names the person SAM3 marks in the
+    source and the drafter writes about (the output score keeps "person"); *invert* marks everything
+    else. Cached masks are kept per target, and the strip refuses a mark or render whose workflow
+    can't pass the target on. *mark* tracks a chunk shot by shot (SAM3 loses a person at a cut).
+  - Prompts follow MiniMax's Ref2VA guide on people and voices: everyone else in a shot is a
+    `<Subject N>` kept as they are, a line goes to whoever's mouth moves during it (mediapipe), speaker
+    IDs follow the order the voices first speak, and the panel's *who says each line* changes any line.
+  - The strip frees ComfyUI's memory before every render and draft; colours the prompt's tags; its
+    strip, panel and warnings collapse, and drag bars resize the panel and the warnings.
+  - The example's render group sharpens lightly after the resize (Sharpen Image, alpha 0.2).
 - **24 fps conform for MiniMax H3.** H3 has no frame-rate input and times reference audio and
   Picture timings on a fixed 24 fps clock, so on 25 fps footage the lips drifted ~4% ahead of the
   speech.

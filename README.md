@@ -423,6 +423,20 @@ group *Swap Render · Character Replace*.
 - **Budget** (RTX 5090): a 209 render 8-10 min, a 978-frame clip (five 209s) ~45 GPU-min per pass;
   drafting five chunks ~11 min; joins and assembly CPU only.
 
+### Known limits
+
+- **F and M on several people:** the output's score track looks for any "person", and the mouth score
+  reads one face per frame, so with more than one person in a shot those two dots can measure the wrong
+  one. R, C and the joins aren't affected.
+- **Who speaks** is read from faces: in a wide shot with small faces no one is seen and the line stays
+  hers; set it in *who says each line*.
+- **Frame rates** are whole numbers: 23.976 runs at 24 (about one frame repeated per thousand, audio in
+  time).
+- **Anamorphic** sources (stored squeezed, e.g. 1440x1080 shown 16:9) come out without their aspect flag
+  and play squeezed; **interlaced** sources aren't deinterlaced.
+- After re-opening the example, replace its sheet placeholder before drafting: a draft with
+  `your_character_sheet.png` fails validation and only ComfyUI's log says so.
+
 ### SeamStitch Swap Planner
 
 ![Swap Planner](docs/images/swap_planner_node.svg)
