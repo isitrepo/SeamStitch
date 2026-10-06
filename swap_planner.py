@@ -249,6 +249,18 @@ def apply_op(plan, body):
         c = _chunk(plan, body["chunk"])
         c["prompt"] = body.get("prompt") or ""
         c["prompt_state"] = "edited" if c["prompt"].strip() else "empty"
+    elif op == "set_line_speaker":
+        # who says one dialogue line of the chunk's prompt (the strip's picker, where the drafter couldn't tell)
+        try:
+            from . import swap_draft as sd      # swap_draft imports this module
+        except ImportError:
+            import swap_draft as sd
+        c = _chunk(plan, body["chunk"])
+        try:
+            c["prompt"] = sd.set_line_speaker(c.get("prompt") or "", int(body["line"]), body["speaker"])
+        except sd.DraftError as e:
+            raise sp.PlanError(str(e))
+        c["prompt_state"] = "edited"
     elif op == "set_options":
         c = _chunk(plan, body["chunk"])
         c["options"] = dict(c.get("options") or {}, **(body.get("options") or {}))

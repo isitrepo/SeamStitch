@@ -399,3 +399,25 @@ def test_the_sections_resize_with_drag_bars_not_css_corners():
     g = src[src.index("function grip(box, key)"):src.index("const selGrip")]
     assert "setPointerCapture" in g and "stopPropagation" in g and "ds?.scale" in g and "S.layout[key]" in g
     assert "selBox, selGrip, warnBox, warnGrip" in src
+
+
+def test_the_strip_lists_each_line_with_its_speakers(tmp_path):
+    # B7: the per-line speaker picker reads the prompt's lines and the speakers it defines
+    import shutil
+    import subprocess
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node isn't installed")
+    src = open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "js", "swap_planner.js"), encoding="utf-8").read()
+    code = src[src.index("const LINE_RE"):src.index("// A textarea drawn over its own coloured copy")]
+    js = tmp_path / "l.js"
+    js.write_text(code + "\nconst p = require('fs').readFileSync(process.argv[2], 'utf8');"
+                  "\nconsole.log(JSON.stringify({ lines: promptLines(p), speakers: promptSpeakers(p) }));", encoding="utf-8")
+    prompt = ("subject_definitions:\n<Subject 1> is the clown.\n<Subject 2> is a man in <Video 1>, who keeps ...\n\nsummary:\nx\n\n"
+              "retention_analysis:\nx\n\ndetailed_description:\n[Shot 1] <Subject 2> (S1) says <d>[English]Yeah,</d> "
+              "an off-screen male voice (S2) says <d>[English]Bye.</d>\n\noverall_soundscape:\nx\n\nnon_diegetic_music:\nN/A\n")
+    (tmp_path / "p.txt").write_text(prompt, encoding="utf-8")
+    out = json.loads(subprocess.run([node, str(js), str(tmp_path / "p.txt")], capture_output=True, text=True, check=True).stdout)
+    assert out["lines"] == [{"who": "<Subject 2>", "id": "S1", "text": "Yeah,"},
+                            {"who": "an off-screen male voice", "id": "S2", "text": "Bye."}]
+    assert out["speakers"] == ["<Subject 1>", "<Subject 2>", "an off-screen male voice", "an off-screen female voice"]
