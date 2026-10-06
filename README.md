@@ -334,7 +334,7 @@ group *Swap Render · Character Replace*.
 | --- | --- |
 | **Swap · Plan** | SeamStitch Swap Planner: the strip, the plan and every button below. |
 | **Swap Render · Character Replace** | The render (a graph group, not a node): the sheet, SAM3 marking, H3 Ref2VA pass 1, the 1 MP refine, a light sharpen after the resize to the source size (Sharpen Image, alpha 0.2), both SeamStitch MiniMax Guides on the Planner's pins, SeamStitch Swap Option (`mark`). Any render with the same inputs and the same Take at the end can replace it. |
-| **Swap Score (SAM3)** | Tracks everyone in the render; SeamStitch Swap Output Person keeps the replaced person, shot by shot, for the Take's scores. |
+| **Swap Score (SAM3)** | Tracks everyone in the render; SeamStitch Swap Output Person finds the replacement among them, shot by shot, by the character sheet's colours, for the Take's scores. |
 | **Swap · Take** | SeamStitch Swap Take: saves, scores and registers each take. |
 | **Swap · Assemble** | SeamStitch Swap Assemble (the Planner's assemble button runs the same code off the queue). |
 | **Swap Mark (SAM3)** | Tracks the source person up front (the strip's *mark* button); SeamStitch Swap Mask caches it. |
@@ -384,9 +384,10 @@ group *Swap Render · Character Replace*.
 5. **Review.** Each take gets dots: **F** following (the render's person outline against the
    source's), **R** replaced (is the person inside it really the character?), **C** cuts (were the
    source's cuts copied?), **M** mouth (information only, never a gate). With other people in the
-   shot, F and M read the replaced person: F the tracked person who overlaps her source outline in each
-   shot, M only her face (none shown when her face isn't seen, e.g. her back to the camera); a shot
-   she isn't in isn't scored. Each join gets a pill:
+   shot, F and M read the right people: in the source the person named in *replace*, in the take the
+   person who looks most like your sheet (wherever the render put her), shot by shot; M reads only their
+   faces (none shown when a face isn't seen, e.g. her back to the camera); a shot she isn't in isn't
+   scored. Each join gets a pill:
    **F** forward, **E** re-roll entry, **X** re-roll exit, **✂** straight cut, coloured by its
    measured step; amber *stale* means a take was swapped under it. ▶ on a take plays its review clip
    (the chunk ± 2 s, both joins as if it were chosen).
@@ -428,6 +429,8 @@ group *Swap Render · Character Replace*.
 
 ### Known limits
 
+- **The replacement is found by the sheet's colours:** a character dressed like someone else in the shot
+  can be mistaken for them (a near-tie goes to whoever stands where the source person stood).
 - **Who speaks** is read from faces: in a wide shot with small faces no one is seen and the line stays
   hers; set it in *who says each line*.
 - **Frame rates** are whole numbers: 23.976 runs at 24 (about one frame repeated per thousand, audio in

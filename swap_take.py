@@ -518,9 +518,10 @@ class SeamStitchSwapTake:
                 "result": (os.path.join(tdir, os.path.basename(take["file"])), take["id"], json.dumps(report))}
 
 
-def output_person(desc, track_data, source_mask):
-    """Everything Swap Output Person does: (MASK [n, H, W], report). The replaced person's mask in the render,
-    picked per shot from everyone SAM3 Track Output followed (swap_scores.pick_person); cuts are the chunk's
+def output_person(desc, track_data, source_mask, images=None, sheet=None):
+    """Everything Swap Output Person does: (MASK [n, H, W], report). The replacement's mask in the render, picked
+    per shot from everyone SAM3 Track Output followed (swap_scores.pick_person): by the character sheet's colours
+    with the render's frames and the sheet, else by the overlap with her source mask; cuts are the chunk's
     confirmed cuts inside its render."""
     import torch.nn.functional as F
     if not isinstance(desc, dict) or desc.get("format") != spl.CHUNK_FORMAT:
@@ -538,10 +539,28 @@ def output_person(desc, track_data, source_mask):
     m = len(sm)
     # held frames repeat the last delivered one: they take its mask
     src = [sm[min(i, m - 1)] for i in range(n)]
-    hers, picks = ss.pick_person(objs, src, cuts)
+    frames = sh = None
+    if images is not None and sheet is not None:
+        frames = _LazyFrames(images)
+        sh = to_u8(sheet[0])
+    hers, picks = ss.pick_person(objs, src, cuts, frames, sh)
     out = torch.from_numpy(hers.astype(np.float32)).unsqueeze(1)
     out = F.interpolate(out, size=(H, W), mode="bilinear", align_corners=False)[:, 0]
-    return out, {"objects": int(objs.shape[1]), "picks": picks, "cuts": cuts}
+    return out, {"objects": int(objs.shape[1]), "picks": picks, "cuts": cuts,
+                 "by": "sheet" if sh is not None else "overlap"}
+
+
+class _LazyFrames:
+    """An IMAGE batch read as RGB uint8 frames on demand (the pick samples a few per shot)."""
+
+    def __init__(self, images):
+        self.images = images
+
+    def __len__(self):
+        return int(self.images.shape[0])
+
+    def __getitem__(self, i):
+        return to_u8(self.images[min(int(i), len(self) - 1)])
 
 
 class SeamStitchSwapOutputPerson:
@@ -557,20 +576,28 @@ class SeamStitchSwapOutputPerson:
                 "source_mask": ("MASK", {"tooltip":
                     "The replaced person's source mask (the same one Swap Take gets)."}),
             },
+            "optional": {
+                "images": ("IMAGE", {"tooltip":
+                    "The render (the same frames Swap Take gets): with the sheet, people are told apart by colour."}),
+                "sheet": ("IMAGE", {"tooltip":
+                    "The character sheet (Picture 1): per shot, the tracked person who looks most like it is the "
+                    "replacement, wherever H3 put her. Without it: the person overlapping her source mask most."}),
+            },
         }
 
     RETURN_TYPES = ("MASK", "STRING")
     RETURN_NAMES = ("output_mask", "report")
     FUNCTION = "pick"
     CATEGORY = "SeamStitch/Swap"
-    DESCRIPTION = ("Keeps the replaced person out of everyone SAM3 tracked in the render: per shot (split at the "
-                   "chunk's confirmed cuts), the tracked person whose mask overlaps her source mask most. Frames "
-                   "where she isn't in the source get no mask, so following skips them. Feed its output_mask to "
-                   "Swap Take.")
+    DESCRIPTION = ("Finds the replacement among everyone SAM3 tracked in the render, per shot (split at the chunk's "
+                   "confirmed cuts): the tracked person who looks most like the character sheet, else the one "
+                   "overlapping her source mask most. Frames where she isn't in the source get no mask, so "
+                   "following skips them. Feed its output_mask to Swap Take.")
 
-    def pick(self, chunk, track_data, source_mask):
-        mask, rep = output_person(chunk, track_data, source_mask)
-        shots = ", ".join(f"{p['shot'][0]}-{p['shot'][1] - 1}: " + (f"person {p['object']} (IoU {p['iou']})"
-                          if p["object"] is not None else "nobody overlaps her") for p in rep["picks"])
+    def pick(self, chunk, track_data, source_mask, images=None, sheet=None):
+        mask, rep = output_person(chunk, track_data, source_mask, images, sheet)
+        shots = ", ".join(f"{p['shot'][0]}-{p['shot'][1] - 1}: " + (
+            f"person {p['object']} (by {p['by']}: sheet {p['sheet']}, IoU {p['iou']})"
+            if p["object"] is not None else "nobody") for p in rep["picks"])
         print(f"[SeamStitch] Swap Output Person: {chunk.get('chunk')}: {rep['objects']} tracked; {shots or 'nothing tracked'}")
         return (mask, json.dumps(rep))

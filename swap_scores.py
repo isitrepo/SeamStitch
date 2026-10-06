@@ -161,32 +161,105 @@ def shots_of(n, cuts=()):
     return [(a, b) for a, b in zip(edges, edges[1:]) if b > a]
 
 
-def pick_person(objects, src_masks, cuts=()):
-    """The replaced person among everyone a SAM3 track followed in the take (B8). Per shot (a track doesn't
-    carry a person across a cut, and the replaced person can be someone else after one), the tracked object
-    whose mask overlaps her source mask most, by mean IoU over the shot's frames where she is in the source.
-    objects: [n, k, h, w] bool (k tracked people; k may be 0); src_masks: n masks at any size (empty = she
-    isn't in the shot). Returns (masks [n, h, w] bool: hers, empty where she isn't in the source or no tracked
-    person overlaps her in that shot; picks: [{shot: [a, b], object, iou}]): object None = nobody overlapped."""
+HS_BINS = (18, 8)            # hue x saturation bins of a person's colours
+HS_MIN = 40                  # saturation and value floor: grey, white and black pixels (a sheet's backdrop) don't count
+SHEET_TIE = 0.02             # sheet matches this close are a tie: the overlap with her source mask decides
+SHEET_MIN_PX = 200           # coloured pixels a person needs before their colours are compared
+SHEET_FRAMES = 12            # frames sampled per shot for a person's colours
+COLOUR_W = 640               # frames (and the sheet) are compared at about this width
+
+
+def _small(rgb, w=COLOUR_W):
+    rgb = np.asarray(rgb)
+    if rgb.shape[1] <= w:
+        return rgb
+    return cv2.resize(rgb, (w, max(1, round(rgb.shape[0] * w / rgb.shape[1]))), interpolation=cv2.INTER_AREA)
+
+
+def hs_hist(rgb, mask=None):
+    """(hue x saturation histogram, pixel count) of the coloured pixels (saturation and value >= HS_MIN), inside
+    mask when given (any size: resized to the frame)."""
+    hsv = cv2.cvtColor(np.ascontiguousarray(rgb, dtype=np.uint8), cv2.COLOR_RGB2HSV)
+    m = (hsv[..., 1] >= HS_MIN) & (hsv[..., 2] >= HS_MIN)
+    if mask is not None:
+        mk = to_bool(mask)
+        if mk.shape != m.shape:
+            mk = cv2.resize(mk.astype(np.uint8), (m.shape[1], m.shape[0]), interpolation=cv2.INTER_NEAREST) > 0
+        m &= mk
+    h = cv2.calcHist([hsv], [0, 1], m.astype(np.uint8), list(HS_BINS), [0, 180, 0, 256])
+    return h, int(m.sum())
+
+
+def sheet_hist(sheet):
+    """The character sheet's colours (RGB uint8, its grey / white backdrop left out by HS_MIN), L1-normalised."""
+    h, _n = hs_hist(_small(sheet))
+    return cv2.normalize(h, None, 1.0, 0, cv2.NORM_L1)
+
+
+def sheet_match(ref, frames, masks):
+    """How much a person's colours over some frames look like the sheet's: 1 - Bhattacharyya distance (1 = the
+    same colours), or None with fewer than SHEET_MIN_PX coloured pixels."""
+    acc, px = np.zeros(HS_BINS, np.float32), 0
+    for f, m in zip(frames, masks):
+        h, n = hs_hist(_small(f), m)
+        acc += h
+        px += n
+    if px < SHEET_MIN_PX:
+        return None
+    acc = cv2.normalize(acc, None, 1.0, 0, cv2.NORM_L1)
+    return round(1.0 - float(cv2.compareHist(ref, acc, cv2.HISTCMP_BHATTACHARYYA)), 4)
+
+
+def pick_person(objects, src_masks, cuts=(), frames=None, sheet=None):
+    """The replacement among everyone a SAM3 track followed in the take (B8), per shot (a track doesn't carry a
+    person across a cut). With the take's frames and the character sheet: the tracked person whose colours look
+    most like the sheet (the character), a near-tie (SHEET_TIE) going to the most overlap with her source mask;
+    H3 can put the character somewhere else than the source person stood (then another person stands there, and
+    overlap alone picks them). Without a sheet: the most overlap with her source mask, by mean IoU over the
+    shot's frames where she is in the source. Only people seen on at least half of those frames are candidates.
+    objects: [n, k, h, w] bool (k tracked people; k may be 0); src_masks: n masks at any size (empty = she isn't
+    in the shot); frames: n RGB frames; sheet: RGB uint8 (sheet_hist is taken of it) or a sheet_hist.
+    Returns (masks [n, h, w] bool: the replacement's, empty where she isn't in the source or nobody qualifies;
+    picks: [{shot: [a, b], object, iou, sheet, by}]): object None = nobody."""
     objects = np.asarray(objects, dtype=bool)
     n = min(len(src_masks), int(objects.shape[0]))
     h, w = int(objects.shape[2]), int(objects.shape[3])
     out = np.zeros((int(objects.shape[0]), h, w), dtype=bool)
     k = int(objects.shape[1])
     src = [mask_thumb(to_bool(src_masks[i]), PICK_W, PICK_H) for i in range(n)]
+    ref = None
+    if sheet is not None and frames is not None:
+        sh = np.asarray(sheet)
+        ref = sh if sh.shape == HS_BINS else sheet_hist(sh)
     picks = []
     for a, b in shots_of(n, cuts):
         here = [i for i in range(a, b) if src[i].any()]
-        best, best_v = None, 0.0
+        cands = []
         for j in range(k):
-            vals = [iou(src[i], objects[i, j]) or 0.0 for i in here]
-            v = float(np.mean(vals)) if vals else 0.0
-            if v > best_v:
-                best, best_v = j, v
+            seen = [i for i in here if objects[i, j].any()]
+            if not here or len(seen) < 0.5 * len(here):
+                continue
+            ov = float(np.mean([iou(src[i], objects[i, j]) or 0.0 for i in here]))
+            sm = None
+            if ref is not None:
+                samp = seen[:: max(1, len(seen) // SHEET_FRAMES)]
+                sm = sheet_match(ref, [frames[i] for i in samp], [objects[i, j] for i in samp])
+            cands.append({"object": j, "iou": round(ov, 4), "sheet": sm})
+        best, by = None, None
+        coloured = [c for c in cands if c["sheet"] is not None]
+        if coloured:
+            top = max(c["sheet"] for c in coloured)
+            best = max((c for c in coloured if c["sheet"] >= top - SHEET_TIE), key=lambda c: c["iou"])
+            by = "sheet"
+        else:
+            over = [c for c in cands if c["iou"] > 0]
+            if over:
+                best, by = max(over, key=lambda c: c["iou"]), "overlap"
         if best is not None:
             for i in here:
-                out[i] = objects[i, best]
-        picks.append({"shot": [a, b], "object": best, "iou": round(best_v, 4)})
+                out[i] = objects[i, best["object"]]
+        picks.append({"shot": [a, b], "object": best and best["object"], "iou": best["iou"] if best else 0.0,
+                      "sheet": best and best["sheet"], "by": by})
     return out, picks
 
 

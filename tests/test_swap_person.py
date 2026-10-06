@@ -277,6 +277,10 @@ def test_the_example_workflow_scores_the_picked_person():
     # the output track looks for any person (the target's text drives the source tracks only)
     track_in = {i["name"]: nodes[links[i["link"]][1]] for i in up["track_data"]["inputs"] if i.get("link")}
     assert track_in["conditioning"]["widgets_values"] == ["person"]
+    # the render Swap Take saves, and the character sheet the render uses as Picture 1
+    assert up["images"]["id"] == nodes[links[next(i for i in take["inputs"] if i["name"] == "images")["link"]][1]]["id"]
+    assert up["sheet"]["type"] == "LoadImage"
+    assert any(i["name"] == "sheet" for i in pick["inputs"])
 
 
 def test_an_old_graph_without_the_picker_is_flagged():
@@ -286,3 +290,70 @@ def test_an_old_graph_without_the_picker_is_flagged():
            "9": {"class_type": "SeamStitchSwapTake", "inputs": {"output_mask": ["5", 0]}}}
     assert st.output_mask_is_picked(old) is False
     assert st.output_mask_is_picked(new) is True and st.output_mask_is_picked(None) is True
+
+
+# ---------------------------------------------------------------- the character moved: the sheet finds her
+
+PINK, GREY = (230, 60, 150), (90, 90, 100)
+MIDDLE = _box(4, 36, 26, 40)
+
+
+def _moved(n=20):
+    """H3 put the character in the middle; a bystander now stands where the source person stood (left)."""
+    objs = np.zeros((n, 2, H, W), bool)
+    frames = []
+    for i in range(n):
+        objs[i, 0], objs[i, 1] = LEFT, MIDDLE          # 0: the bystander in her old spot, 1: the character
+        f = np.full((H, W, 3), 128, np.uint8)
+        f[LEFT], f[MIDDLE] = GREY, PINK
+        frames.append(f)
+    sheet = np.full((40, 30, 3), 128, np.uint8)        # grey backdrop (left out), the character in pink
+    sheet[5:35, 8:22] = PINK
+    return objs, [LEFT] * n, frames, sheet
+
+
+def test_overlap_alone_picks_the_bystander_in_her_old_spot():
+    objs, src, _f, _s = _moved()
+    _hers, picks = ss.pick_person(objs, src)
+    assert picks[0]["object"] == 0 and picks[0]["by"] == "overlap"
+
+
+def test_the_sheet_finds_the_character_wherever_h3_put_her():
+    objs, src, frames, sheet = _moved()
+    hers, picks = ss.pick_person(objs, src, frames=frames, sheet=sheet)
+    assert picks[0]["object"] == 1 and picks[0]["by"] == "sheet" and picks[0]["sheet"] > 0.9
+    assert ss.pose_iou(src, list(hers))["pose_iou"] == 0.0     # she didn't follow: F says so, about her
+
+
+def test_a_near_tie_on_the_sheet_goes_to_the_overlap():
+    objs, src, frames, sheet = _moved()
+    for f in frames:
+        f[LEFT] = PINK                                 # two people dressed alike
+    _hers, picks = ss.pick_person(objs, src, frames=frames, sheet=sheet)
+    assert picks[0]["object"] == 0 and picks[0]["by"] == "sheet"
+
+
+def test_the_sheet_leaves_out_grey_and_white():
+    sheet = np.full((40, 30, 3), 128, np.uint8)
+    sheet[:5] = 255
+    sheet[5:35, 8:22] = PINK
+    pink_only = np.zeros((40, 30, 3), np.uint8)
+    pink_only[:] = PINK
+    a, b = ss.sheet_hist(sheet), ss.sheet_hist(pink_only)
+    assert float(np.abs(a - b).sum()) < 1e-6
+
+
+def test_the_node_picks_by_the_sheet_with_the_render_wired(tmp_path):
+    p = sp.new_plan("j", {"path": "x.mp4", "frames": 200, "fps": 24, "width": 1280, "height": 720, "audio": True})
+    pf = sp.plan_path(str(tmp_path))
+    sp.save_plan(pf, p)
+    objs, src, frames, sheet = _moved()
+    desc = {"format": spl.CHUNK_FORMAT, "plan": pf, "chunk": "c1", "render": [0, 19]}
+    track = {"packed_masks": _pack(objs), "n_frames": 20, "orig_size": (H, W)}
+    smask = torch.from_numpy(np.stack(src).astype(np.float32))
+    imgs = torch.from_numpy(np.stack(frames).astype(np.float32) / 255.0)
+    sh = torch.from_numpy(sheet[None].astype(np.float32) / 255.0)
+    _m, rep = st.output_person(desc, track, smask, imgs, sh)
+    assert rep["by"] == "sheet" and rep["picks"][0]["object"] == 1
+    _m, rep = st.output_person(desc, track, smask)                 # an older wiring: overlap
+    assert rep["by"] == "overlap" and rep["picks"][0]["object"] == 0
