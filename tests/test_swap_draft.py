@@ -880,3 +880,80 @@ def test_the_strips_speaker_picker_rewrites_one_line(job):
     assert c["prompt"] == t2 and c["prompt_state"] == "edited"
     with pytest.raises(sp.PlanError):
         spl.apply_op(sp.load_plan(job["plan"]), {"op": "set_line_speaker", "chunk": cid, "line": 0, "speaker": "<Subject 9>"})
+
+
+# ---------------------------------------------------------------- the background template (invert)
+
+class BgQwen(FakeQwen):
+    """The background template's calls: the place, who, then one call per chunk about the kept person."""
+
+    def ask(self, prompt, image=None, video=None, max_tokens=2048, frame_count=16):
+        self.calls.append({"prompt": prompt, "image": image is not None,
+                           "frames": None if video is None else int(video.shape[0])})
+        if "shows a place" in prompt:
+            return ("name: ship-themed diner\nfeatures: navy and white striped walls, a frosted window with red "
+                    "spindles, a white counter with a blue edge, warm light from a round wall lamp.")
+        if "character sheet" in prompt:
+            raise AssertionError("a background draft never reads the sheet as a character")
+        if prompt.startswith("These are") and "main person" in prompt:
+            return "a man in a black t-shirt"
+        if prompt.startswith("These are"):
+            return "person: yes\nobjects: none"
+        k = int(prompt.split("The clip has ")[1].split(" shot")[0])
+        says = ' He says SAYS "Hello there."' if 'spoken: "' in prompt else ""
+        blocks = "\n".join(f"[Shot {i + 1}] The man in a black t-shirt walks in from the left and crosses the frame."
+                           f"{says if i == k - 1 else ''}" for i in range(k))
+        return (f"pronoun: he\n\nvideo_1: a handheld camera at chest height follows the man in a black t-shirt as he "
+                f"crosses the frame\n\nshots:\n{blocks}\n\nsounds: footsteps and his speech")
+
+
+def test_the_background_template_end_to_end(job):
+    # a character subject from an earlier draft moves aside for the place
+    sp.update_plan(job["plan"], lambda p: p.update(subject=SUBJECT, invert=True))
+    q = BgQwen()
+    rep = _draft(job, sheet=_sheet(), qwen_cls=q, template=sd.BACKGROUND)
+    p = sp.load_plan(job["plan"])
+    assert p["subject"].startswith("<Subject 1> is the ship-themed diner environment in <Picture 1>, featuring navy")
+    assert p["subject_draft"] == SUBJECT and rep["subject"]["into"] == "subject"
+    c0 = p["chunks"][0]
+    s = sd.parse_sections(c0["prompt"])
+    assert "<Subject 2> is the man in a black t-shirt in <Video 1>, who keeps his own appearance" in s["subject_definitions"]
+    assert s["summary"].startswith("[video editing + reference generation")
+    assert "backdrop behind <Subject 2> is replaced by <Subject 1>, the ship-themed diner environment" in s["summary"]
+    ret = s["retention_analysis"]
+    assert "<Subject 1> (appears throughout): partially_preserved" in ret and "<Subject 2> (appears" in ret
+    assert "fully_preserved - his identity" in ret and "original backdrop is not kept" in ret
+    dd = s["detailed_description"]
+    assert "[Shot 1] <Subject 2> walks in from the left" in dd and "the man in a black t-shirt" not in dd
+    assert dd.count("<Subject 2> (S1) says <d>[English]Hello there.</d>") == 1 and "<Subject 1> (S1)" not in dd
+    # nothing in the prompt asks for a character or for the backdrop to be kept
+    assert "replaced by <Subject 1>, the" in s["summary"] and "styled from <Picture 1>" not in c0["prompt"]
+    assert "the background, the lighting" not in c0["prompt"]
+
+
+def test_a_second_background_draft_keeps_the_place_and_redrafts_only_into_the_draft(job):
+    place = "<Subject 1> is the old diner environment in <Picture 1>, featuring red stools."
+    sp.update_plan(job["plan"], lambda p: p.update(subject=place))
+    rep = _draft(job, sheet=_sheet(), qwen_cls=BgQwen(), template=sd.BACKGROUND, mode="all (into the draft field)")
+    p = sp.load_plan(job["plan"])
+    assert p["subject"] == place and p["subject_draft"].startswith("<Subject 1> is the ship-themed diner environment")
+    assert rep["subject"]["into"] == "subject_draft"
+    # with the place already there, no subject call unless the mode asks for it
+    q = BgQwen()
+    sp.update_plan(job["plan"], lambda p: [c.update(prompt="", prompt_state="empty") for c in p["chunks"]])
+    _draft(job, sheet=_sheet(), qwen_cls=q, template=sd.BACKGROUND)
+    assert not any("shows a place" in c["prompt"] for c in q.calls)
+    assert sd.parse_sections(sp.load_plan(job["plan"])["chunks"][0]["prompt"])["subject_definitions"].startswith(place)
+
+
+@pytest.mark.parametrize("raw, name, feats", [
+    ("name: coffee-shop\nfeatures: an exposed brick wall, an orange sofa.", "coffee-shop", "an exposed brick wall, an orange sofa"),
+    ("Name: Ship-Themed Diner Environment\nFeatures: striped walls", "ship-themed diner", "striped walls"),
+    ("retro diner\nblue and white stripes, a frosted window, a counter", "retro diner", "blue and white stripes, a frosted window, a counter"),
+])
+def test_the_place_is_written_in_the_guides_own_pattern(raw, name, feats):
+    ps = sd.parse_scene_sheet(raw)
+    assert (ps["name"], ps["features"]) == (name, feats)
+    s = sd.scene_sentence(ps["name"], ps["features"])
+    assert s == f"<Subject 1> is the {name} environment in <Picture 1>, featuring {feats}." and sd.is_scene_subject(s)
+    assert not sd.is_scene_subject(SUBJECT)
