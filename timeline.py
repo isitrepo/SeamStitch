@@ -46,11 +46,11 @@ from server import PromptServer
 try:
     from . import timeline_math as tm
     from .loader import SeamStitchLoader, _list_input_videos
-    from .video_colour import color_args
+    from .video_colour import color_args, display_size, file_turns, frame_turns, upright
 except ImportError:  # imported as a top-level module (tests)
     import timeline_math as tm
     from loader import SeamStitchLoader, _list_input_videos
-    from video_colour import color_args
+    from video_colour import color_args, display_size, file_turns, frame_turns, upright
 
 _VIDEO_EXTENSIONS = ('.mp4', '.webm', '.mkv', '.avi', '.mov', '.m4v', '.flv', '.wmv')
 _RGB_PIX = ('gbr', 'rgb', 'bgr', 'argb', 'abgr', 'rgba', 'bgra')
@@ -110,9 +110,10 @@ def probe(path, frame_rate):
         last = max(pts) * tb
         native = float(vs.average_rate) if vs.average_rate else 0.0
         a = c.streams.audio[0] if c.streams.audio else None
+        w, h = display_size(vs.codec_context.width, vs.codec_context.height, file_turns(path))
         info = {
-            "width": vs.codec_context.width,
-            "height": vs.codec_context.height,
+            "width": w,
+            "height": h,
             "native_fps": native,
             "native_frames": len(pts),
             "base_time": base,
@@ -200,12 +201,14 @@ def _iter_frames(path, frame_rate, start_idx, end_idx):
                 if rgb is None and frame.format.name.startswith(_RGB_PIX):
                     # RGB-coded (FFV1 rgb / gbrp): no YUV matrix to apply - see loader._RGB_PIX.
                     rgb = _rgb8_from_16(frame) if _deep_rgb(frame.format) else frame.to_ndarray(format="rgb24")
+                    rgb = upright(rgb, frame_turns(frame))
                 if rgb is None:
                     try:
                         rgb = frame.reformat(format="rgb24", src_colorspace=cs, src_color_range=cr,
                                              dst_color_range=dst).to_ndarray(format="rgb24")
                     except Exception:
                         rgb = frame.to_ndarray(format="rgb24")
+                    rgb = upright(rgb, frame_turns(frame))
                 yield rgb
                 idx += 1
                 target = base + idx / fr

@@ -65,7 +65,7 @@ from videohelpersuite.nodes import (
 )
 
 from .audio_splice import splice_audio, match_format, frame_sample
-from .video_colour import color_args
+from .video_colour import color_args, display_size, file_turns, frame_turns, upright
 from .bridge_match import match_bridge
 
 
@@ -149,6 +149,7 @@ def _decode_range(video_path, frame_rate, start_frame_idx, end_frame_idx):
     # The stream's own matrix/range tags (as an enum, int or string), the size guess only
     # when it has none (video_colour.py).
     src_colorspace, src_color_range, dst_range = color_args(video_stream.codec_context, orig_w, orig_h)
+    orig_w, orig_h = display_size(orig_w, orig_h, file_turns(video_path))
 
     fr = float(frame_rate) if frame_rate > 0 else 24.0
     frame_interval = 1.0 / fr
@@ -199,6 +200,7 @@ def _decode_range(video_path, frame_rate, start_frame_idx, end_frame_idx):
         # An RGB-coded stream (FFV1 rgb / gbrp, as Result Preview can write) has no YUV
         # matrix or range: passing src_colorspace/src_color_range made swscale treat its
         # planes as YUV and scrambled the picture (errors up to 237 levels). Convert straight.
+        turns = frame_turns(frame)  # read before reformat: the new frame drops the tag
         if frame.format.name.startswith(("gbr", "rgb", "bgr", "argb", "abgr", "rgba", "bgra")):
             frame_rgb = frame.to_ndarray(format='rgb24')
         else:
@@ -208,6 +210,7 @@ def _decode_range(video_path, frame_rate, start_frame_idx, end_frame_idx):
                 frame_rgb = frame.to_ndarray(format='rgb24')
             except Exception:
                 frame_rgb = frame.to_ndarray(format='rgb24')
+        frame_rgb = upright(frame_rgb, turns)  # a phone clip's rotation tag, as players show it
 
         # Tolerance of a thousandth of a frame (~21 us at 48 fps): the target is
         # derived from frame_idx rather than accumulated, but pts -> float still
@@ -238,7 +241,7 @@ def _source_size(video_path):
         if not container.streams.video:
             raise RuntimeError(f"SeamStitchRecombine: no video stream in {video_path}")
         cc = container.streams.video[0].codec_context
-        return cc.width, cc.height
+        return display_size(cc.width, cc.height, file_turns(video_path))
 
 
 # Regenerated/source aspect-ratio mismatch above which the resize is reported as a

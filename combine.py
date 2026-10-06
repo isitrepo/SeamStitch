@@ -39,6 +39,11 @@ from server import PromptServer
 import comfy.model_management as model_management
 import folder_paths
 
+try:
+    from .video_colour import display_size, file_turns, frame_turns, upright
+except ImportError:  # imported as a top-level module (tests)
+    from video_colour import display_size, file_turns, frame_turns, upright
+
 VIDEO_EXTENSIONS = ('.mp4', '.webm', '.mkv', '.avi', '.mov', '.m4v', '.flv', '.wmv')
 
 
@@ -116,9 +121,12 @@ def _probe_geometry(path):
         vstream = container.streams.video[0] if container.streams.video else None
         if vstream is None:
             raise RuntimeError(f"SeamStitchCombine: no video stream in {path}")
+        turns = file_turns(path)
+        w, h = display_size(vstream.codec_context.width, vstream.codec_context.height, turns)
         return {
-            "width": vstream.codec_context.width,
-            "height": vstream.codec_context.height,
+            "width": w,
+            "height": h,
+            "turns": turns,
             "has_audio": len(container.streams.audio) > 0,
             "fps": round(float(vstream.average_rate), 3) if vstream.average_rate else None,
         }
@@ -267,7 +275,7 @@ def _decode_for_outputs(path):
             raise RuntimeError(f"SeamStitchCombine: no video stream in {path}")
         vstream.thread_type = "AUTO"
 
-        frames = [frame.to_ndarray(format="rgb24") for frame in container.decode(vstream)]
+        frames = [upright(frame.to_ndarray(format="rgb24"), frame_turns(frame)) for frame in container.decode(vstream)]
         if not frames:
             raise RuntimeError(f"SeamStitchCombine: no frames decoded from {path}")
         images = torch.from_numpy(np.stack(frames).astype(np.float32) / 255.0)
@@ -345,7 +353,7 @@ def _boundary_frames(path):
         first = last = None
         count = 0
         for frame in container.decode(container.streams.video[0]):
-            last = frame.to_ndarray(format="rgb24")
+            last = upright(frame.to_ndarray(format="rgb24"), frame_turns(frame))
             if first is None:
                 first = last
             count += 1
@@ -484,6 +492,7 @@ async def seamstitch_probe(request):
             fps = float(vstream.average_rate) if vstream and vstream.average_rate else 0.0
         finally:
             container.close()
+        width, height = display_size(width, height, file_turns(path))
         return web.json_response({
             "ok": True, "width": width, "height": height, "duration": duration,
             "frame_count": frame_count, "fps": fps, "has_audio": has_audio,
@@ -592,7 +601,10 @@ class SeamStitchCombine:
         # trying _concat_stream_copy first - a scaled/cropped-or-padded clip
         # is a fresh encode by definition, so there was never a chance of a
         # lossless stream copy succeeding for it.
-        if fps_mismatch or target_size:
+        # a stream copy keeps clip A's rotation tag for both: clips tagged differently (a phone
+        # clip) go through the transcode, whose ffmpeg decode turns each one upright
+        turns_mismatch = geom_a["turns"] != geom_b["turns"]
+        if fps_mismatch or target_size or turns_mismatch:
             _concat_transcode(path_a, path_b, out_path, fps_target,
                                sizes=(size_a, size_b), target_size=target_size, fit=resize_fit)
             images, audio = _decode_for_outputs(out_path)

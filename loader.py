@@ -15,10 +15,10 @@ from PIL import Image
 
 try:
     from . import insert_math
-    from .video_colour import color_args
+    from .video_colour import color_args, display_size, file_turns, frame_turns, upright
 except ImportError:  # imported as a top-level module (tests)
     import insert_math
-    from video_colour import color_args
+    from video_colour import color_args, display_size, file_turns, frame_turns, upright
 
 _VIDEO_EXTENSIONS = ('.mp4', '.webm', '.mkv', '.avi', '.mov', '.m4v', '.flv', '.wmv')
 # Pixel formats that store RGB planes, not YUV (e.g. FFV1's gbrp / gbrap16le).
@@ -443,6 +443,9 @@ class SeamStitchLoader:
         # when it has none (video_colour.py). RGB out is always full range.
         src_colorspace, src_color_range, dst_range = color_args(
             video_stream.codec_context if video_stream else None, orig_w, orig_h)
+        # a phone clip tagged to play on its side is cropped and sized as it plays
+        if video_stream:
+            orig_w, orig_h = display_size(orig_w, orig_h, file_turns(video_path))
 
         target_w = custom_width if custom_width > 0 else orig_w
         target_h = custom_height if custom_height > 0 else orig_h
@@ -585,6 +588,7 @@ class SeamStitchLoader:
                 if frame_time > actual_end_time + frame_interval:
                     break
 
+                turns = frame_turns(frame)  # read before reformat: the new frame drops the tag
                 # Fix PyAV color shift by forcing proper colorspace and range conversion.
                 # Omit dst_colorspace so swscale defaults naturally for RGB output
                 # (passing it can cause the YUV matrix to be applied incorrectly).
@@ -607,6 +611,8 @@ class SeamStitchLoader:
                     # Fallback: if explicit color reformat fails, use PyAV's default conversion
                     print(f"[SeamStitch] Color reformat failed, using default: {e}")
                     frame_rgb = frame.to_ndarray(format='rgb24')
+                # a phone clip's rotation tag (video_colour.file_turns): crop and scale see it upright
+                frame_rgb = upright(frame_rgb, turns)
 
                 # Apply interactive crop first
                 if manual_crop_left > 0 or manual_crop_top > 0 or manual_crop_right > 0 or manual_crop_bottom > 0:
