@@ -177,6 +177,17 @@ function colourPrompt(text) {
     }
     return html + escapeHtml(text.slice(at)) + "\n";
 }
+// The dialogue lines of a prompt and the speakers it can give them (the strip's per-line picker).
+const LINE_RE = /(<Subject \d+>|\b[a-z][a-z' -]*? voice) \((S\d+)\) says <d>\[[^\]]*\](.*?)<\/d>/g;
+function promptLines(prompt) {
+    const d = ((prompt || "").split("detailed_description:")[1] || "").split("overall_soundscape:")[0];
+    return [...d.matchAll(LINE_RE)].map(m => ({ who: m[1], id: m[2], text: m[3] }));
+}
+function promptSpeakers(prompt) {
+    const defs = (prompt || "").split("summary:")[0];
+    return [...[...defs.matchAll(/^(<Subject \d+>) is /gm)].map(m => m[1]), "an off-screen male voice", "an off-screen female voice"];
+}
+
 // A textarea drawn over its own coloured copy: the text is transparent, the caret and selection are the textarea's.
 function colouredTextarea(style, height) {
     const font = { fontFamily: "monospace", fontSize: style.fontSize || "0.95em", lineHeight: "1.35", padding: "3px 5px",
@@ -1347,6 +1358,25 @@ function buildPlanner(node) {
         side.append(button("redraft", "Queue a draft run of this chunk: SeamStitch Swap Draft Prompts drafts it into the prompt if that's empty, otherwise into the draft field (never over your prompt)", () => queueDraft(c.id)));
         pr.append(box.wrap, side);
         selBox.append(pr);
+
+        // who says each line: the drafter reads whose mouth moves; where it couldn't see a face, pick here
+        const lines = promptLines(c.prompt);
+        if (lines.length) {
+            const lr = el("div", { display: "flex", flexDirection: "column", gap: "2px", padding: "2px 0" });
+            lr.append(el("span", { color: C.dim }, "who says each line (the prompt's speaker; H3 moves that person's lips)"));
+            const speakers = promptSpeakers(c.prompt);
+            lines.forEach((ln, i) => {
+                const r = row();
+                const sel = el("select", { background: "#111", color: C.text, border: "1px solid #3b4252", borderRadius: "4px", maxWidth: "16em" });
+                for (const s of speakers.includes(ln.who) ? speakers : [ln.who, ...speakers]) { const o = el("option", null, s); o.value = s; sel.append(o); }
+                sel.value = ln.who;
+                sel.onpointerdown = (e) => e.stopPropagation();
+                sel.onchange = async () => { if (S.promptDirty) await savePrompt(); op({ op: "set_line_speaker", chunk: c.id, line: i, speaker: sel.value }); };
+                r.append(sel, el("span", { color: C.dim }, `(${ln.id})`), el("span", { color: "#67e8f9" }, `"${ln.text.trim()}"`));
+                lr.append(r);
+            });
+            selBox.append(lr);
+        }
 
         // the subject: one per job, shared by every chunk's subject_definitions (an edit replaces it in each prompt)
         const sr = row();

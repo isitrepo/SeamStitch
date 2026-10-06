@@ -1264,6 +1264,50 @@ def fill_ref2va(*, subject, video_1, shots, sounds, n_shots, dialogue, audio, pr
             + "\n\noverall_soundscape:\n" + sound + "\n\nnon_diegetic_music:\nN/A\n")
 
 
+_LINE = re.compile(r"(<Subject \d+>|\b[a-z][a-z' -]*? voice) \((S\d+)\) says <d>\[([^\]]*)\](.*?)</d>")
+_VOICE = re.compile(r"[a-z][a-z' -]* voice")
+_LIPS_ALL = re.compile(r"(Her|His|Their) lips move with every word, in time with the speech in <Audio 1>, and close between "
+                       r"sentences\.")
+_LIPS_OWN = re.compile(r"(Her|His|Their) lips move only with (her|his|their) own lines, in time with the speech in <Audio 1>; "
+                       r"everyone else's lips move only with their own\.")
+
+
+def set_line_speaker(prompt, index, speaker):
+    """The prompt with its index-th dialogue line said by `speaker` (a <Subject N> the prompt defines, or a
+    voice description such as "an off-screen male voice"): speaker IDs renumbered in the order the voices
+    first speak, and the lips lines saying whose lips move (H3's ref guide §5.4). The strip's per-line
+    speaker picker, for the lines the drafter can't tell (no face seen)."""
+    sec = parse_sections(prompt)
+    defined = re.findall(r"(?m)^(<Subject \d+>) is ", sec["subject_definitions"])
+    if speaker not in defined and not _VOICE.fullmatch(speaker):
+        raise DraftError(f"{speaker!r} isn't a subject this prompt defines ({', '.join(defined)}) or a voice")
+    d = sec["detailed_description"]
+    ms = list(_LINE.finditer(d))
+    if not 0 <= int(index) < len(ms):
+        raise DraftError(f"the prompt has {len(ms)} dialogue line(s), not a line {int(index) + 1}")
+    who = [m.group(1) for m in ms]
+    who[int(index)] = speaker
+    ids = {}
+    for w in who:
+        ids.setdefault(w, f"S{len(ids) + 1}")
+    out, at = [], 0
+    for m, w in zip(ms, who):
+        out += [d[at:m.start()], f"{w} ({ids[w]}) says <d>[{m.group(3)}]{m.group(4)}</d>"]
+        at = m.end()
+    d2 = "".join(out) + d[at:]
+    ret = sec["retention_analysis"]
+    poss = (re.search(r"<Subject 1> \([^)]*\): \w+ - (her|his|their) ", ret) or [None, "her"])[1]
+    if any(w != "<Subject 1>" for w in who):
+        d2 = _LIPS_ALL.sub(lambda m: f"{m.group(1)} lips move only with {poss} own lines, in time with the speech in "
+                                     f"<Audio 1>; everyone else's lips move only with their own.", d2)
+        ret2 = ret.replace(f", and {poss} lip movements follow the speech.", ", and each speaker's lips follow their own lines.")
+    else:
+        d2 = _LIPS_OWN.sub(lambda m: f"{m.group(1)} lips move with every word, in time with the speech in <Audio 1>, and "
+                                     f"close between sentences.", d2)
+        ret2 = ret.replace(", and each speaker's lips follow their own lines.", f", and {poss} lip movements follow the speech.")
+    return prompt.replace(d, d2, 1).replace(ret, ret2, 1)
+
+
 def _and_list(xs):
     return xs[0] if len(xs) == 1 else ", ".join(xs[:-1]) + " and " + xs[-1]
 

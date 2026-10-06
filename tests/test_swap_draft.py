@@ -847,3 +847,36 @@ def test_the_timeline_draft_writes_another_speaker_as_their_own_subject(job, mon
     assert "<Subject 2>, a man in a plaid jacket on the right, stays exactly as in <Video 1>." in sec["detailed_description"]
     assert '"' not in sec["overall_soundscape"]
     assert any("said by a man in a plaid jacket" in w for w in rep["chunks"][p["chunks"][0]["id"]]["warnings"])
+
+
+def test_the_strips_speaker_picker_rewrites_one_line(job):
+    # B7, a wide shot with no face to read: the line is given to the man in the strip, in the prompt's own terms
+    lines = [{"text": "Yeah,", "frames": [0, 4]}, {"text": "and the bank just closed.", "frames": [10, 20],
+                                                     "speaker_label": "<Subject 2>"}]
+    sd.speaker_ids(lines)
+    body = " ".join(sd.say_line(ln, "English") for ln in lines) + " Her lips move only with her own lines, in time with " \
+        "the speech in <Audio 1>; everyone else's lips move only with their own."
+    t = sd.fill_ref2va(subject=SUBJECT, video_1="a booth.", shots=["[Shot 1] She sits. " + body], sounds="room", n_shots=1,
+                       dialogue=False, audio=True, pronoun="she", who="a woman in a red dress", others=True,
+                       people=[("<Subject 2>", "a man on the right", [1])], speaking=True)
+    t2 = sd.set_line_speaker(t, 0, "<Subject 2>")
+    d = sd.parse_sections(t2)["detailed_description"]
+    assert "<Subject 2> (S1) says <d>[English]Yeah,</d>" in d and "<Subject 2> (S1) says <d>[English]and the bank" in d
+    t3 = sd.set_line_speaker(sd.set_line_speaker(t2, 0, "<Subject 1>"), 1, "an off-screen male voice")
+    d3 = sd.parse_sections(t3)["detailed_description"]
+    assert "<Subject 1> (S1) says <d>[English]Yeah,</d>" in d3 and "an off-screen male voice (S2) says" in d3
+    t4 = sd.set_line_speaker(t3, 1, "<Subject 1>")
+    sec = sd.parse_sections(t4)
+    assert "Her lips move with every word" in sec["detailed_description"] and "only with her own lines" not in sec["detailed_description"]
+    for bad in ((0, "<Subject 7>"), (5, "<Subject 1>")):
+        with pytest.raises(sd.DraftError):
+            sd.set_line_speaker(t, *bad)
+    # the planner's op, on a chunk's prompt
+    jobs = str(job["dir"].parent.parent)
+    cid = sp.load_plan(job["plan"])["chunks"][0]["id"]
+    spl.do_op({"job": "t", "op": "set_prompt", "chunk": cid, "prompt": t}, jobs)
+    spl.do_op({"job": "t", "op": "set_line_speaker", "chunk": cid, "line": 0, "speaker": "<Subject 2>"}, jobs)
+    c = sp.load_plan(job["plan"])["chunks"][0]
+    assert c["prompt"] == t2 and c["prompt_state"] == "edited"
+    with pytest.raises(sp.PlanError):
+        spl.apply_op(sp.load_plan(job["plan"]), {"op": "set_line_speaker", "chunk": cid, "line": 0, "speaker": "<Subject 9>"})
