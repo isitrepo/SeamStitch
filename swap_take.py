@@ -132,8 +132,15 @@ def mask_list(mask, n):
     return out
 
 
-def _mouth_cache(job, r0, r1):
-    return os.path.join(job, "cache", f"mouth_src_{r0:05d}-{r1:05d}.json")
+def _mouth_cache(job, r0, r1, src_masks=None):
+    """The source's mouth series cache. With a source mask (B8: her face only) it is keyed by the mask too, so
+    a re-marked range or another target never reads a series of someone else's face."""
+    if src_masks is None:
+        return os.path.join(job, "cache", f"mouth_src_{r0:05d}-{r1:05d}.json")
+    h = hashlib.sha1()
+    for m in src_masks:
+        h.update(np.packbits(ss.mask_thumb(m, 96, 54)).tobytes())
+    return os.path.join(job, "cache", f"mouth_her_{r0:05d}-{r1:05d}_{h.hexdigest()[:10]}.json")
 
 
 def compute_scores(job, plan, r0, r1, out_frames, src_masks=None, out_masks=None, mouth=True):
@@ -145,7 +152,7 @@ def compute_scores(job, plan, r0, r1, out_frames, src_masks=None, out_masks=None
     src = plan["source"]
     fr = int(round(float(src["fps"])))
     cuts = [c for c in sp.confirmed_cuts(plan.get("cuts")) if r0 < c <= r1]
-    cache = _mouth_cache(job, r0, r1)
+    cache = _mouth_cache(job, r0, r1, src_masks)
     ms = None
     if mouth and os.path.isfile(cache):
         try:
@@ -167,6 +174,21 @@ def compute_scores(job, plan, r0, r1, out_frames, src_masks=None, out_masks=None
             pass
     scores["scored"] = sp.now()
     return scores
+
+
+def output_mask_is_picked(api_prompt):
+    """Does the API prompt's Swap Take get its output_mask from Swap Output Person (B8)? True when it can't be
+    told (no prompt: a direct call)."""
+    if not isinstance(api_prompt, dict):
+        return True
+    for n in api_prompt.values():
+        if isinstance(n, dict) and n.get("class_type") == "SeamStitchSwapTake":
+            src = (n.get("inputs") or {}).get("output_mask")
+            if not isinstance(src, list) or not src:
+                return True
+            up = api_prompt.get(str(src[0])) or {}
+            return up.get("class_type") == "SeamStitchSwapOutputPerson"
+    return True
 
 
 def _take_masks(tdir, n, fr):
@@ -339,6 +361,10 @@ def save_take(chunk, images, source_mask=None, output_mask=None, marked_guide=No
                 flags.append({"code": "marked_guide_failed", "text": f"marked_guide.mp4 not saved: {e}"})
 
         scores = {}
+        if output_mask is not None and not output_mask_is_picked(prompt):
+            flags.append({"code": "output_mask_any_person", "text":
+                          "the output mask doesn't come from Swap Output Person: with other people in the shot, "
+                          "following can read someone else (the example workflow wires it)"})
         if score:
             try:
                 sm = mask_list(source_mask, keep) if source_mask is not None and "mask_src" in files else None
@@ -490,3 +516,61 @@ class SeamStitchSwapTake:
               "text": "\n".join(lines)}
         return {"ui": {"seamstitch_swap_take": [ui]},
                 "result": (os.path.join(tdir, os.path.basename(take["file"])), take["id"], json.dumps(report))}
+
+
+def output_person(desc, track_data, source_mask):
+    """Everything Swap Output Person does: (MASK [n, H, W], report). The replaced person's mask in the render,
+    picked per shot from everyone SAM3 Track Output followed (swap_scores.pick_person); cuts are the chunk's
+    confirmed cuts inside its render."""
+    import torch.nn.functional as F
+    if not isinstance(desc, dict) or desc.get("format") != spl.CHUNK_FORMAT:
+        raise TakeError("chunk is not a Swap Planner chunk: wire the Planner's chunk output")
+    plan = sp.load_plan(desc["plan"])
+    r0, r1 = (int(x) for x in desc["render"])
+    cuts = [c - r0 for c in sp.confirmed_cuts(plan.get("cuts")) if r0 < c <= r1]
+    H, W = (int(x) for x in track_data["orig_size"])
+    n = int(track_data["n_frames"])
+    packed = track_data.get("packed_masks")
+    if packed is None:
+        return torch.zeros((n, H, W), dtype=torch.float32), {"objects": 0, "picks": [], "cuts": cuts}
+    objs = ss.unpack_bits(packed.detach().cpu().numpy() if isinstance(packed, torch.Tensor) else packed)
+    sm = source_mask.detach().cpu().numpy() if isinstance(source_mask, torch.Tensor) else np.asarray(source_mask)
+    m = len(sm)
+    # held frames repeat the last delivered one: they take its mask
+    src = [sm[min(i, m - 1)] for i in range(n)]
+    hers, picks = ss.pick_person(objs, src, cuts)
+    out = torch.from_numpy(hers.astype(np.float32)).unsqueeze(1)
+    out = F.interpolate(out, size=(H, W), mode="bilinear", align_corners=False)[:, 0]
+    return out, {"objects": int(objs.shape[1]), "picks": picks, "cuts": cuts}
+
+
+class SeamStitchSwapOutputPerson:
+    """B8: the replaced person in the render, for the take's scores, when other people share the shot."""
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "chunk": (spl.CHUNK_TYPE, {"tooltip": "The Swap Planner's chunk output (for the chunk's cuts)."}),
+                "track_data": ("SAM3_TRACK_DATA", {"tooltip":
+                    "SAM3 Track Output over the render, tracking every person (max_objects 0)."}),
+                "source_mask": ("MASK", {"tooltip":
+                    "The replaced person's source mask (the same one Swap Take gets)."}),
+            },
+        }
+
+    RETURN_TYPES = ("MASK", "STRING")
+    RETURN_NAMES = ("output_mask", "report")
+    FUNCTION = "pick"
+    CATEGORY = "SeamStitch/Swap"
+    DESCRIPTION = ("Keeps the replaced person out of everyone SAM3 tracked in the render: per shot (split at the "
+                   "chunk's confirmed cuts), the tracked person whose mask overlaps her source mask most. Frames "
+                   "where she isn't in the source get no mask, so following skips them. Feed its output_mask to "
+                   "Swap Take.")
+
+    def pick(self, chunk, track_data, source_mask):
+        mask, rep = output_person(chunk, track_data, source_mask)
+        shots = ", ".join(f"{p['shot'][0]}-{p['shot'][1] - 1}: " + (f"person {p['object']} (IoU {p['iou']})"
+                          if p["object"] is not None else "nobody overlaps her") for p in rep["picks"])
+        print(f"[SeamStitch] Swap Output Person: {chunk.get('chunk')}: {rep['objects']} tracked; {shots or 'nothing tracked'}")
+        return (mask, json.dumps(rep))

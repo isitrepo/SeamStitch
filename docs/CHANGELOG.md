@@ -5,7 +5,7 @@
 ### New
 
 - **SeamStitch Swap: whole-video character replacement with MiniMax H3**, in planned chunks over the
-  original audio. Six nodes in `SeamStitch/Swap`:
+  original audio. Seven nodes in `SeamStitch/Swap`:
   - `SeamStitchSwapPlanner`: the job's strip (cuts, splits, chunks, prompts, takes, masks) and its
     plan file in `output/seamstitch_swap/<job>/`. Each queue run emits one chunk's render inputs, or
     routes a draft, mark or assemble run; unused outputs are blocked.
@@ -17,8 +17,9 @@
   - `SeamStitchSwapDraft` (Draft Prompts): the subject from the sheet and each chunk's prompt from its
     frames and dialogue (QwenVL; Omni and faster-whisper when installed). A hand-held object the
     chunk's own object list doesn't contain is left out of the shot block and named in the warnings.
-  - `SeamStitchSwapOption` (a per-chunk option for the render group) and `SeamStitchSwapMask` (caches
-    a mark run's source person mask).
+  - `SeamStitchSwapOption` (a per-chunk option for the render group), `SeamStitchSwapMask` (caches
+    a mark run's source person mask) and `SeamStitchSwapOutputPerson` (the replaced person in the
+    render, for the scores).
   - Defaults from the build's GPU tests: 209-frame renders (over 209, two-pass renders failed or
     crashed ComfyUI at the 1 MP refine on 64 GB of RAM; auto placement cuts straight on a cut rather
     than go past it), floor 124, marking on, the level lock with hand-back 12 on forward joins (its
@@ -42,6 +43,11 @@
   - The strip frees ComfyUI's memory before every render and draft; colours the prompt's tags; its
     strip, panel and warnings collapse, and drag bars resize the panel and the warnings.
   - The example's render group sharpens lightly after the resize (Sharpen Image, alpha 0.2).
+  - F and M with other people in the shot: `SeamStitchSwapOutputPerson` keeps the replaced person
+    out of everyone the example's score track follows (its *SAM3 Track Output* now tracks every person,
+    max_objects 0), picked per shot by the most overlap with her source mask; frames she isn't in aren't
+    scored. The mouth score reads only her face, in the source and in the take, and shows none when it
+    isn't seen. Swap Take flags a take whose output mask doesn't come from it.
 - **24 fps conform for MiniMax H3.** H3 has no frame-rate input and times reference audio and
   Picture timings on a fixed 24 fps clock, so on 25 fps footage the lips drifted ~4% ahead of the
   speech.

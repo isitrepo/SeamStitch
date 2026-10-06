@@ -98,6 +98,7 @@ CAPTIONS = {
     "SeamStitchSwapDraft": None,
     "SeamStitchSwapOption": None,
     "SeamStitchSwapMask": None,
+    "SeamStitchSwapOutputPerson": None,
 }
 
 NODE_HEADER_COLOR = {
@@ -114,6 +115,7 @@ NODE_HEADER_COLOR = {
     "SeamStitchSwapAssemble": "#a15a2f",
     "SeamStitchSwapDraft": "#2f6fa5",
     "SeamStitchSwapMask": "#2f8f5b",
+    "SeamStitchSwapOutputPerson": "#2f8f8f",
 }
 
 NODE_OUTPUT_FILE = {
@@ -130,6 +132,7 @@ NODE_OUTPUT_FILE = {
     "SeamStitchSwapAssemble": "swap_assemble_node.svg",
     "SeamStitchSwapDraft": "swap_draft_node.svg",
     "SeamStitchSwapMask": "swap_mask_node.svg",
+    "SeamStitchSwapOutputPerson": "swap_output_person_node.svg",
 }
 
 ROW_H = 24
