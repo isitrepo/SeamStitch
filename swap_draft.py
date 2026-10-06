@@ -806,7 +806,7 @@ _ACTION = re.compile(r"(?i)(?:,\s*|\s+)(?:who is\s+|who's\s+|that is\s+)?\b(?!we
 
 
 def who_lasting(who):
-    """The main person by what lasts: Qwen's "a bald man holding a knife" (100d chunk 1, B5a) made every later
+    """The main person by what lasts: Qwen's "a bald man holding a knife" (the test clip's chunk 1, B5a) made every later
     question about a shot without the knife answer "no". Drops the first "-ing" clause on (holding, carrying,
     sitting ...; "wearing" stays: clothes last) and anything after it."""
     out = _ACTION.sub("", who or "").strip(" ,.")
@@ -823,7 +823,7 @@ def _describes_someone(m):
 
 
 def recheck_absent(moments, pics, who, ask):
-    """Qwen can answer person "no" while describing that person's pose and hands: 100d 186-208, the man bent over
+    """Qwen can answer person "no" while describing that person's pose and hands: the test clip's frames 186-208, the man bent over
     the box, seen from above (B5a; the shot was written as empty and H3 rendered an empty room). When no moment of
     a shot says yes, each "no" moment that describes a pose or hands gets one single-purpose question on its own
     picture (B4: those work where the six-line answer doesn't); a "yes" makes the moment present. Returns the

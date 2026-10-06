@@ -636,7 +636,7 @@ def test_solved_field_gains_land_each_region_on_its_target():
 
 
 def test_the_lock_heading_follows_the_source_not_a_bent_line():
-    """B5b, 100d 406: the left take dips then brightens over its last frames (render flicker); a line through
+    """B5b, the test clip at 406: the left take dips then brightens over its last frames (render flicker); a line through
     its last 12 frames lands under its last frame and the lock steps the colour down. The source-carried
     heading continues from the last frame as the source moves."""
     left = np.array([[80.4 - 0.5 * min(k, 6) + 0.6 * max(0, k - 6)] * 3 for k in range(12)])   # dip, then rise

@@ -342,7 +342,7 @@ def auto_splits(frames, cuts=(), settings=None, max_shift=None, with_modes=False
     since a head fill lengthens the overlap) is nudged forward, else backward, by the smallest
     shift that clears it without fouling an earlier split's guard; the splits after it are
     re-placed from its new position. If that nudge leaves a render over the ceiling and a straight
-    cut on the cut in the guard doesn't (B5b: 100d's nudge to 815 made a 226-frame render, which
+    cut on the cut in the guard doesn't (B5b: the test clip's nudge to 815 made a 226-frame render, which
     failed and then crashed ComfyUI), the split becomes a straight cut there instead, and the
     splits after it are placed from the cut (its chunk renders from the cut: no overlap). If the
     straight cut passes the ceiling too, the backward nudge is taken (B7: a sitcom's shots 38 frames

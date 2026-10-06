@@ -74,14 +74,14 @@ def test_detect_and_plan_is_one_step_and_keeps_worked_splits():
 
 def test_jobs_list_and_free_names(tmp_path):
     out = str(tmp_path)
-    assert spl.list_jobs(out) == [] and spl.free_job_name("100d clip", out) == "100d_clip"
-    for name in ("100d_clip", "100d_clip_2"):
+    assert spl.list_jobs(out) == [] and spl.free_job_name("test clip", out) == "test_clip"
+    for name in ("test_clip", "test_clip_2"):
         jd, pp = spl.job_paths(name, out)
-        p = sp.new_plan(name, {"path": "C:/v/100d clip.mp4", "frames": 978, "fps": 25, "width": 8, "height": 6})
+        p = sp.new_plan(name, {"path": "C:/v/test clip.mp4", "frames": 978, "fps": 25, "width": 8, "height": 6})
         sp.rebuild_chunks(p)
         sp.save_plan(pp, p)
-    assert {j["job"] for j in spl.list_jobs(out)} == {"100d_clip", "100d_clip_2"}
-    assert spl.free_job_name("100d clip", out) == "100d_clip_3"
+    assert {j["job"] for j in spl.list_jobs(out)} == {"test_clip", "test_clip_2"}
+    assert spl.free_job_name("test clip", out) == "test_clip_3"
 
 
 def test_short_mask_holes_fill_from_the_nearer_side():
@@ -251,7 +251,7 @@ def test_mark_run_caches_a_mask_that_the_render_run_reuses(nodes):
 
 
 def test_weak_scene_hits_come_in_as_faint_suggestions_only():
-    # 100d's scores over 0.10 (ffmpeg scene, B5b): the six same-room jump cuts B5a found by eye read 0.10-0.14;
+    # the test clip's scores over 0.10 (ffmpeg scene, B5b): the six same-room jump cuts B5a found by eye read 0.10-0.14;
     # 903 is the 902 cut read a second time
     scored = [(96, 0.264), (131, 0.120), (155, 0.221), (186, 0.216), (250, 0.202), (349, 0.575), (385, 0.279),
               (413, 0.181), (429, 0.224), (448, 0.118), (669, 0.119), (713, 0.104), (764, 0.134), (785, 0.187),
