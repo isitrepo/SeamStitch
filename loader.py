@@ -15,8 +15,10 @@ from PIL import Image
 
 try:
     from . import insert_math
+    from .video_colour import color_args
 except ImportError:  # imported as a top-level module (tests)
     import insert_math
+    from video_colour import color_args
 
 _VIDEO_EXTENSIONS = ('.mp4', '.webm', '.mkv', '.avi', '.mov', '.m4v', '.flv', '.wmv')
 # Pixel formats that store RGB planes, not YUV (e.g. FFV1's gbrp / gbrap16le).
@@ -437,35 +439,10 @@ class SeamStitchLoader:
         orig_w = video_stream.codec_context.width if video_stream else 512
         orig_h = video_stream.codec_context.height if video_stream else 512
 
-        # Determine correct colorspace and color range for PyAV conversion to prevent color shift
-        try:
-            from av.video.reformatter import Colorspace, ColorRange
-            # Improve fallback heuristic to check both dimensions (e.g. 720x1280 vertical video is HD)
-            fallback_cs = Colorspace.ITU709 if max(orig_w, orig_h) >= 720 else Colorspace.ITU601
-            fallback_cr = ColorRange.MPEG
-            dst_range = ColorRange.JPEG # RGB should always be full range
-        except ImportError:
-            fallback_cs = "itu709" if max(orig_w, orig_h) >= 720 else "itu601"
-            fallback_cr = "mpeg"
-            dst_range = "jpeg"
-
-        src_colorspace = fallback_cs
-        src_color_range = fallback_cr
-
-        if video_stream and video_stream.codec_context:
-            cc = video_stream.codec_context
-
-            c_space = getattr(cc, 'colorspace', getattr(cc, 'color_space', None))
-            if c_space and hasattr(c_space, 'name') and c_space.name != "UNSPECIFIED":
-                src_colorspace = c_space
-            elif c_space and isinstance(c_space, str) and "unspecified" not in c_space.lower():
-                src_colorspace = c_space
-
-            c_range = getattr(cc, 'color_range', None)
-            if c_range and hasattr(c_range, 'name') and c_range.name != "UNSPECIFIED":
-                src_color_range = c_range
-            elif c_range and isinstance(c_range, str) and "unspecified" not in c_range.lower():
-                src_color_range = c_range
+        # The stream's own matrix/range tags (as an enum, int or string), the size guess only
+        # when it has none (video_colour.py). RGB out is always full range.
+        src_colorspace, src_color_range, dst_range = color_args(
+            video_stream.codec_context if video_stream else None, orig_w, orig_h)
 
         target_w = custom_width if custom_width > 0 else orig_w
         target_h = custom_height if custom_height > 0 else orig_h

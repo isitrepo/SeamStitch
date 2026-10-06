@@ -65,6 +65,7 @@ from videohelpersuite.nodes import (
 )
 
 from .audio_splice import splice_audio, match_format, frame_sample
+from .video_colour import color_args
 
 
 def pack_video_formats():
@@ -144,30 +145,9 @@ def _decode_range(video_path, frame_rate, start_frame_idx, end_frame_idx):
     orig_w = video_stream.codec_context.width
     orig_h = video_stream.codec_context.height
 
-    try:
-        from av.video.reformatter import Colorspace, ColorRange
-        fallback_cs = Colorspace.ITU709 if max(orig_w, orig_h) >= 720 else Colorspace.ITU601
-        fallback_cr = ColorRange.MPEG
-        dst_range = ColorRange.JPEG
-    except ImportError:
-        fallback_cs = "itu709" if max(orig_w, orig_h) >= 720 else "itu601"
-        fallback_cr = "mpeg"
-        dst_range = "jpeg"
-
-    src_colorspace = fallback_cs
-    src_color_range = fallback_cr
-    if video_stream.codec_context:
-        cc = video_stream.codec_context
-        c_space = getattr(cc, 'colorspace', getattr(cc, 'color_space', None))
-        if c_space and hasattr(c_space, 'name') and c_space.name != "UNSPECIFIED":
-            src_colorspace = c_space
-        elif c_space and isinstance(c_space, str) and "unspecified" not in c_space.lower():
-            src_colorspace = c_space
-        c_range = getattr(cc, 'color_range', None)
-        if c_range and hasattr(c_range, 'name') and c_range.name != "UNSPECIFIED":
-            src_color_range = c_range
-        elif c_range and isinstance(c_range, str) and "unspecified" not in c_range.lower():
-            src_color_range = c_range
+    # The stream's own matrix/range tags (as an enum, int or string), the size guess only
+    # when it has none (video_colour.py).
+    src_colorspace, src_color_range, dst_range = color_args(video_stream.codec_context, orig_w, orig_h)
 
     fr = float(frame_rate) if frame_rate > 0 else 24.0
     frame_interval = 1.0 / fr

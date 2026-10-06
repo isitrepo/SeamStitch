@@ -46,9 +46,11 @@ from server import PromptServer
 try:
     from . import timeline_math as tm
     from .loader import SeamStitchLoader, _list_input_videos
+    from .video_colour import color_args
 except ImportError:  # imported as a top-level module (tests)
     import timeline_math as tm
     from loader import SeamStitchLoader, _list_input_videos
+    from video_colour import color_args
 
 _VIDEO_EXTENSIONS = ('.mp4', '.webm', '.mkv', '.avi', '.mov', '.m4v', '.flv', '.wmv')
 _RGB_PIX = ('gbr', 'rgb', 'bgr', 'argb', 'abgr', 'rgba', 'bgra')
@@ -142,21 +144,7 @@ def auto_frame_rate(frame_rate, first_clip_path):
 # ---------------------------------------------------------------------------
 
 def _color_args(cc, w, h):
-    try:
-        from av.video.reformatter import Colorspace, ColorRange
-        cs, cr, dst = (Colorspace.ITU709 if max(w, h) >= 720 else Colorspace.ITU601,
-                       ColorRange.MPEG, ColorRange.JPEG)
-    except ImportError:
-        cs, cr, dst = ("itu709" if max(w, h) >= 720 else "itu601", "mpeg", "jpeg")
-    c_space = getattr(cc, 'colorspace', getattr(cc, 'color_space', None))
-    if c_space is not None and getattr(c_space, "name", str(c_space)).upper() != "UNSPECIFIED" \
-            and "unspecified" not in str(c_space).lower():
-        cs = c_space
-    c_range = getattr(cc, 'color_range', None)
-    if c_range is not None and getattr(c_range, "name", str(c_range)).upper() != "UNSPECIFIED" \
-            and "unspecified" not in str(c_range).lower():
-        cr = c_range
-    return cs, cr, dst
+    return color_args(cc, w, h)
 
 
 def _deep_rgb(fmt):
