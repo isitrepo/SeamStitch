@@ -9,7 +9,7 @@ with r1-r16's:
     confirmed cut inside the take's render: copied / unsure / lost (T2, r5-r7).
   * mouth sync: mouth.py. MediaPipe FaceLandmarker, inner-lip gap (13-14) over mouth width
     (78-308); the correlation of source and output over the frames where both have a face,
-    at the best lag within +-2. A secondary signal, never a gate (Kay). The face coverage is
+    at the best lag within +-2. A secondary signal, never a gate. The face coverage is
     reported beside every number: a hand or a prop over the mouth makes it noisy (r15).
   * scene alarm: scorer's background PSNR, outside the 21 px dilated union of the two person
     masks, at 960x540 (T7). Only an alarm: never rank or pick on it (r10).
@@ -21,7 +21,7 @@ Nothing here picks a take. `rank_key` orders a chunk's takes for display only: f
 first, then lost cuts; mouth sync is shown, never ranked.
 
 THRESHOLDS is the one table every caller reads (the Take node, the Planner's view, the UI
-through the plan view). B3 fitted it against Kay's verdicts on REVIEW_1-8 and B1b (T-FLAGS,
+through the plan view). B3 fitted it against the reviewer's verdicts on REVIEW_1-8 and B1b (T-FLAGS,
 plan doc "#### B3").
 """
 
@@ -37,16 +37,16 @@ import numpy as np
 THRESHOLDS = {
     # pose IoU, chunk mean and p10; a join's +-25 frames use the mean bands only. B3 moved the mean's
     # green from 0.65 to 0.60: the 400-608 renders sit at 0.649-0.654 (X2, X3, X4, X5, X10), and 0.65 split
-    # Kay's best render X10 (0.6496, amber) from its equals; the plain renders he ranked below marked 124
+    # the reviewer's best render X10 (0.6496, amber) from its equals; the plain renders he ranked below marked 124
     # (mean 0.57-0.62) stay amber through their p10 (0.37-0.39).
     "following": {"green": 0.60, "amber": 0.50},
     "following_p10": {"green": 0.45, "amber": 0.30},
     # scorer.cut_stats: peak_ratio_at_offset and spread, per confirmed cut. Kept. A lost or unsure cut is
-    # amber, not red (B3): Kay's favourites lose cuts too (marked 124 at 96; X10 at 413 / 429), so a red
-    # dot on nearly every 100d chunk would not say what to re-roll.
+    # amber, not red (B3): the reviewer's favourites lose cuts too (marked 124 at 96; X10 at 413 / 429), so a red
+    # dot on nearly every chunk of the test clip would not say what to re-roll.
     "cut_copied": 3.0, "cut_spread": 2, "cut_lost": 2.0,
     # mouth sync (information only: below amber it is shown grey, never red). Green moved 0.50 -> 0.60
-    # (B3): CR-T1's plain 243, whose mouth Kay called "terrible", scores 0.51; marked 243 0.63; r5-r7's
+    # (B3): CR-T1's plain 243, whose mouth the reviewer called "terrible", scores 0.51; marked 243 0.63; r5-r7's
     # good seeds 0.60-0.71.
     "mouth": {"green": 0.60, "amber": 0.25}, "mouth_lag": 2, "mouth_min_pairs": 8,
     # the scene alarm: mean background PSNR under this is amber. Kept at 15 (no REVIEW item came near it:
@@ -57,10 +57,10 @@ THRESHOLDS = {
     # reads 7.49 on the right take's track and 1.71 on two tracks, against 0.86 on one SAM3 track over the
     # joined file (r16's method), and the unrepaired join 1.59 against 4.98: the right take drifts off the
     # left by the splice, and two SAM3 runs segment the character differently (wings in or out). The
-    # whole-frame jump alone agrees with Kay's verdicts (T-FLAGS).
+    # whole-frame jump alone agrees with the reviewer's verdicts (T-FLAGS).
     "join_colour": {"green": 1.0, "amber": 2.0},
     # a join: Result Preview's join_ratio. Moved (B3) from < 1.8 / < 3.0 to < 3.0 / < 5.0: every anchored
-    # lock Kay chose reads 2.5-2.9 (r12 / r16 609: 2.88; B1b 609: 2.51), a "soft bump" on Result Preview's
+    # lock the reviewer chose reads 2.5-2.9 (r12 / r16 609: 2.88; B1b 609: 2.51), a "soft bump" on Result Preview's
     # scale, from the small content step on near-static frames that a level lock can't remove; nothing he
     # rejected was rejected for motion. A real source cut reads 5.4 (B1b, 250).
     "join_motion": {"green": 3.0, "amber": 5.0},
@@ -336,7 +336,7 @@ LANDMARKER = "face_landmarker.task"
 
 
 def landmarker_path():
-    """models/mediapipe/face_landmarker.task (placed there with Kay's OK, 2026-10-03), else None."""
+    """models/mediapipe/face_landmarker.task (placed there by hand), else None."""
     try:
         import folder_paths
         p = os.path.join(folder_paths.models_dir, "mediapipe", LANDMARKER)
@@ -680,7 +680,7 @@ def replaced_flag(rp):
 
 def chunk_flags(scores):
     """{following, cuts, mouth, scene, replaced}: colour per flag (None = not measured). Information for
-    Kay; nothing reads them to choose."""
+    the user; nothing reads them to choose."""
     s = scores or {}
     return {"following": following_flag(s), "cuts": cuts_flag(s.get("cuts")),
             "mouth": mouth_flag(s.get("mouth")), "scene": scene_flag(s.get("scene")),

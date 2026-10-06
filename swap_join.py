@@ -25,7 +25,7 @@ level-matched to the left one (gain = mean left / mean right, per frame and chan
 crossfaded in with equal-power weights (sin^2). After the overlap the last match gain decays
 to 1 over `frames` frames.
 
-Two refinements from B1b's renders (Kay, 2026-10-03), on by default:
+Two refinements from B1b's renders (2026-10-03), on by default:
   * CUT-AWARE: the lock's fits never cross a cut. The right take's opening (fit and hand-back)
     ends before the first cut after the splice: a confirmed source cut, or the take's own luma
     step >= CUT_STEP (H3 often renders a cut a frame or more late). The left take's heading is
@@ -40,12 +40,12 @@ Two refinements from B1b's renders (Kay, 2026-10-03), on by default:
 
 The HEADING (B5b, 2026-10-05): where the left take is going, the level the right take's opening is
 locked to at the splice. As ported, a line through the left take's last 12 frames, one frame on; a
-render's own flicker bends that line (100d 406: c3 dips then brightens 2.5 levels over its last 7
-frames, the line lands ~1 level under its last frame, and the lock stepped the colour down: Kay saw it).
+render's own flicker bends that line (the test clip at 406: c3 dips then brightens 2.5 levels over its last 7
+frames, the line lands ~1 level under its last frame, and the lock stepped the colour down: visible by eye).
 Now, by default, the left take's last 3 frames, each carried by the source's own change to the splice,
 averaged: mean over i = 1..3 of L[J-i] * S[J] / S[J-i]. On the 7 lock joins on disk (frame means) the step
 error (max over R, G, B, against the source's step) fell from mean 0.70 / worst 1.63 to 0.36 / 0.66 (the
-last frame alone: 0.23 / 0.65); through the regional lock on 100d's 209 / 406 / 603 the frame step against
+last frame alone: 0.23 / 0.65); through the regional lock on the test clip's 209 / 406 / 603 the frame step against
 the source's is 0.56 / 0.80 / 0.35 (as ported 0.54 / 1.40 / 0.45; the last frame alone put 603's room
 step at 1.31). heading="line" keeps the port.
 

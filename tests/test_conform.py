@@ -86,7 +86,7 @@ def test_conform_maths():
     assert tl.conform_rate(24, True) == 24 and tl.conform_rate(25, False) == 25
     assert tl._atempo_chain(0.96) == "atempo=0.9600000000"
     assert tl._atempo_chain(0.4).split(",") == ["atempo=0.5000000000", "atempo=0.8000000000"]
-    # 978 frames of 25 fps footage (100d.mp4): 39.12 s -> 40.75 s on H3's clock, frames kept
+    # 978 frames of 25 fps footage (the test clip): 39.12 s -> 40.75 s on H3's clock, frames kept
     assert 978 / 25 == pytest.approx(39.12) and 978 / 24 == pytest.approx(40.75)
     assert (978 / 24) / (978 / 25) == pytest.approx(25 / 24)
 

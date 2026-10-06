@@ -118,7 +118,7 @@ async function uploadFile(file) {
 }
 
 // Quality colours for the flag dots: the flags come from the backend (swap_scores, design §4.5, thresholds
-// fitted in B3 against Kay's verdicts); this only maps a flag to a colour. Grey = information only (mouth).
+// fitted in B3 against the reviewer's verdicts); this only maps a flag to a colour. Grey = information only (mouth).
 const FLAG = { green: C.green, amber: C.amber, red: C.red, grey: "#9ca3af" };
 const flagColour = (f) => FLAG[f] || C.faint;
 // The tooltips: each flag's numbers, mouth with its face coverage (a hand or a prop over the mouth makes it noisy).
@@ -279,7 +279,7 @@ function buildPlanner(node) {
         display: "flex", flexDirection: "column", gap: "4px", width: "100%", height: "100%",
         boxSizing: "border-box", fontFamily: "sans-serif", fontSize: "11px", color: C.text,
         userSelect: "none", outline: "none", overflow: "hidden",
-        background: C.panel, padding: "5px", borderRadius: "6px",      // Kay: the node's grey made the text hard to read
+        background: C.panel, padding: "5px", borderRadius: "6px",      // the node's grey made the text hard to read
     });
     root.tabIndex = 0;
 

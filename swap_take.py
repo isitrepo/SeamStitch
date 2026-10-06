@@ -13,7 +13,7 @@ builds its review clip and registers it in the job's plan.
 
 Frames must come back 1:1 (output frames = the render length) or the take is refused; held
 frames (the hold fill) are dropped. Nothing here picks a take: the panel offers "choose this
-take" and "keep current", and Kay chooses.
+take" and "keep current", and the user chooses.
 """
 
 import hashlib

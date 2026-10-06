@@ -80,7 +80,7 @@ try:
 except Exception as e:
     logging.getLogger(__name__).warning(f"[SeamStitch] Swap Planner / Option / Take / Mask not loaded: {e}")
 
-# SeamStitch Swap Draft Prompts calls Kay's QwenVL and Omni nodes in-process (located at run time).
+# SeamStitch Swap Draft Prompts calls the QwenVL and Omni custom nodes in-process (located at run time).
 try:
     from .swap_draft import SeamStitchSwapDraft
     NODE_CLASS_MAPPINGS["SeamStitchSwapDraft"] = SeamStitchSwapDraft

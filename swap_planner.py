@@ -79,10 +79,10 @@ RETURN_NAMES = ("chunk", "images", "audio", "prompt", "seed", "length", "start_p
 OUT_OPTIONS, OUT_DRAFT, OUT_ASSEMBLE = 12, 13, 14
 OUT_MARK_CHUNK, OUT_MARK_IMAGES, OUT_SOURCE_MASK, OUT_HAS_MASK = 15, 16, 17, 18
 SCENE_THRESHOLD = 0.15           # ffmpeg scene score (> 0.15 found every cut of the 978-frame test clip)
-# same-room jump cuts score lower: 100d's 131, 448, 669, 713, 764 and 850 read 0.10-0.14 (B5a); they come in as
-# faint suggestions only (never confirmed by "detect + plan"), for Kay to confirm or delete by eye
+# same-room jump cuts score lower: the test clip's 131, 448, 669, 713, 764 and 850 read 0.10-0.14 (B5a); they come in as
+# faint suggestions only (never confirmed by "detect + plan"), for the user to confirm or delete by eye
 WEAK_THRESHOLD = 0.10
-WEAK_NEAR = 2                    # a weak hit this close to a stronger one is the same cut, read twice (100d: 902 / 903)
+WEAK_NEAR = 2                    # a weak hit this close to a stronger one is the same cut, read twice (the test clip: 902 / 903)
 
 # widget name -> plan setting
 WIDGET_SETTINGS = {"target_render_frames": "target_render", "overlap_frames": "overlap", "anchor_frames": "anchors",
@@ -652,7 +652,7 @@ def merge_detected(plan, found, confirmed=False, weak=()):
 def detect_and_plan(plan, found, weak=()):
     """One step: the detected cuts confirmed, then the auto splits placed from every confirmed cut.
     Splits are only replaced while no chunk has a prompt or a take; otherwise they're kept. Weak hits come in
-    as suggestions only, so they never move the auto splits until Kay confirms them."""
+    as suggestions only, so they never move the auto splits until the user confirms them."""
     added = merge_detected(plan, found, confirmed=True, weak=weak)
     busy = any(c.get("takes") or (c.get("prompt") or "").strip() for c in plan.get("chunks", []) if not sp.is_kept(c))
     res = {"added": added, "splits": None, "kept_splits": busy}
