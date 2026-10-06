@@ -504,6 +504,15 @@ there, never erased).
 ![Swap Output Person](docs/images/swap_output_person_node.svg)
 
 <!-- gen:inputs SeamStitchSwapOutputPerson -->
+*Finds the replacement among everyone SAM3 tracked in the render, per shot (split at the chunk's confirmed cuts): the tracked person who looks most like the character sheet, else the one overlapping her source mask most. Frames where she isn't in the source get no mask, so following skips them. Feed its output_mask to Swap Take.*
+
+| Input | Default | What it does |
+| --- | --- | --- |
+| `chunk` | socket (SEAMSTITCH_SWAP_CHUNK) | The Swap Planner's chunk output (for the chunk's cuts). |
+| `track_data` | socket (SAM3_TRACK_DATA) | SAM3 Track Output over the render, tracking every person (max_objects 0). |
+| `source_mask` | socket (MASK) | The replaced person's source mask (the same one Swap Take gets). |
+| `images` *(opt.)* | socket (IMAGE) | The render (the same frames Swap Take gets): with the sheet, people are told apart by colour. |
+| `sheet` *(opt.)* | socket (IMAGE) | The character sheet (Picture 1): per shot, the tracked person who looks most like it is the replacement, wherever H3 put her. Without it: the person overlapping her source mask most. |
 <!-- /gen -->
 
 ### SeamStitch Swap Assemble
