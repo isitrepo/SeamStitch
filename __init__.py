@@ -65,7 +65,7 @@ except Exception as e:
     logging.getLogger(__name__).warning(f"[SeamStitch] Swap Assemble not loaded: {e}")
 try:
     from .swap_planner import SeamStitchSwapPlanner, SeamStitchSwapOption
-    from .swap_take import SeamStitchSwapTake
+    from .swap_take import SeamStitchSwapTake, SeamStitchSwapOutputPerson
     from .swap_mask import SeamStitchSwapMask
     NODE_CLASS_MAPPINGS["SeamStitchSwapMask"] = SeamStitchSwapMask
     NODE_DISPLAY_NAME_MAPPINGS["SeamStitchSwapMask"] = "SeamStitch Swap Mask"
@@ -75,6 +75,8 @@ try:
     NODE_DISPLAY_NAME_MAPPINGS["SeamStitchSwapOption"] = "SeamStitch Swap Option"
     NODE_CLASS_MAPPINGS["SeamStitchSwapTake"] = SeamStitchSwapTake
     NODE_DISPLAY_NAME_MAPPINGS["SeamStitchSwapTake"] = "SeamStitch Swap Take"
+    NODE_CLASS_MAPPINGS["SeamStitchSwapOutputPerson"] = SeamStitchSwapOutputPerson
+    NODE_DISPLAY_NAME_MAPPINGS["SeamStitchSwapOutputPerson"] = "SeamStitch Swap Output Person"
 except Exception as e:
     logging.getLogger(__name__).warning(f"[SeamStitch] Swap Planner / Option / Take / Mask not loaded: {e}")
 

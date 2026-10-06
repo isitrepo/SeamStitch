@@ -147,6 +147,49 @@ def iou(a, b):
     return float(np.logical_and(a, b).sum() / union)
 
 
+PICK_W, PICK_H = 240, 135   # the size a shot's people are compared with her source mask at
+
+
+def unpack_bits(packed):
+    """SAM3's packed masks (comfy.ldm.sam3.tracker.pack_masks: [..., w // 8] uint8, bit i = 1 << i) -> bool."""
+    return np.unpackbits(np.asarray(packed, dtype=np.uint8), axis=-1, bitorder="little").astype(bool)
+
+
+def shots_of(n, cuts=()):
+    """[a, b) frame ranges of the shots in n frames; a cut at c makes frame c the first of a new shot."""
+    edges = [0] + sorted({int(c) for c in cuts if 0 < int(c) < n}) + [n]
+    return [(a, b) for a, b in zip(edges, edges[1:]) if b > a]
+
+
+def pick_person(objects, src_masks, cuts=()):
+    """The replaced person among everyone a SAM3 track followed in the take (B8). Per shot (a track doesn't
+    carry a person across a cut, and the replaced person can be someone else after one), the tracked object
+    whose mask overlaps her source mask most, by mean IoU over the shot's frames where she is in the source.
+    objects: [n, k, h, w] bool (k tracked people; k may be 0); src_masks: n masks at any size (empty = she
+    isn't in the shot). Returns (masks [n, h, w] bool: hers, empty where she isn't in the source or no tracked
+    person overlaps her in that shot; picks: [{shot: [a, b], object, iou}]): object None = nobody overlapped."""
+    objects = np.asarray(objects, dtype=bool)
+    n = min(len(src_masks), int(objects.shape[0]))
+    h, w = int(objects.shape[2]), int(objects.shape[3])
+    out = np.zeros((int(objects.shape[0]), h, w), dtype=bool)
+    k = int(objects.shape[1])
+    src = [mask_thumb(to_bool(src_masks[i]), PICK_W, PICK_H) for i in range(n)]
+    picks = []
+    for a, b in shots_of(n, cuts):
+        here = [i for i in range(a, b) if src[i].any()]
+        best, best_v = None, 0.0
+        for j in range(k):
+            vals = [iou(src[i], objects[i, j]) or 0.0 for i in here]
+            v = float(np.mean(vals)) if vals else 0.0
+            if v > best_v:
+                best, best_v = j, v
+        if best is not None:
+            for i in here:
+                out[i] = objects[i, best]
+        picks.append({"shot": [a, b], "object": best, "iou": round(best_v, 4)})
+    return out, picks
+
+
 def pose_iou(src_masks, out_masks):
     """Per-frame IoU of source and output person masks: {pose_iou (mean), pose_iou_p10, frames}, or None."""
     vals = []
@@ -241,13 +284,13 @@ def mouth_available():
     return True, p
 
 
-def mouth_series(frames, model_path, fps=25.0):
-    """Mouth opening per frame (inner-lip gap / mouth width), None where no face is found.
-    frames: RGB uint8 at any size; analysed at 960x540 (mouth.py's ffmpeg scale, bicubic)."""
+def _landmark_faces(frames, model_path, fps, num_faces):
+    """Per frame, the faces mediapipe finds (its order): [(centre x, centre y, opening or None)], 0-1 coordinates.
+    frames analysed at 960x540 (mouth.py's ffmpeg scale, bicubic)."""
     import mediapipe as mp
     from mediapipe.tasks.python import BaseOptions, vision
     opts = vision.FaceLandmarkerOptions(base_options=BaseOptions(model_asset_path=str(model_path)),
-                                        running_mode=vision.RunningMode.VIDEO, num_faces=1)
+                                        running_mode=vision.RunningMode.VIDEO, num_faces=num_faces)
     out = []
     step = 1000.0 / float(fps or 25.0)
     with vision.FaceLandmarker.create_from_options(opts) as lm:
@@ -255,13 +298,57 @@ def mouth_series(frames, model_path, fps=25.0):
             f = thumb(f, interp=cv2.INTER_CUBIC)
             r = lm.detect_for_video(mp.Image(image_format=mp.ImageFormat.SRGB, data=np.ascontiguousarray(f)),
                                     int(round(t * step)))
-            if not r.face_landmarks:
-                out.append(None)
-                continue
-            p = r.face_landmarks[0]
-            gap = np.hypot((p[13].x - p[14].x) * AN_W, (p[13].y - p[14].y) * AN_H)
-            wid = np.hypot((p[78].x - p[308].x) * AN_W, (p[78].y - p[308].y) * AN_H)
-            out.append(float(gap / wid) if wid > 1 else None)
+            faces = []
+            for p in r.face_landmarks:
+                gap = np.hypot((p[13].x - p[14].x) * AN_W, (p[13].y - p[14].y) * AN_H)
+                wid = np.hypot((p[78].x - p[308].x) * AN_W, (p[78].y - p[308].y) * AN_H)
+                faces.append((float(np.mean([q.x for q in p])), float(np.mean([q.y for q in p])),
+                              float(gap / wid) if wid > 1 else None))
+            out.append(faces)
+    return out
+
+
+FACE_PAD = 0.01     # a face centre this close to her mask (a share of the mask's width) counts as inside it
+
+
+def face_in_mask(mask, x, y, pad=FACE_PAD):
+    """Is a face centre (0-1) inside the mask, or within `pad` of its edge? No mask: no."""
+    if mask is None:
+        return False
+    m = np.asarray(mask)
+    if m.ndim == 3:
+        m = m[..., 0]
+    h, w = m.shape
+    cx, cy = min(w - 1, max(0, int(x * w))), min(h - 1, max(0, int(y * h)))
+    r = max(1, int(round(pad * w)))
+    return bool((m[max(0, cy - r):cy + r + 1, max(0, cx - r):cx + r + 1] > 0.5).any())
+
+
+def mouth_series(frames, model_path, fps=25.0, masks=None):
+    """Mouth opening per frame (inner-lip gap / mouth width), None where no face is found.
+    frames: RGB uint8 at any size; analysed at 960x540 (mouth.py's ffmpeg scale, bicubic).
+    masks (B8): the replaced person's mask per frame; the series is then hers only, None where her face isn't
+    seen (her back to the camera, out of the shot), never another person's face. The one-face pass is read
+    first, as before (mediapipe asked for several faces finds fewer: on one test take 112 frames -> 76); only
+    where its face isn't inside her mask does a several-face pass look for hers."""
+    frames = list(frames)
+    first = _landmark_faces(frames, model_path, fps, 1)
+    if masks is None:
+        return [f[0][2] if f else None for f in first]
+    out, need = [], []
+    for i, f in enumerate(first):
+        m = masks[i] if i < len(masks) else None
+        if f and face_in_mask(m, f[0][0], f[0][1]):
+            out.append(f[0][2])
+        else:
+            out.append(None)
+            if f:
+                need.append(i)
+    if need:
+        more = _landmark_faces(frames, model_path, fps, 4)
+        for i in need:
+            hers = [x for x in more[i] if face_in_mask(masks[i], x[0], x[1])]
+            out[i] = hers[0][2] if hers else None
     return out
 
 
@@ -282,7 +369,7 @@ def face_mouths(frames, masks, model_path, fps=25.0):
             r = lm.detect_for_video(mp.Image(image_format=mp.ImageFormat.SRGB, data=np.ascontiguousarray(f)),
                                     int(round(t * step)))
             ti = oi = ox = None
-            widest = 0.0
+            widest = tw = 0.0
             for p in r.face_landmarks:
                 gap = np.hypot((p[13].x - p[14].x) * AN_W, (p[13].y - p[14].y) * AN_H)
                 wid = np.hypot((p[78].x - p[308].x) * AN_W, (p[78].y - p[308].y) * AN_H)
@@ -291,8 +378,8 @@ def face_mouths(frames, masks, model_path, fps=25.0):
                 fx = float(np.mean([q.x for q in p]))
                 cx = min(m.shape[1] - 1, max(0, int(fx * m.shape[1])))
                 cy = min(m.shape[0] - 1, max(0, int(np.mean([q.y for q in p]) * m.shape[0])))
-                if m[cy, cx] > 0.5:
-                    ti = float(gap / wid)
+                if m[cy, cx] > 0.5 and (ti is None or wid > tw):
+                    ti, tw = float(gap / wid), wid
                 elif wid > widest:
                     widest, oi, ox = wid, float(gap / wid), fx
             tgt.append(ti)
@@ -452,17 +539,25 @@ def score_frames(out_frames, src_frames=None, src_masks=None, out_masks=None, cu
             scores["mouth"] = None
             scores["mouth_info"] = {"why": why}
         else:
+            # B8: her face only, in the source (inside the source mask) and in the take (inside the output mask,
+            # which Swap Output Person keeps on her; the source mask where there's none), never another person's
+            src_l = list(src_masks) if src_masks is not None else None
+            out_l = list(out_masks) if out_masks is not None else src_l
             ms = mouth_src
             if ms is None and srcs is not None:
-                ms = mouth_series(srcs, why, fps)
+                ms = mouth_series(srcs, why, fps, src_l)
             if ms is None:
                 scores["mouth"] = None
                 scores["mouth_info"] = {"why": "no source frames"}
             else:
-                mo = mouth_series(outs, why, fps)
+                mo = mouth_series(outs, why, fps, out_l)
                 rel = [c - first for c in cuts if 0 <= c - first < n]
                 m = mouth_halves(ms[:n], mo, rel)
                 scores["mouth"] = m.pop("mouth")
+                if scores["mouth"] is None and src_l is not None:
+                    m["why"] = (f"not measured: her face is seen on {m['pairs']} frames of {n} in both "
+                                f"(fewer than {THRESHOLDS['mouth_min_pairs']}: her back to the camera, or out of shot)")
+                m["face_of"] = "target" if src_l is not None else "first"
                 scores["mouth_info"] = m
                 extras["mouth_src"] = ms
     return scores, extras
