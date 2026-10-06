@@ -43,10 +43,11 @@
   - The strip frees ComfyUI's memory before every render and draft; colours the prompt's tags; its
     strip, panel and warnings collapse, and drag bars resize the panel and the warnings.
   - The example's render group sharpens lightly after the resize (Sharpen Image, alpha 0.2).
-  - F and M with other people in the shot: `SeamStitchSwapOutputPerson` keeps the replaced person
-    out of everyone the example's score track follows (its *SAM3 Track Output* now tracks every person,
-    max_objects 0), picked per shot by the most overlap with her source mask; frames she isn't in aren't
-    scored. The mouth score reads only her face, in the source and in the take, and shows none when it
+  - F and M with other people in the shot: `SeamStitchSwapOutputPerson` finds the replacement among
+    everyone the example's score track follows (its *SAM3 Track Output* now tracks every person,
+    max_objects 0), per shot: the person who looks most like the character sheet (hue / saturation
+    colours), a near-tie going to the most overlap with her source mask (the only rule without a sheet
+    wired); frames she isn't in aren't scored. The mouth score reads only her face, in the source and in the take, and shows none when it
     isn't seen. Swap Take flags a take whose output mask doesn't come from it.
 - **24 fps conform for MiniMax H3.** H3 has no frame-rate input and times reference audio and
   Picture timings on a fixed 24 fps clock, so on 25 fps footage the lips drifted ~4% ahead of the

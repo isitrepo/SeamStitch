@@ -1,7 +1,7 @@
 {
  "revision": 0,
  "last_node_id": 61,
- "last_link_id": 159,
+ "last_link_id": 161,
  "nodes": [
   {
    "id": 2,
@@ -44,7 +44,8 @@
      "type": "IMAGE",
      "links": [
       68,
-      155
+      155,
+      161
      ],
      "slot_index": 0
     },
@@ -3816,7 +3817,8 @@
      "type": "IMAGE",
      "links": [
       117,
-      123
+      123,
+      160
      ],
      "slot_index": 0
     }
@@ -4655,12 +4657,12 @@
    ],
    "size": [
     300,
-    100
+    140
    ],
    "flags": {},
    "order": 1,
    "mode": 0,
-   "title": "Output Person (the replaced one, per shot)",
+   "title": "Output Person (the replacement, by the sheet, per shot)",
    "inputs": [
     {
      "name": "chunk",
@@ -4676,6 +4678,16 @@
      "name": "source_mask",
      "type": "MASK",
      "link": 157
+    },
+    {
+     "name": "images",
+     "type": "IMAGE",
+     "link": 160
+    },
+    {
+     "name": "sheet",
+     "type": "IMAGE",
+     "link": 161
     }
    ],
    "outputs": [
@@ -5515,6 +5527,22 @@
    45,
    3,
    "MASK"
+  ],
+  [
+   160,
+   55,
+   0,
+   61,
+   3,
+   "IMAGE"
+  ],
+  [
+   161,
+   2,
+   0,
+   61,
+   4,
+   "IMAGE"
   ]
  ],
  "groups": [
