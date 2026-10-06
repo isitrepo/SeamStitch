@@ -162,7 +162,7 @@ def recombine(tmp_path_factory):
     pkg.mkdir()
     open(str(pkg / "__init__.py"), "w").close()
     here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    for name in ("recombine.py", "audio_splice.py"):
+    for name in ("recombine.py", "audio_splice.py", "video_colour.py"):
         shutil.copyfile(os.path.join(here, name), str(pkg / name))
     sys.path.insert(0, str(root))
     mod = importlib.import_module("ss_tl.recombine")

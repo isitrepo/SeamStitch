@@ -137,8 +137,9 @@ def _install(custom_nodes, label, src_dir):
     pkg = custom_nodes / label
     os.makedirs(str(pkg), exist_ok=True)
     open(str(pkg / "__init__.py"), "w").close()
-    for name in ("recombine.py", "audio_splice.py"):
-        shutil.copyfile(os.path.join(src_dir, name), str(pkg / name))
+    for name in ("recombine.py", "audio_splice.py", "video_colour.py"):
+        if os.path.exists(os.path.join(src_dir, name)):      # video_colour.py is newer than v0.1.0
+            shutil.copyfile(os.path.join(src_dir, name), str(pkg / name))
     mod = importlib.import_module(f"{label}.recombine")
     mod._encode_video = lambda images, *a, **k: {"ui": {"gifs": []}, "result": ((False, []),)}
     return mod
