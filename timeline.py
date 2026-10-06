@@ -629,6 +629,99 @@ def preview_copy(path):
 
 
 # ---------------------------------------------------------------------------
+# Swap jobs: an assembly's joins as marks on the strip (read-only)
+# ---------------------------------------------------------------------------
+
+# swap_plan.JOBS_SUBDIR, kept here so the Timeline does not import the Swap nodes.
+SWAP_JOBS_SUBDIR = "seamstitch_swap"
+_SWAP_ASSEMBLY_EXT = (".mp4", ".mkv")
+
+
+def _swap_base(out_dir=None):
+    return os.path.join(out_dir or folder_paths.get_output_directory(), SWAP_JOBS_SUBDIR)
+
+
+def swap_assemblies(out_dir=None):
+    """Every Swap job holding an assembly, newest job first, each job's assemblies newest
+    first. An assembly is <job>/assembled/<stem>.mp4|.mkv with its <stem>.report.json; its
+    `path` is output-relative with forward slashes, the sequence line the Timeline writes
+    (resolve_path finds it in the output folder). Only real files inside the jobs folder:
+    a link that resolves outside it is skipped."""
+    base = _swap_base(out_dir)
+    if not os.path.isdir(base):
+        return []
+    real_base = os.path.realpath(base)
+    jobs = []
+    for job in os.listdir(base):
+        adir = os.path.join(base, job, "assembled")
+        if not os.path.isdir(adir):
+            continue
+        items = []
+        for f in os.listdir(adir):
+            stem, ext = os.path.splitext(f)
+            full = os.path.join(adir, f)
+            rep = os.path.join(adir, stem + ".report.json")
+            if ext.lower() not in _SWAP_ASSEMBLY_EXT or not os.path.isfile(full) or not os.path.isfile(rep):
+                continue
+            if os.path.commonpath([real_base, os.path.realpath(full)]) != real_base:
+                continue
+            items.append({"job": job, "file": f, "path": f"{SWAP_JOBS_SUBDIR}/{job}/assembled/{f}",
+                          "report": rep, "abs": full, "mtime": os.path.getmtime(full)})
+        if items:
+            items.sort(key=lambda a: a["mtime"], reverse=True)
+            jobs.append({"job": job, "assemblies": items, "mtime": items[0]["mtime"]})
+    jobs.sort(key=lambda j: j["mtime"], reverse=True)
+    return jobs
+
+
+def _public_assembly(a):
+    return {k: a[k] for k in ("job", "file", "path", "mtime")}
+
+
+def find_swap_assembly(path, out_dir=None):
+    """The assembly a sequence path names, or None. The path is only ever compared with the
+    assemblies swap_assemblies() listed (as the output-relative line, or as that file's
+    absolute path): nothing the client sends is opened, so '..', another folder or a file
+    outside a job's assembled/ folder simply matches nothing."""
+    if not isinstance(path, str) or not path.strip():
+        return None
+    want = path.strip().replace("\\", "/")
+    want_abs = os.path.normcase(os.path.normpath(path.strip())) if os.path.isabs(path.strip()) else None
+    for j in swap_assemblies(out_dir):
+        for a in j["assemblies"]:
+            if want == a["path"] or (want_abs and want_abs == os.path.normcase(os.path.normpath(a["abs"]))):
+                return a
+    return None
+
+
+def swap_joins(path, out_dir=None):
+    """An assembly's joins in ITS OWN frame numbers (a windowed assembly starts at the
+    window's first source frame), from its report: frame, type, verdict and the facts
+    behind them. Raises SequenceError for a path that is not a listed Swap assembly."""
+    a = find_swap_assembly(path, out_dir)
+    if a is None:
+        raise tm.SequenceError("not a Swap job's assembly")
+    with open(a["report"], encoding="utf-8") as f:
+        rep = json.load(f)
+    lo = (rep.get("window") or [0])[0] or 0
+    n = rep.get("frames")
+    joins = []
+    for j in rep.get("joins") or []:
+        fr = j.get("frame", j.get("splice"))
+        if not isinstance(fr, (int, float)):
+            continue
+        fr = int(fr) - int(lo)
+        if fr < 0 or (isinstance(n, int) and fr >= n):
+            continue
+        joins.append({"frame": fr, "type": j.get("type"), "verdict": j.get("verdict"),
+                      "join_verdict": j.get("join_verdict"), "split": j.get("split"),
+                      "left_chunk": j.get("left_chunk"), "right_chunk": j.get("right_chunk"),
+                      "repair": j.get("repair")})
+    joins.sort(key=lambda j: j["frame"])
+    return dict(_public_assembly(a), frames=n, fps=rep.get("fps"), window=rep.get("window"), joins=joins)
+
+
+# ---------------------------------------------------------------------------
 # routes
 # ---------------------------------------------------------------------------
 
@@ -675,6 +768,23 @@ async def _build_route(request):
                                   "passthrough": path == passthrough_path(cut, fr)})
     except Exception as e:
         return _json_error(e)
+
+
+@PromptServer.instance.routes.get("/seamstitch/timeline/swap_jobs")
+async def _swap_jobs_route(request):
+    try:
+        return web.json_response({"jobs": [{"job": j["job"], "assemblies": [_public_assembly(a) for a in j["assemblies"]]}
+                                           for j in swap_assemblies()]})
+    except Exception as e:
+        return _json_error(e)
+
+
+@PromptServer.instance.routes.get("/seamstitch/timeline/swap_joins")
+async def _swap_joins_route(request):
+    try:
+        return web.json_response(swap_joins(request.query.get("path", "")))
+    except Exception as e:
+        return _json_error(e, 404)
 
 
 # ---------------------------------------------------------------------------

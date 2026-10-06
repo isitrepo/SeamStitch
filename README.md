@@ -68,6 +68,7 @@ splice *is* the trim. Controls follow [comfyui-obvpm-timeline](https://github.co
 | **quick / full** | *quick* plays the clips back to back from their files. *full* has the server build the real cut — the file Recombine will splice — and plays that. |
 | **− / + / fit** | Zoom the strip out / in / to fit. (Wheel over the ruler also zooms.) |
 | **+ add** | Add a video from the input folder or upload one. (You can also drag files onto the node.) |
+| **Swap job ▾** | Lists the [Swap](#seamstitch-swap) jobs that have an assembly, newest first. Picking one adds its assembly to the end of the strip (as `seamstitch_swap/<job>/assembled/<file>`) and jumps to its worst join. See [Fixing a Swap job's seams](#fixing-a-swap-jobs-seams). |
 | **✎** | Edit the strip as text: one line per clip, `path @ enter..exit` (plays frames enter..exit-1), or `~ N` for an N-frame gap. |
 | **I** / **O** | Mark the start / end of the range to regenerate at the playhead. |
 | **✕ mark** | Clear the marked splice. |
@@ -76,6 +77,8 @@ splice *is* the trim. Controls follow [comfyui-obvpm-timeline](https://github.co
 | **Lower edge grips** (on a clip) | Drag to trim the clip. |
 | **cut left / cut right / split** | With a clip selected: start it at the playhead / end it at the playhead / split it in two there. |
 | **uncut** / **remove** | Play the clip in full again / take it off the strip (the file stays). |
+| **Join marks** (on the ruler) | A Swap assembly's joins: red / amber / green by verdict, grey for straight joins (smaller, no number). Click one: **bridge this join** (N frames each side), **open a gap here**, or **jump here**. Only the one you bridge is marked to regenerate; the rest are just shown. |
+| **◂ join / join ▸** (or **[** / **]**) | Shown when the strip has join marks: move the playhead to the previous / next one and name it in the status line. Nothing is marked. |
 | **✂ pill** (on a join) | **bridge this cut** (regenerate N frames each side of the join) or **open a gap here** (insert new frames). |
 | **Gap block** | Select it: **−8 / +8** change its length, **bridge this gap** adds I/O markers either side, **remove gap** closes it. |
 | Purple row under the strip | The marked splice. Drag along it to mark a range, drag its edges to adjust; lighter bands are `context_frames`. Markers snap to whole frames. |
@@ -90,6 +93,16 @@ splice *is* the trim. Controls follow [comfyui-obvpm-timeline](https://github.co
 | a **gap**, no markers (✂ → *open a gap here*) | insert | Nothing is removed; the gap's new frames go between two kept frames. The generator is asked for gap + 2 (its first and last frame are the kept ones; Recombine drops them again). |
 | a gap **with I/O markers either side of the join** | replace | The footage across the join **plus** the gap's frames is regenerated (the Loader's `extend_bridge`). |
 | a gap with markers **on its own edges** | insert | Same as a pure insert. |
+
+### Fixing a Swap job's seams
+
+A Swap job's assembly is frame for frame with its source, so a join the Swap strip or the assembly's
+`.report.json` names (say *1185, forward lock, red*) is the same frame on the Timeline. **Swap job ▾**
+puts the assembly on the strip with every join marked on the ruler; click the red one and **bridge this
+join** marks 6 or 12 frames either side of it, then queue the bridge as usual. The marks are read from the
+clip's path each time the node loads, so they survive a reload, follow the clip when it is trimmed, split
+or placed after other clips, and save nothing new in the workflow. Read only: nothing is written back to
+the Swap job, and the fixed video is a new file (Recombine's), not a new assembly.
 
 ### Widgets
 
