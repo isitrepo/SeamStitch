@@ -1,7 +1,7 @@
 [project]
 name = "seamstitch"
 description = "Video load/trim, lossless combine, and generative-segment-recombine nodes for ComfyUI."
-version = "0.4.1"
+version = "0.4.2"
 license = { text = "GPL-3.0-only" }
 dependencies = [
     "av",
