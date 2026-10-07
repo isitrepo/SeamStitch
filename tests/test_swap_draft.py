@@ -901,8 +901,8 @@ class BgQwen(FakeQwen):
             return "person: yes\nobjects: none"
         k = int(prompt.split("The clip has ")[1].split(" shot")[0])
         says = ' He says SAYS "Hello there."' if 'spoken: "' in prompt else ""
-        blocks = "\n".join(f"[Shot {i + 1}] The man in a black t-shirt walks in from the left and crosses the frame."
-                           f"{says if i == k - 1 else ''}" for i in range(k))
+        blocks = "\n".join(f"[Shot {i + 1}] The man in a black t-shirt walks in from the left and crosses the frame. "
+                           f"He looks down.{says if i == k - 1 else ''}" for i in range(k))
         return (f"pronoun: he\n\nvideo_1: a handheld camera at chest height follows the man in a black t-shirt as he "
                 f"crosses the frame\n\nshots:\n{blocks}\n\nsounds: footsteps and his speech")
 
@@ -925,6 +925,7 @@ def test_the_background_template_end_to_end(job):
     assert "fully_preserved - his identity" in ret and "original backdrop is not kept" in ret
     dd = s["detailed_description"]
     assert "[Shot 1] <Subject 2> walks in from the left" in dd and "the man in a black t-shirt" not in dd
+    assert "<Subject 2> looks down." in dd and "He looks" not in dd
     assert dd.count("<Subject 2> (S1) says <d>[English]Hello there.</d>") == 1 and "<Subject 1> (S1)" not in dd
     # nothing in the prompt asks for a character or for the backdrop to be kept
     assert "replaced by <Subject 1>, the" in s["summary"] and "styled from <Picture 1>" not in c0["prompt"]
@@ -957,3 +958,22 @@ def test_the_place_is_written_in_the_guides_own_pattern(raw, name, feats):
     s = sd.scene_sentence(ps["name"], ps["features"])
     assert s == f"<Subject 1> is the {name} environment in <Picture 1>, featuring {feats}." and sd.is_scene_subject(s)
     assert not sd.is_scene_subject(SUBJECT)
+
+
+def test_the_kept_person_is_called_by_their_label():
+    # Qwen's real c2 shot from the 2026-10-07 background run
+    b = ("[Shot 1] He enters from the right edge of the frame, walking toward the left, facing left, his arms swinging "
+         "naturally at his sides. He glances slightly downward during his walk. His hands remain relaxed at his sides "
+         "as he walks steadily. The bald man exits the frame; the man reappears.")
+    out = sd.label_person(b, "the bald man in a black t-shirt", "he")
+    assert out.startswith("[Shot 1] <Subject 2> enters from the right edge")
+    assert "<Subject 2> glances slightly downward during his walk." in out
+    assert "<Subject 2>'s hands remain relaxed at his sides as he walks" in out
+    assert "<Subject 2> exits the frame; <Subject 2> reappears." in out
+    assert " He " not in out and "His " not in out
+    # "they": the verb would disagree, so only the names change
+    out = sd.label_person("[Shot 1] They wave. The person sits.", "the person", "they")
+    assert out == "[Shot 1] They wave. <Subject 2> sits."
+    # a woman, and "Hermione" is not "Her"
+    out = sd.label_person("[Shot 1] She turns. Her arm rises. Hermione waves at the girl in red.", "a girl in red", "she")
+    assert out == "[Shot 1] <Subject 2> turns. <Subject 2>'s arm rises. Hermione waves at <Subject 2>."
