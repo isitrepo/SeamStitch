@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.4.2 — Background replace template; phone rotation
+
+### New
+
+- **Swap Draft Prompts: `background replace (Ref2VA)` template**, for the Planner's *invert* (a background
+  swap). Every other template is written for a person replaced by a character: with invert on, the subject
+  step read the place in the sheet as a character and invented one, and every prompt asked H3 to keep the
+  background and replace the person, the opposite of the inverted mask (H3 followed the prompt). The new
+  template, after MiniMax's Ref2VA prompt guide: the sheet is the place, in the guide's own pattern
+  (`<Subject 1> is the [location] environment in <Picture 1>, featuring ...`; a character subject already on
+  the job moves to the subject draft); the person is `<Subject 2>`, kept (`fully_preserved`), and says the
+  lines as `(S1)`; Qwen describes only where the person enters, crosses and leaves and the camera, never the
+  backdrop; a sentence opening "He ..." / "His ..." and short names ("the man") become `<Subject 2>`. A chunk
+  with nobody in it still drafts the person in: write that prompt by hand.
+
+### Fixed
+
+- **Phone clips decoded upside down or on their side.** A phone stores the sensor's picture and tags the
+  file with a rotation (a display matrix); players follow the tag, PyAV doesn't. Every decoder in the pack
+  (Timeline and the Swap Planner, Loader, Recombine, Combine) now turns its frames by the tag, as ffmpeg
+  does, and reports the size as shown. Combine takes its transcode path when its two clips are tagged
+  differently (a stream copy keeps clip A's tag for both).
+
 ## 0.4.1 — Timeline finds Swap joins; match_to_source; colour fix
 
 ### New

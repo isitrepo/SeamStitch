@@ -389,8 +389,9 @@ group *Swap Render · Character Replace*.
    mask). Speaker IDs `(S1)`, `(S2)` follow the order the voices first speak, and every line stays in its
    shot's `<d>`, as MiniMax's Ref2VA prompt guide lays out. Where no face can be seen (a wide shot), the line stays
    hers: the panel's *who says each line* list changes any line's speaker in the prompt. *invert* marks everything but them, for a
-   background swap; the drafted prompt and the R score still describe a person swap, so write that prompt
-   yourself.
+   background swap: draft it with the *background replace (Ref2VA)* template (Draft Prompts' `template`), which
+   writes the place in the sheet as `<Subject 1>` and keeps the person as `<Subject 2>`. A chunk with nobody in
+   it still gets the person in its draft: write that one by hand. The R score still measures a person swap.
 2. **Keep original** where nobody needs replacing: drag the strip's start or end handle in (or set
    *keep original* on a chunk). Kept chunks are never drafted, marked or rendered; the assembly uses
    the source frames.
@@ -461,6 +462,9 @@ group *Swap Render · Character Replace*.
   time).
 - **Anamorphic** sources (stored squeezed, e.g. 1440x1080 shown 16:9) come out without their aspect flag
   and play squeezed; **interlaced** sources aren't deinterlaced.
+- **SAM3 and an empty opening:** a chunk that opens on frames with nobody in them can lock its one track onto
+  something else (a bare green wall, the whole frame) and never pick up the person who walks in later. Keep
+  that stretch original (character replace) or split where the person enters (background replace).
 - After re-opening the example, replace its sheet placeholder before drafting: a draft with
   `your_character_sheet.png` fails validation and only ComfyUI's log says so.
 
@@ -574,7 +578,7 @@ there, never erased).
 | `frames_per_chunk` | `24` | Frames Qwen sees, spread over the chunk's render range (per shot: shared out by shot length, at least 4 each). The QwenVL node itself uses 16. |
 | `transcribe` | `True` | Omni Captioner Transcribe on each chunk's audio: the words and the audio events. |
 | `word_timings` | `True` | faster-whisper large-v3-turbo: word timings, so each line lands in its shot and moment. |
-| `template` | `character replace (Ref2VA, timeline)` (`character replace (Ref2VA)` / `character replace (Ref2VA, per shot)` / `character replace (Ref2VA, timeline)`) | timeline (the default): one full-size picture every half second, a caption each, merged into each shot with its lines at their times. per shot: each shot from its own frames in one call. The first: one call for the whole chunk. |
+| `template` | `character replace (Ref2VA, timeline)` (`character replace (Ref2VA)` / `character replace (Ref2VA, per shot)` / `character replace (Ref2VA, timeline)` / `background replace (Ref2VA)`) | timeline (the default): one full-size picture every half second, a caption each, merged into each shot with its lines at their times. per shot: each shot from its own frames in one call. The first: one call for the whole chunk. background replace: for the Planner's invert: the sheet is a place (<Subject 1>) and the person is kept (<Subject 2>); a chunk with nobody in it still drafts the person in, so write that prompt by hand. |
 | `extra_instructions` | empty | Added to Qwen's rules for every chunk. |
 | `max_tokens` | `2048` |  |
 | `sheet` *(opt.)* | socket (IMAGE) | The character sheet (the render group's Load Image): the subject is drafted from it once per job. |

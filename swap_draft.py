@@ -2411,7 +2411,9 @@ class SeamStitchSwapDraft:
                 "template": (TEMPLATES, {"default": DEFAULT_TEMPLATE, "tooltip":
                     "timeline (the default): one full-size picture every half second, a caption each, merged into "
                     "each shot with its lines at their times. per shot: each shot from its own frames in one call. "
-                    "The first: one call for the whole chunk."}),
+                    "The first: one call for the whole chunk. background replace: for the Planner's invert: the "
+                    "sheet is a place (<Subject 1>) and the person is kept (<Subject 2>); a chunk with nobody in "
+                    "it still drafts the person in, so write that prompt by hand."}),
                 "extra_instructions": ("STRING", {"default": "", "multiline": True, "tooltip":
                     "Added to Qwen's rules for every chunk."}),
                 "max_tokens": ("INT", {"default": 2048, "min": 256, "max": 4096}),

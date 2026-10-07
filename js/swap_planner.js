@@ -344,7 +344,7 @@ function buildPlanner(node) {
     invertIn.onpointerdown = (e) => e.stopPropagation();
     invertIn.onchange = () => op({ op: "set_target", invert: invertIn.checked });
     const invertL = el("label", { display: "flex", alignItems: "center", gap: "3px" });
-    invertL.title = "Mark everything but the target (for a background swap). The drafted prompt and the R score still describe replacing a person: write the prompt yourself.";
+    invertL.title = "Mark everything but the target (for a background swap). Draft with the Draft Prompts template 'background replace (Ref2VA)'; a chunk with nobody in it still needs its prompt written by hand, and the R score still measures a person swap.";
     invertL.append(invertIn, el("span", null, "invert (mark everything else)"));
     targetRow.append(el("span", { color: C.dim }, "replace"), targetIn, invertL);
 
