@@ -1341,6 +1341,28 @@ def bg_instruction(*, n_frames, fps, sample_idx, shots_rel, lines, events, who, 
         sounds_hint=_sounds_hint(events, lines), extra=_extra(extra))
 
 
+def label_person(block, who, pronoun):
+    """A background shot block with the kept person called by their label, as H3's guide keeps labels
+    consistent: the who phrase and its short form ("the man") become <Subject 2>, and so does a sentence that
+    opens with their pronoun ("He walks" -> "<Subject 2> walks", "His hands" -> "<Subject 2>'s hands"). A
+    pronoun inside a sentence stays ("<Subject 2> lifts his arm"); "they" stays (the verb would disagree)."""
+    m = re.match(r"(\[Shot\s*\d+\]\s*)(.*)", block, re.S)
+    head, body = (m.group(1), m.group(2)) if m else ("", block)
+    w = re.sub(r"(?i)^(the|a|an)\s+", "", (who or "").strip())
+    names = [w] if w else []
+    core = re.split(r"\s+(?:in|with|wearing|holding|on|at)\s+", w, maxsplit=1)[0] if w else ""
+    names += [core, core.split()[-1]] if core else []      # "bald man", "man"
+    names.append("person")
+    for nm in sorted(set(names), key=len, reverse=True):
+        body = re.sub(rf"(?i)\b(?:the|a|an)\s+{re.escape(nm)}\b", "<Subject 2>", body)
+    if pronoun in ("he", "she"):
+        subj, poss = ("He", "His") if pronoun == "he" else ("She", "Her")
+        start = r"(^|[.!?]\s+|;\s+)"
+        body = re.sub(start + poss + r"\b", lambda x: x.group(1) + "<Subject 2>'s", body)
+        body = re.sub(start + subj + r"\b", lambda x: x.group(1) + "<Subject 2>", body)
+    return head + body
+
+
 def fill_bg_ref2va(*, subject, who, video_1, shots, sounds, n_shots, dialogue, audio, pronoun):
     """The six sections for a background swap, after H3's reference guide: the place is <Subject 1> (from
     <Picture 1>), the person is <Subject 2> (from <Video 1>, fully_preserved), the backdrop of <Video 1> is
@@ -2127,8 +2149,8 @@ def run_draft(plan_file, *, sheet=None, mode=CHUNK_MODES[0], named=(), qwen_mode
                 # the kept person says the lines: <Subject 2> (S1)
                 for ln in ci["lines"]:
                     ln["tag"] = "<Subject 2> (S1)"
-                # Qwen writes about "the man ..."; the prompt's label is <Subject 2>
-                parts["shots"] = [re.sub(re.escape(who), "<Subject 2>", s, flags=re.I) for s in parts["shots"]]
+                # Qwen writes about "the man ..." and "He ..."; the prompt's label is <Subject 2>
+                parts["shots"] = [label_person(s, who, ci["pronoun"]) for s in parts["shots"]]
             elif not per_shot and not timeline:
                 instr = draft_instruction(n_frames=ci["n"], fps=fps, sample_idx=idx, shots_rel=ci["shots_rel"],
                                           lines=ci["lines"], language=ci["language"], prev_names=prev_names,
