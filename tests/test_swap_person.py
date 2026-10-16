@@ -357,3 +357,20 @@ def test_the_node_picks_by_the_sheet_with_the_render_wired(tmp_path):
     assert rep["by"] == "sheet" and rep["picks"][0]["object"] == 1
     _m, rep = st.output_person(desc, track, smask)                 # an older wiring: overlap
     assert rep["by"] == "overlap" and rep["picks"][0]["object"] == 0
+
+
+def test_a_small_spectator_never_wins_on_colour():
+    """Wrestling c4-t009: a spectator in pink matched the sheet best and was picked, 0.0005 overlap."""
+    import swap_scores as ss
+    n, h, w = 6, 135, 240
+    src = np.zeros((n, h, w), bool)
+    src[:, 60:130, 40:200] = True                     # the wrestler she replaces
+    objs = np.zeros((n, 2, h, w), bool)
+    objs[:, 0, 62:128, 45:195] = True                 # the replacement, in the wrestler's place
+    objs[:, 1, 5:12, 100:106] = True                  # a spectator up in the stands
+    frames = np.zeros((n, h, w, 3), np.uint8)
+    frames[:, 62:128, 45:195] = (40, 160, 60)         # her colours here: far from the sheet
+    frames[:, 5:12, 100:106] = (230, 40, 180)         # the spectator: the sheet's pink
+    sheet = np.zeros((64, 64, 3), np.uint8); sheet[:] = (230, 40, 180)
+    _m, picks = ss.pick_person(objs, list(src), frames=list(frames), sheet=sheet)
+    assert picks[0]["object"] == 0

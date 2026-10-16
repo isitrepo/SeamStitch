@@ -121,3 +121,68 @@ def test_match_to_source_is_appended_last():
     pos = [src.index(f'"{n}":', i) for n in names]
     assert pos == sorted(pos), "a widget moved: saved workflows restore widgets by position"
     assert ast.parse(src)
+
+
+def _spread(frames):
+    return np.asarray(frames).astype(np.float64).reshape(len(frames), -1, 3).std(1)
+
+
+def test_contrast_walks_from_the_left_side_to_the_right():
+    # sides with a plain spread; a bridge ~5% more contrasty (what H3 did at a Swap join)
+    left = np.stack([_texture(i, 1.0, (60, 55, 50)) for i in range(6)])
+    right = np.stack([_texture(10 + i, 1.0, (64, 58, 52)) for i in range(6)])
+    mid = np.stack([_texture(20 + i, 1.0, (60, 55, 50)) for i in range(8)]).astype(np.float32)
+    mu = mid.reshape(8, -1, 3).mean(1)[:, None, None, :]
+    bridge = np.clip((mid - mu) * 1.15 + mu, 0, 255).astype(np.uint8)
+    out, rows = bm.match_bridge(bridge, left, right)
+    s_l, s_r = _spread(left).mean(0), _spread(right).mean(0)
+    before, after = _spread(bridge), _spread(out)
+    assert (before.mean(1) > 1.05 * s_l.mean()).all()
+    for k in range(8):
+        t = (k + 1) / 9
+        want = s_l + (s_r - s_l) * t
+        # each frame keeps its own flicker around the bridge's first-to-last spread trend
+        flicker = before[k] / (before[0] + (before[-1] - before[0]) * k / 7)
+        assert np.allclose(after[k] / flicker, want, rtol=0.02), (k, after[k] / flicker, want)
+        assert rows[k]["gain"][0] < 1.0
+    # detail still lands on its own ramp after the gain
+    for r in rows:
+        assert abs(r["detail_after"] - r["detail_target"]) <= 0.03 * r["detail_target"]
+
+
+# ---------------------------------------------------------------- the flicker cap
+
+def _frames(n, level, seed0, wobble=None):
+    """n frames of ONE texture (so clipping is the same in each and a frame's mean moves only by the
+    level given), soft enough that nothing clips: level plus wobble[i] per frame."""
+    base = _texture(seed0, 1.0, (128, 128, 128)).astype(np.float32) - 128.0
+    base *= 0.35
+    out = []
+    for i in range(n):
+        lv = np.array(level, np.float32) + (0.0 if wobble is None else wobble[i])
+        out.append(np.clip(base + lv, 0, 255).round().astype(np.uint8))
+    return np.stack(out)
+
+
+def test_a_dip_in_the_middle_of_the_bridge_is_flattened():
+    # steady sides; a bridge that darkens by ~6 levels in its middle (join 422's 418, 2026-10-14)
+    left = _frames(6, (100, 90, 80), 0)
+    right = _frames(6, (100, 90, 80), 10)
+    dip = [0, 0, -2, -6, -6, -4, -1, 0]
+    bridge = _frames(8, (100, 90, 80), 20, dip)
+    out, rows = bm.match_bridge(bridge, left, right)
+    means = out.reshape(8, -1, 3).astype(float).mean(1)
+    ramp = (left.reshape(-1, 3).mean(0) + right.reshape(-1, 3).mean(0)) / 2
+    assert np.abs(bridge.reshape(8, -1, 3).astype(float).mean(1) - ramp).max() > 5
+    assert np.abs(means - ramp).max() <= bm.FLICKER_FLOOR[0] + 1.0
+    assert any(abs(c) > 3 for r in rows for c in r["flicker_cut"])
+
+
+def test_flicker_like_the_sources_own_is_kept():
+    # the sides breathe +-2 levels; the bridge breathes the same - nothing is cut
+    w = [0, 2, 0, -2, 0, 2]
+    left = _frames(6, (100, 90, 80), 0, w)
+    right = _frames(6, (100, 90, 80), 10, w)
+    bridge = _frames(6, (100, 90, 80), 20, [0, 1.5, 0, -1.5, 0, 1.5])
+    out, rows = bm.match_bridge(bridge, left, right)
+    assert all(abs(c) < 0.05 for r in rows for c in r["flicker_cut"])

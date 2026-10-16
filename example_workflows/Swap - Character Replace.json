@@ -1,7 +1,7 @@
 {
  "revision": 0,
  "last_node_id": 61,
- "last_link_id": 161,
+ "last_link_id": 163,
  "nodes": [
   {
    "id": 2,
@@ -1672,7 +1672,7 @@
      "widget": {
       "name": "width"
      },
-     "link": null
+     "link": 162
     },
     {
      "localized_name": "height",
@@ -1681,7 +1681,7 @@
      "widget": {
       "name": "height"
      },
-     "link": null
+     "link": 163
     },
     {
      "localized_name": "length",
@@ -2870,7 +2870,7 @@
    "title": "About this workflow",
    "properties": {},
    "widgets_values": [
-    "Swap - Character Replace: whole-video character replacement with MiniMax H3, through the SeamStitch Swap nodes. See the SeamStitch README, section \"SeamStitch Swap\".\n\nSet first: on the Planner's strip, load your video (a new job is named after it); in group 1, your character sheet.\n\nSwap \u00b7 Plan: SeamStitch Swap Planner. The strip: the source with its cuts, splits and chunks, the mask row and the prompt row. Its buttons set the run and queue it: detect + plan, draft prompts, mark, render pending, a chunk's render / re-roll, assemble. Pins come from the neighbours' takes at execution.\n\nSwap Render \u00b7 Character Replace: H3 Ref2VA pass 1 at 0.3 MP, then the 1 MP refine, a resize to the source size and a light sharpen (Sharpen Image, alpha 0.2). Its inputs come from the Planner: images / audio (on H3's 24 fps clock) / prompt / length / seed / width / height, the pins in both passes (SeamStitch MiniMax Guides, clip), and the chunk's mark option (Swap Option, default on: SAM3 paints the source person before H3 sees the guide). Who SAM3 looks for in the source is the strip's \"replace\" field (Swap Option target, default \"person\"; the output score keeps \"person\"); its invert option paints everything else instead.\n\nSwap Score (SAM3): the output's person mask, for the Take's scores.\nSwap \u00b7 Take: saves the take (FFV1 + FLAC, source fps, original audio), its lineage, masks, scores and review clip.\nSwap \u00b7 Assemble: runs on an assemble run only.\nSwap Mark (SAM3): a mark run tracks and caches the source person up front.\nSwap \u00b7 Draft: drafts the subject (from the sheet) and each chunk's prompt (QwenVL; Omni + faster-whisper for the dialogue).\n\nThe strip frees ComfyUI's memory before each render and draft it queues: render lengths over 209 frames failed at the refine on 64 GB of system RAM."
+    "Swap - Character Replace: whole-video character replacement with MiniMax H3, through the SeamStitch Swap nodes. See the SeamStitch README, section \"SeamStitch Swap\".\n\nSet first: on the Planner's strip, load your video (a new job is named after it); in group 1, your character sheet.\n\nSwap \u00b7 Plan: SeamStitch Swap Planner. The strip: the source with its cuts, splits and chunks, the mask row and the prompt row. Its buttons set the run and queue it: detect + plan, draft prompts, mark, render pending, a chunk's render / re-roll, assemble. Pins come from the neighbours' takes at execution.\n\nSwap Render \u00b7 Character Replace: H3 Ref2VA pass 1 at 0.3 MP in the source's shape (the Planner's render_width / render_height: 736 x 416 for 16:9, 416 x 736 for a portrait clip), then the 1 MP refine, a resize to the source size and a light sharpen (Sharpen Image, alpha 0.2). Its inputs come from the Planner: images / audio (on H3's 24 fps clock) / prompt / length / seed / width / height, the pins in both passes (SeamStitch MiniMax Guides, clip), and the chunk's mark option (Swap Option, default on: SAM3 paints the source person before H3 sees the guide). Who SAM3 looks for in the source is the strip's \"replace\" field (Swap Option target, default \"person\"; the output score keeps \"person\"); its invert option paints everything else instead.\n\nSwap Score (SAM3): the output's person mask, for the Take's scores.\nSwap \u00b7 Take: saves the take (FFV1 + FLAC, source fps, original audio), its lineage, masks, scores and review clip.\nSwap \u00b7 Assemble: runs on an assemble run only.\nSwap Mark (SAM3): a mark run tracks and caches the source person up front.\nSwap \u00b7 Draft: drafts the subject (from the sheet) and each chunk's prompt (QwenVL; Omni + faster-whisper for the dialogue).\n\nThe strip frees ComfyUI's memory before each render and draft it queues: render lengths over 209 frames failed at the refine on 64 GB of system RAM."
    ],
    "color": "#432",
    "bgcolor": "#653"
@@ -3123,6 +3123,22 @@
       128
      ],
      "slot_index": 18
+    },
+    {
+     "name": "render_width",
+     "type": "INT",
+     "links": [
+      162
+     ],
+     "slot_index": 19
+    },
+    {
+     "name": "render_height",
+     "type": "INT",
+     "links": [
+      163
+     ],
+     "slot_index": 20
     }
    ],
    "properties": {
@@ -4071,7 +4087,7 @@
     "invert",
     "false"
    ],
-   "title": "Chunk option: invert (mark everything else)"
+   "title": "Chunk option: invert (set by the strip's Character / Background switch and its mark choice)"
   },
   {
    "id": 59,
@@ -5543,6 +5559,22 @@
    61,
    4,
    "IMAGE"
+  ],
+  [
+   162,
+   37,
+   19,
+   20,
+   11,
+   "INT"
+  ],
+  [
+   163,
+   37,
+   20,
+   20,
+   12,
+   "INT"
   ]
  ],
  "groups": [

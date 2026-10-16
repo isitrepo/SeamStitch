@@ -1,6 +1,7 @@
 """The YUV matrix and range to decode a stream with, as PyAV reformat() arguments.
 
-One rule for every decoder in the pack (Loader, Recombine, Timeline). The stream's own tags
+One rule for every decoder in the pack (Loader, Recombine, Timeline), and one conversion
+(to_rgb24, rounded accurately). The stream's own tags
 win; the size guess (BT.709 from 720 lines, BT.601 below) only fills in for a stream that
 has none. PyAV hands the tags back as enum members, plain ints (PyAV 17: colorspace 1 for
 BT.709) or strings depending on the version. An int used to fall through to the size guess,
@@ -78,6 +79,26 @@ def stream_color_range(c_range):
     if s is None or "unspecified" in s:
         return fallback
     return c_range
+
+
+# swscale flags for YUV -> RGB: bicubic chroma, ACCURATE_RND, FULL_CHR_H_INT. Without
+# ACCURATE_RND swscale's fast YUV -> RGB path rounds down: about -0.9 / -1.3 / -0.9 levels
+# (R / G / B) on a BT.709 H.264 clip against ffmpeg's accurate_rnd conversion, and the save
+# carried it straight into the result (each Timeline -> Result Preview round ~1 luma level
+# darker everywhere). PyAV 17's reformat() has no flags argument; it hands `interpolation`
+# to swscale as the flags word, so the bits go there.
+SWS_ACCURATE_RGB = 0x4 | 0x40000 | 0x2000
+
+
+def to_rgb24(frame, src_colorspace, src_color_range, dst_color_range):
+    """A YUV frame as uint8 RGB with the stream's matrix and range, rounded accurately."""
+    kw = dict(format="rgb24", src_colorspace=src_colorspace, src_color_range=src_color_range,
+              dst_color_range=dst_color_range)
+    try:
+        out = frame.reformat(interpolation=SWS_ACCURATE_RGB, **kw)
+    except (TypeError, ValueError):   # a PyAV that only takes Interpolation members
+        out = frame.reformat(**kw)
+    return out.to_ndarray(format="rgb24")
 
 
 def color_args(cc, w, h):

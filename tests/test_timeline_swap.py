@@ -143,7 +143,7 @@ def _js_marks(tmp_path, L, swap, fr):
                   "\nconsole.log(JSON.stringify({ marks: joinMarks(a.L, a.swap, a.fr),"
                   " colours: a.swap.A.joins.map(joinColour),"
                   " steps: [[0, 1], [56, 1], [1185, 1], [1185, -1], [57, -1], [1400, 1], [10, -1]].map(([f, d]) => (nextMark(joinMarks(a.L, a.swap, a.fr), f, d) || {}).frame ?? null),"
-                  " paths: a.paths.map(maybeSwapPath) }));", encoding="utf-8")
+                  " open: openMarks(joinMarks(a.L, a.swap, a.fr)).map(m => m.frame) }));", encoding="utf-8")
     paths = ["seamstitch_swap/job/assembled/swap_a.mp4", "C:\\x\\output\\seamstitch_swap\\job\\assembled\\swap_a.mp4",
              "clip.mp4", "seamstitch_swap/job/takes/t.mp4"]
     (tmp_path / "a.json").write_text(json.dumps({"L": L, "swap": swap, "fr": fr, "paths": paths}), encoding="utf-8")
@@ -164,7 +164,7 @@ def test_marks_on_a_single_clip_sit_on_the_assembly_frame(tmp_path):
     r = _js_marks(tmp_path, [_clip(0, "A", 0, 1437)], SWAP, 24)
     assert [(m["frame"], m["strip"], m["i"]) for m in r["marks"]] == [(56, 56, 0), (1185, 1185, 0), (1329, 1329, 0), (1400, 1400, 0)]
     assert r["colours"] == ["#9ca3af", "#f87171", "#fbbf24", "#34d399"]
-    assert r["paths"] == [True, True, False, False]
+    assert r["open"] == [56, 1185, 1329, 1400]
     # join > / < join from the playhead: strictly after / before it, null past the last / first
     assert r["steps"] == [56, 1185, 1329, 56, 56, None, None]
 

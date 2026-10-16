@@ -65,8 +65,8 @@ from videohelpersuite.nodes import (
 )
 
 from .audio_splice import splice_audio, match_format, frame_sample
-from .video_colour import color_args, display_size, file_turns, frame_turns, upright
-from .bridge_match import match_bridge
+from .video_colour import color_args, display_size, file_turns, frame_turns, to_rgb24, upright
+from .bridge_match import match_bridge, match_geometry as _match_geometry
 
 
 def pack_video_formats():
@@ -205,9 +205,7 @@ def _decode_range(video_path, frame_rate, start_frame_idx, end_frame_idx):
             frame_rgb = frame.to_ndarray(format='rgb24')
         else:
             try:
-                frame = frame.reformat(format="rgb24", src_colorspace=src_colorspace,
-                                        src_color_range=src_color_range, dst_color_range=dst_range)
-                frame_rgb = frame.to_ndarray(format='rgb24')
+                frame_rgb = to_rgb24(frame, src_colorspace, src_color_range, dst_range)
             except Exception:
                 frame_rgb = frame.to_ndarray(format='rgb24')
         frame_rgb = upright(frame_rgb, turns)  # a phone clip's rotation tag, as players show it
@@ -490,6 +488,9 @@ class SeamStitchRecombine:
                 # Appended last, for the positional widget_values reason above.
                 "match_to_source": ("BOOLEAN", {"default": False,
                                     "tooltip": "On: the regenerated frames' detail and colour are ramped from the source frames just before them to the source frames just after them, so a soft bridge (or two sides that differ, like two Swap takes) changes gradually instead of jumping at one frame. Detail by a per-frame unsharp mask, colour by a per-channel offset. Replace mode only; off by default."}),
+                # Appended after match_to_source, for the same positional widget_values reason.
+                "match_geometry": ("BOOLEAN", {"default": False,
+                                   "tooltip": "On: when the set is drawn a little wider, narrower or shifted on one side of the bridge than the other (a background replace renders it afresh in every chunk), each regenerated frame is warped so the set moves evenly from one side's geometry to the other's across the bridge, instead of H3 snapping between them. Changes over 6% or 64 px are left alone (a different framing). Replace mode only; off by default."}),
             },
             "hidden": {
                 "prompt": "PROMPT",
@@ -507,7 +508,7 @@ class SeamStitchRecombine:
                   frame_rate, dedup_threshold, max_dedup_frames, filename_prefix, format,
                   save_output=True, original_audio_override=None, bridge_audio=None,
                   audio_mode="original", audio_bridge_weight=0.35, audio_crossfade_ms=20.0,
-                  insert=False, context_frames=0, skip_encode=False, match_to_source=False, prompt=None,
+                  insert=False, context_frames=0, skip_encode=False, match_to_source=False, match_geometry=False, prompt=None,
                   extra_pnginfo=None, **kwargs):
 
         if not original_video_path or not os.path.exists(original_video_path):
@@ -586,7 +587,19 @@ class SeamStitchRecombine:
         # few GB and tens of GB of transient peak memory.
         deduped_u8 = _fit_to_source(deduped.clamp(0, 1).mul(255).round().to(torch.uint8),
                                     src_w, src_h)
-        if match_to_source and not insert and deduped_u8.shape[0] > 0                 and before is not None and before.shape[0] > 0 and after is not None and after.shape[0] > 0:
+        sides = (not insert and deduped_u8.shape[0] > 0 and before is not None and before.shape[0] > 0
+                 and after is not None and after.shape[0] > 0)
+        # geometry first: the warp softens a little, and match_to_source's detail ramp then sees it
+        if match_geometry and sides:
+            warped, geo = _match_geometry(deduped_u8.numpy(), before[-1].numpy(), after[0].numpy())
+            if geo["applied"]:
+                deduped_u8 = torch.from_numpy(warped)
+                done = sum(1 for r in geo["frames"] if "skipped" not in r)
+                print(f"[SeamStitch] Match geometry: the sides differ by x {geo['scale_x']} y {geo['scale_y']}, "
+                      f"{geo['shift']} px; {done} of {len(geo['frames'])} bridge frames warped onto the ramp.")
+            else:
+                print(f"[SeamStitch] Match geometry: left as is - {geo.get('reason', 'no frame could be matched')}.")
+        if match_to_source and sides:
             matched, rows = match_bridge(deduped_u8.numpy(), before[-6:].numpy(), after[:6].numpy())
             deduped_u8 = torch.from_numpy(matched)
             if rows:

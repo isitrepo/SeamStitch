@@ -378,8 +378,19 @@ group *Swap Render · Character Replace*.
    each; only confirmed cuts move splits, fills and warnings. Drag splits, and make each one a
    **straight cut** (on a real cut) or **anchored** (12 frames of overlap, the right chunk's first 5
    frames pinned to the left chunk's take).
-   **Who to replace:** with more than one person in frame, name them in the *replace* field above the
-   player, as a short noun phrase ("woman in a purple top"): SAM3 marks them in the source (the output's
+   **Character or background:** the switch above the player, **Character replace | Background replace**, sets
+   what the job swaps. Character replace puts the character on the sheet in place of the person; background
+   replace keeps the person and puts the place on the sheet (a picture of the place, no person in it) behind
+   them: the mark is inverted at render and the drafter writes the place as `<Subject 1>` and keeps the person
+   as `<Subject 2>`. Flipping clears nothing: each mode keeps its own subject and prompts (flipping back brings
+   them back) and its own takes (an assembly uses only the current mode's); the marks serve both. A background
+   chunk with nobody in it still gets the person in its draft: write that one by hand. The R score always
+   measures a person swap. **Green screen:** in character replace, *mark* next to the switch chooses what the
+   guide marks: **person** (the usual) or **backdrop** (experimental: everything but the person, still replacing
+   the person). It was made for a plain green screen, where H3 tends to stand the character centre-frame instead
+   of following a person who walks across and out of shot, but in testing it made no reliable difference.
+   **Who to replace** (or, for a background swap, who to keep): with more than one person in frame, name them
+   in the field next to the switch, as a short noun phrase ("woman in a purple top"): SAM3 marks them in the source (the output's
    score still tracks "person") and the drafter writes about them. A chunk can name its own (another
    scene, another person). Re-mark and redraft after a change. *mark* tracks a chunk shot by shot (SAM3
    doesn't find the person again after a cut): mark chunks with cuts in them before rendering, since a
@@ -388,10 +399,9 @@ group *Swap Render · Character Replace*.
    line to whoever's mouth moves during it (mediapipe's face landmarks, her face being the one inside the
    mask). Speaker IDs `(S1)`, `(S2)` follow the order the voices first speak, and every line stays in its
    shot's `<d>`, as MiniMax's Ref2VA prompt guide lays out. Where no face can be seen (a wide shot), the line stays
-   hers: the panel's *who says each line* list changes any line's speaker in the prompt. *invert* marks everything but them, for a
-   background swap: draft it with the *background replace (Ref2VA)* template (Draft Prompts' `template`), which
-   writes the place in the sheet as `<Subject 1>` and keeps the person as `<Subject 2>`. A chunk with nobody in
-   it still gets the person in its draft: write that one by hand. The R score still measures a person swap.
+   hers: the panel's *who says each line* list changes any line's speaker in the prompt. To read or edit a long
+   prompt, drag the ridged bar under the panel down (a taller node gives it more room) or press **⤢ large**
+   for the prompt in an editor over the page.
 2. **Keep original** where nobody needs replacing: drag the strip's start or end handle in (or set
    *keep original* on a chunk). Kept chunks are never drafted, marked or rendered; the assembly uses
    the source frames.
@@ -483,11 +493,22 @@ group *Swap Render · Character Replace*.
 | `floor_frames` | `124` | Warn below this render length (H3's trained minimum). |
 | `ceiling_frames` | `209` | Warn above this render length: two-pass renders over 209 frames failed or crashed ComfyUI at the 1 MP refine on a 32 GB card with 64 GB RAM (B5b: 226 failed, then crashed; B5a: 243 crashed, 260 failed). |
 | `conform_to_24fps` | `True` | The render's reference audio on H3's 24 fps clock (frames stay 1:1). Takes keep the original audio. |
+| `first_pass_megapixels` *(opt.)* | `0.0` | 0: the two-pass first pass (about 0.3 MP in the source's shape; the pins arrive at the source's size, for the refine pass). Above 0: a single pass at this many megapixels (1.0 = H3's own canvas) in the source's shape, a multiple of 32 each way, wired from render_width / render_height into the H3 node: the pins arrive stretched to exactly that size, so the guides node doesn't crop a strip off every pin (it did, 1.6% of the width per chunk at 1344 x 768 on a 1280 x 720 source, and the picture crept wider chunk by chunk). |
+| `forward_chain` *(opt.)* | `False` | On: a render pins to the NEWEST take of the chunk before it (not the chosen one) and never to the chunk after it, so renders queued in order (c6, c7, c8 ...) each start from the take just made, and an old take further down the chain can't pull a chunk towards it. Your choices in the strip stay yours: this only decides what a render pins to. Off: pins follow the chosen takes on both sides, for re-rolling one chunk between two takes you've chosen. |
 <!-- /gen -->
 
 Each queue run does one thing, set by the strip: emit one chunk's render inputs (the outputs feeding
 the render group), a draft run (`draft_plan`), a mark run (`mark_chunk`, `mark_images`) or an assemble
 run (`assemble_plan`). Outputs a run doesn't use are blocked, so the other branches don't execute.
+`render_width` / `render_height` are H3's first-pass size in the source's shape (about 0.3 MP: 736 x 416 for
+16:9, 416 x 736 for a portrait phone clip, 544 x 544 square); the example wires them into H3 Reference to
+Video. A graph with H3's size typed in renders every source landscape, and a portrait clip comes out stretched.
+For a single pass (no upscale or refine), set `first_pass_megapixels` (off at 0; 1.0 is H3's own canvas): the size
+becomes that many megapixels in the source's shape, a multiple of 32 each way and as close to the source's shape as
+those allow (1312 x 736 for 1280 x 720), and the pins arrive stretched to exactly that size. Wire `render_width` /
+`render_height` into the H3 node and nothing else: a canvas of another shape, even 1344 x 768 on a 1280 x 720
+source, makes the Guides node centre-crop a strip off every pin (1.6% of the width), and since each chunk is
+pinned to the one before, the picture creeps wider chunk by chunk.
 The job lives in `output/seamstitch_swap/<job>/`: `plan.json` (with the last 50 revisions in
 `history/`), `drafts/`, `chunks/<chunk>/<take>/`, `assembled/`, and `trash/` (deleted takes are moved
 there, never erased).
@@ -525,6 +546,8 @@ there, never erased).
 | `source_mask` *(opt.)* | socket (MASK) | SAM3 person mask of the source frames (the marking group's). |
 | `output_mask` *(opt.)* | socket (MASK) | SAM3 person mask of the render (group Swap Score). |
 | `marked_guide` *(opt.)* | socket (IMAGE) | What H3 saw as its guide; saved when the chunk's mark option is on. |
+| `free_memory_after` *(opt.)* | `True` | When this run finishes, ComfyUI drops its models and its cache, as its own /free does, so the next chunk starts on a clear machine (each render reloads its models, about half a minute). Off: the models stay loaded, and on a 64 GB PC the second render in a row can page to disk (2026-10-15: 282 s a step against 76, ComfyUI holding 67.7 GB). |
+| `level_match` *(opt.)* | `True` | Before the take is saved, match its brightness and contrast, per colour channel, to the frame it was pinned to at its start (the same moment): a pinned frame comes out of H3 2-3 levels darker and a little harsher, and with each chunk pinned to the last the picture slid darker and muddier chunk by chunk. With the person's mask wired (source_mask) the room and the person are matched apart. Only the start pin is followed: an end that lands more than 1 level off the next chunk's take gets a level_end flag (that take may be older), and a start too far off to be the pin's (or level_match off) gets a level flag. |
 <!-- /gen -->
 
 ### SeamStitch Swap Output Person
@@ -578,11 +601,38 @@ there, never erased).
 | `frames_per_chunk` | `24` | Frames Qwen sees, spread over the chunk's render range (per shot: shared out by shot length, at least 4 each). The QwenVL node itself uses 16. |
 | `transcribe` | `True` | Omni Captioner Transcribe on each chunk's audio: the words and the audio events. |
 | `word_timings` | `True` | faster-whisper large-v3-turbo: word timings, so each line lands in its shot and moment. |
-| `template` | `character replace (Ref2VA, timeline)` (`character replace (Ref2VA)` / `character replace (Ref2VA, per shot)` / `character replace (Ref2VA, timeline)` / `background replace (Ref2VA)`) | timeline (the default): one full-size picture every half second, a caption each, merged into each shot with its lines at their times. per shot: each shot from its own frames in one call. The first: one call for the whole chunk. background replace: for the Planner's invert: the sheet is a place (<Subject 1>) and the person is kept (<Subject 2>); a chunk with nobody in it still drafts the person in, so write that prompt by hand. |
+| `template` | `character replace (Ref2VA, timeline, lean)` (`character replace (Ref2VA)` / `character replace (Ref2VA, per shot)` / `character replace (Ref2VA, timeline)` / `character replace (Ref2VA, timeline, lean)` / `character replace (Ref2VA, timeline, lean, 2 references)` / `background replace (Ref2VA)` / `background replace (Ref2VA, 2 references)` / `background replace (Ref2VA, lean)` / `background replace (Ref2VA, lean, 2 references)`) | timeline: one full-size picture every half second, a caption each, merged into each shot with its lines at their times; with the chunk marked, timed lines from its mask say where the person is, how framed, and when they leave and come back, and with someone else in the clip each picture is also asked where they touch. per shot: each shot from its own frames in one call. lean (the default): the timeline's questions and placement, written short (one look sentence, the character's look moved onto the person, the background named once, hand lines only when she handles something); on a wrestling chunk, same seed, pose 0.43 against the timeline's 0.40 (a hand-written lean: 0.49). The first: one call for the whole chunk. The job's mode (the strip's switch) decides the kind of template, whatever this says: a background replace job always drafts with a background template (the sheet is a place (<Subject 1>), the person is kept (<Subject 2>)); pick `background replace` here to match (the lean forms write the six sections short: one place sentence, one clause per retention line, no style paragraph; they are not the character lean's half-second moments), the 2 references ones need `sheet_2`, and a wired `sheet_2` picks the full 2 references one when this isn't a background template. A chunk with nobody in it still drafts the person in, so write that prompt by hand. A character job given a background template drafts with the default character one. The draft's report says which was used. |
 | `extra_instructions` | empty | Added to Qwen's rules for every chunk. |
 | `max_tokens` | `2048` |  |
 | `sheet` *(opt.)* | socket (IMAGE) | The character sheet (the render group's Load Image): the subject is drafted from it once per job. |
+| `free_memory_after` *(opt.)* | `True` | When the draft is done: unload everything ComfyUI has loaded and hand back PyTorch's cached GPU and pinned memory, so the next render starts clean (Qwen, Omni and Whisper are closed either way). The node's output says how much was freed. |
+| `qwen_questions` *(opt.)* | the built-in questions | What the draft asks Qwen, one ### section per question, pre-filled with the built-in text. Edit a section to change that question; delete it, or clear the box, for the built-in one. The questions actually sent are in each chunk's drafts/<chunk>/qwen.txt. |
+| `sheet_2` *(opt.)* | socket (IMAGE) | A second reference picture (the render group's second Load Image, the one in the H3 node's ref_image_1). Qwen describes it once per job and the subject defines it as <Picture 2>: a second view of the same place on a background job, of the same character on a character job (pick the '2 references' template). The subject gains the <Picture 2> line the first time a draft runs with it wired (the rest of the subject is kept as it is). |
 <!-- /gen -->
+
+**Qwen's questions are on the node.** The `qwen_questions` box holds every question the draft asks Qwen, each
+under a `### name` heading (subject, objects, who, scene, moment, touch, recheck, and the other templates').
+Change the wording of a section and every draft run of that node asks it that way; keep the `{names in braces}`,
+which the node fills in (a section using a name the built-in doesn't have is ignored, with a warning in the
+console and on the node). The node says which questions it ran edited. A workflow saved with the box keeps its
+text when the pack's built-in questions change later: clear the box to pick up the new ones.
+
+**Where the person is (timeline template).** When a chunk has been marked, the draft reads its cached source
+mask at every moment picture and writes timed lines on the render's clock: which part of the frame the person
+is in, how they're framed (close, with the frame cutting across them, or their whole figure), which way and how
+fast they move, and when they go out past an edge or out of frame and come back. The summary and retention
+then lock the same place, size and framing (and the exits). A moment where the mask shows the person gone, or
+only a sliver past the edge, loses its pose and hands line. On a green-screen walk-past (2026-10-08) this took
+the draft from the character posing centre-frame to following the person in and out of shot. Unmarked chunks
+get the plain draft and a warning; a chunk whose mask is empty where Qwen sees the person gets a warning to
+re-mark it (a new chunk reuses the old marks, which can be wrong at its start).
+
+**Contact.** With someone else in the clip, each moment picture is also asked where the main person and the
+others touch; the shot gets a line when the contact changes, and one when it ends (two "none" answers in a row).
+The scene step keeps only people as the other subjects (not a crowd or a scoreboard) and never names anyone,
+even when a name is on screen. When the scene step names no one but the moment pictures keep seeing someone, that
+person is kept as `<Subject 2>` anyway, and each shot with someone else in it opens with one sentence on how
+her body sits against them (Qwen's `relation` question, e.g. "She lies across <Subject 2>, pinning her to the mat").
 
 ### SeamStitch Swap Mask
 

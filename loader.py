@@ -15,10 +15,10 @@ from PIL import Image
 
 try:
     from . import insert_math
-    from .video_colour import color_args, display_size, file_turns, frame_turns, upright
+    from .video_colour import color_args, display_size, file_turns, frame_turns, to_rgb24, upright
 except ImportError:  # imported as a top-level module (tests)
     import insert_math
-    from video_colour import color_args, display_size, file_turns, frame_turns, upright
+    from video_colour import color_args, display_size, file_turns, frame_turns, to_rgb24, upright
 
 _VIDEO_EXTENSIONS = ('.mp4', '.webm', '.mkv', '.avi', '.mov', '.m4v', '.flv', '.wmv')
 # Pixel formats that store RGB planes, not YUV (e.g. FFV1's gbrp / gbrap16le).
@@ -598,13 +598,7 @@ class SeamStitchLoader:
                     # planes as YUV and scrambled the picture (errors up to 237 levels). Convert straight.
                     if frame.format.name.startswith(_RGB_PIX):
                         raise _PlainRGB
-                    frame = frame.reformat(
-                        format="rgb24",
-                        src_colorspace=src_colorspace,
-                        src_color_range=src_color_range,
-                        dst_color_range=dst_range
-                    )
-                    frame_rgb = frame.to_ndarray(format='rgb24')
+                    frame_rgb = to_rgb24(frame, src_colorspace, src_color_range, dst_range)
                 except _PlainRGB:
                     frame_rgb = frame.to_ndarray(format='rgb24')
                 except Exception as e:

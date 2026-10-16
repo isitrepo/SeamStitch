@@ -7,6 +7,7 @@ or Whisper degrades with a warning instead of failing; Omni's words land on Whis
 kept chunks are never drafted; the Planner routes a redraft's chunk to the node."""
 import json
 import os
+import re
 import sys
 
 import pytest
@@ -122,10 +123,10 @@ def test_a_prompt_written_during_the_run_is_never_overwritten(job):
     """The emptiness check happens under the plan lock at write time, not at the run's start."""
     target = sp.load_plan(job["plan"])["chunks"][1]["id"]
 
-    def kay_types(_n):
+    def user_types(_n):
         sp.update_plan(job["plan"], lambda p: sp.find_chunk(p, target).update(prompt="typed meanwhile",
                                                                               prompt_state="edited"))
-    _draft(job, qwen_cls=FakeQwen(on_draft=kay_types))
+    _draft(job, qwen_cls=FakeQwen(on_draft=user_types))
     c = sp.find_chunk(sp.load_plan(job["plan"]), target)
     assert c["prompt"] == "typed meanwhile" and c["draft"].startswith("subject_definitions:")
 
@@ -183,8 +184,9 @@ def test_the_template_parses_into_the_six_sections():
     dd = s["detailed_description"]
     assert "[Shot 1] She looks down." in dd and "[Shot 2] Jump cut." in dd
     assert "<Subject 1> (S1) says <d>[English]So what have we got here?</d>" in dd
-    assert "Her lips move with every word" in dd and "Every jump cut happens at exactly the same moment" in dd
-    assert s["overall_soundscape"] == "The original sound of <Video 1>: room hum" and s["non_diegetic_music"] == "N/A"
+    assert "Her lips move with every word" in dd and "Every jump cut is a hard cut at exactly the same moment" in dd
+    assert "dissolve" not in dd and "morph" not in dd          # said positively (2026-10-13)
+    assert s["overall_soundscape"] == "The original sound of <Video 1>: room hum." and s["non_diegetic_music"] == "N/A"
     # one shot, no dialogue, no audio: no cut line, no lip line, no <Audio 1>
     t2 = sd.fill_ref2va(subject=SUBJECT, video_1="x.", shots=["[Shot 1] He sits."], sounds="", n_shots=1,
                         dialogue=False, audio=False, pronoun="they")
@@ -358,7 +360,7 @@ def test_the_node_widgets_keep_their_order():
     assert list(req) == ["draft_plan", "chunks", "qwen_model", "quantization", "frames_per_chunk", "transcribe",
                          "word_timings", "template", "extra_instructions", "max_tokens"]
     assert req["chunks"][1]["default"] == "empty only" and req["max_tokens"][1]["default"] == 2048
-    assert req["template"][1]["default"] == "character replace (Ref2VA, timeline)" and req["frames_per_chunk"][1]["default"] == 24
+    assert req["template"][1]["default"] == "character replace (Ref2VA, timeline, lean)" and req["frames_per_chunk"][1]["default"] == 24
     assert sd.SeamStitchSwapDraft.OUTPUT_NODE and "sheet" in sd.SeamStitchSwapDraft.INPUT_TYPES()["optional"]
 
 
@@ -418,7 +420,9 @@ def test_the_per_shot_template_end_to_end(job):
     _draft(job, qwen_cls=q, template=sd.TEMPLATES[1])
     c0 = sp.load_plan(job["plan"])["chunks"][0]
     dd = sd.parse_sections(c0["prompt"])["detailed_description"]
-    assert "[Shot 1] She holds up a white card." in dd and "[Shot 2] Jump cut. She holds up a white card." in dd
+    assert "[Shot 1] She holds up a white card." in dd
+    assert re.search(r"\[Shot 2\] At 00:\d\d\.\d{3}, the shot cuts to the next part of <Video 1>\. She holds up a "
+                     r"white card\.", dd)
     assert dd.count("<d>[English]Hello there.</d>") == 1
     shot_calls = [c for c in q.calls if "continuous shot" in c["prompt"]]
     assert len(shot_calls) >= 4 and all(c["frames"] >= 4 for c in shot_calls)
@@ -479,7 +483,7 @@ def test_timeline_moments_merge_into_a_shot_with_the_lines_at_their_times():
     m = sd.parse_moment("pose: leaning forward over the box\nlook: at the camera\n"
                         "hands: holds a small white card up toward the camera with the right hand")
     assert m == {"person": "", "pose": "leaning forward over the box", "look": "at the camera",
-                 "hands": "holds a small white card up toward the camera with the right hand", "others": "", "frame": ""}
+                 "hands": "holds a small white card up toward the camera with the right hand", "others": "", "touch": "", "frame": ""}
     moments = [(0.1, {"pose": "leaning forward over the box", "look": "down into the box",
                       "hands": "reaches into the box"}),
                (0.6, {"pose": "", "look": "at the camera", "hands": "holds a small white card up toward the camera"}),
@@ -922,7 +926,8 @@ def test_the_background_template_end_to_end(job):
     assert "backdrop behind <Subject 2> is replaced by <Subject 1>, the ship-themed diner environment" in s["summary"]
     ret = s["retention_analysis"]
     assert "<Subject 1> (appears throughout): partially_preserved" in ret and "<Subject 2> (appears" in ret
-    assert "fully_preserved - his identity" in ret and "original backdrop is not kept" in ret
+    assert "fully_preserved - his identity" in ret and "original backdrop is replaced by <Subject 1>" in ret
+    assert "<Video 1> (whole-video temporal structure, camera angle and movement, the person): partially_preserved" in ret
     dd = s["detailed_description"]
     assert "[Shot 1] <Subject 2> walks in from the left" in dd and "the man in a black t-shirt" not in dd
     assert "<Subject 2> looks down." in dd and "He looks" not in dd
@@ -934,15 +939,15 @@ def test_the_background_template_end_to_end(job):
 
 def test_a_second_background_draft_keeps_the_place_and_redrafts_only_into_the_draft(job):
     place = "<Subject 1> is the old diner environment in <Picture 1>, featuring red stools."
-    sp.update_plan(job["plan"], lambda p: p.update(subject=place))
-    rep = _draft(job, sheet=_sheet(), qwen_cls=BgQwen(), template=sd.BACKGROUND, mode="all (into the draft field)")
+    sp.update_plan(job["plan"], lambda p: p.update(subject=place, mode="background"))
+    rep = _draft(job, sheet=_sheet(), qwen_cls=BgQwen(), mode="all (into the draft field)")
     p = sp.load_plan(job["plan"])
     assert p["subject"] == place and p["subject_draft"].startswith("<Subject 1> is the ship-themed diner environment")
     assert rep["subject"]["into"] == "subject_draft"
     # with the place already there, no subject call unless the mode asks for it
     q = BgQwen()
     sp.update_plan(job["plan"], lambda p: [c.update(prompt="", prompt_state="empty") for c in p["chunks"]])
-    _draft(job, sheet=_sheet(), qwen_cls=q, template=sd.BACKGROUND)
+    _draft(job, sheet=_sheet(), qwen_cls=q)
     assert not any("shows a place" in c["prompt"] for c in q.calls)
     assert sd.parse_sections(sp.load_plan(job["plan"])["chunks"][0]["prompt"])["subject_definitions"].startswith(place)
 
@@ -977,3 +982,21 @@ def test_the_kept_person_is_called_by_their_label():
     # a woman, and "Hermione" is not "Her"
     out = sd.label_person("[Shot 1] She turns. Her arm rises. Hermione waves at the girl in red.", "a girl in red", "she")
     assert out == "[Shot 1] <Subject 2> turns. <Subject 2>'s arm rises. Hermione waves at <Subject 2>."
+
+
+def test_the_job_mode_picks_the_template_not_the_widget(job):
+    # background: whatever the widget says; character: the widget's style, never the background template
+    sp.update_plan(job["plan"], lambda p: p.update(mode="background"))
+    rep = _draft(job, sheet=_sheet(), qwen_cls=BgQwen(), template=sd.TEMPLATES[0])
+    assert rep["template"] == sd.BACKGROUND and sd.BACKGROUND in sd.TEMPLATES
+    assert sp.load_plan(job["plan"])["subject"].startswith("<Subject 1> is the ship-themed diner environment")
+    # back to character: the place moves aside and the character is drafted (no clearing by hand)
+    sp.update_plan(job["plan"], lambda p: [p.update(mode="character")] + [c.update(prompt="", prompt_state="empty")
+                                                                          for c in p["chunks"]])
+    rep = _draft(job, sheet=_sheet(), template=sd.TEMPLATES[0])
+    p = sp.load_plan(job["plan"])
+    assert rep["template"] == sd.TEMPLATES[0] and p["subject"].startswith("<Subject 1> is the clown angel girl")
+    assert p["subject_draft"].startswith("<Subject 1> is the ship-themed diner environment")
+    # an old workflow's "background replace" value on a character job: the default character template
+    rep = _draft(job, sheet=_sheet(), template=sd.BACKGROUND)
+    assert rep["template"] == sd.DEFAULT_TEMPLATE and rep["text"].startswith("nothing to draft")

@@ -64,6 +64,10 @@ DEFAULT_SETTINGS = {
     "guard": 6,               # overlap guard either side of an anchored overlap (half T2's widest morph)
     "conform_to_24fps": True,
     "hand_back": 12,          # level lock / fade decay length (picked by eye over 25)
+    "first_pass_mp": 0.0,     # 0: the two-pass first pass (~0.3 MP, pins at the source's size); > 0: a single pass at
+                              # this many MP in the source's shape, its pins stretched to the render's own size
+    "forward_chain": False,   # pins from the newest take of the chunk before (not the chosen one), never an end pin:
+                              # renders queued c6 -> c9 each pin to the take just made (2026-10-16)
 }
 
 # join types
@@ -155,11 +159,48 @@ def chunk_target(plan, chunk):
     return ((chunk.get("options") or {}).get("target") or plan.get("target") or "").strip()
 
 
+# What a job swaps: the person (character replace) or everything but them (background replace). One switch on
+# the strip; it drives SAM3's paint mask (inverted for background), the drafter's template and subject, and which
+# takes count. A plan from before the switch carries "invert" instead.
+MODE_CHARACTER, MODE_BACKGROUND = "character", "background"
+MODES = (MODE_CHARACTER, MODE_BACKGROUND)
+
+
+def job_mode(plan):
+    m = (plan or {}).get("mode")
+    if m in MODES:
+        return m
+    return MODE_BACKGROUND if (plan or {}).get("invert") else MODE_CHARACTER
+
+
+# What the guide marks in a character replace: the person (the default), or the backdrop around them
+# (experimental). Made for a plain green screen; the first result (2026-10-07, pose 0.40 against 0.15) came from
+# that take's pins, and over ~50 renders on 2026-10-08 the backdrop made no reliable difference. A background
+# replace always marks the backdrop.
+GUIDE_PERSON, GUIDE_BACKDROP = "person", "backdrop"
+GUIDES = (GUIDE_PERSON, GUIDE_BACKDROP)
+
+
+def job_guide(plan):
+    g = (plan or {}).get("guide")
+    return g if g in GUIDES else GUIDE_PERSON
+
+
 def chunk_invert(plan, chunk):
-    """Mark everything but the target (a background swap) instead of the target: the chunk's own
-    setting, else the job's."""
-    v = (chunk.get("options") or {}).get("invert")
-    return bool(plan.get("invert")) if v is None else bool(v)
+    """Mark everything but the target instead of the target: a background replace, or a character replace whose
+    guide marks the backdrop. One per job."""
+    return job_mode(plan) == MODE_BACKGROUND or job_guide(plan) == GUIDE_BACKDROP
+
+
+def take_mode(take):
+    """The mode a take was rendered in: its render options carry it ("mode"); a take from before that, invert
+    (only a background replace inverted then)."""
+    o = ((take or {}).get("settings") or {}).get("options") or {}
+    if o.get("mode") in MODES:
+        return o["mode"]
+    v = o.get("invert")
+    inv = v if isinstance(v, bool) else str(v).strip().lower() in ("1", "true", "yes", "on")
+    return MODE_BACKGROUND if inv else MODE_CHARACTER
 
 
 def geometry(frames, splits, cuts=(), settings=None, keep=()):
@@ -432,11 +473,12 @@ def auto_splits(frames, cuts=(), settings=None, max_shift=None, with_modes=False
 # takes and lineage
 # ---------------------------------------------------------------------------
 
-def effective_take(chunk):
+def effective_take(chunk, mode=None):
     """(take, state): the chosen take ("chosen"), else the chunk's first usable take
     ("unreviewed"), else (None, "pending"). A later take never becomes effective without
-    a choice."""
-    takes = [t for t in (chunk.get("takes") or []) if t.get("state", "ok") == "ok"]
+    a choice. With a mode, only that mode's takes count: the other mode's stay listed, never used."""
+    takes = [t for t in (chunk.get("takes") or []) if t.get("state", "ok") == "ok"
+             and (mode is None or take_mode(t) == mode)]
     chosen = chunk.get("chosen")
     if chosen:
         for t in takes:
@@ -647,7 +689,7 @@ def chunk_take(plan, chunk):
     effective take (§4.4)."""
     if is_kept(chunk):
         return source_take(plan["source"]["frames"]), ORIGINAL
-    return effective_take(chunk)
+    return effective_take(chunk, job_mode(plan))
 
 
 def plan_joins(plan):

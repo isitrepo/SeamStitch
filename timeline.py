@@ -46,11 +46,11 @@ from server import PromptServer
 try:
     from . import timeline_math as tm
     from .loader import SeamStitchLoader, _list_input_videos
-    from .video_colour import color_args, display_size, file_turns, frame_turns, upright
+    from .video_colour import color_args, display_size, file_turns, frame_turns, to_rgb24, upright
 except ImportError:  # imported as a top-level module (tests)
     import timeline_math as tm
     from loader import SeamStitchLoader, _list_input_videos
-    from video_colour import color_args, display_size, file_turns, frame_turns, upright
+    from video_colour import color_args, display_size, file_turns, frame_turns, to_rgb24, upright
 
 _VIDEO_EXTENSIONS = ('.mp4', '.webm', '.mkv', '.avi', '.mov', '.m4v', '.flv', '.wmv')
 _RGB_PIX = ('gbr', 'rgb', 'bgr', 'argb', 'abgr', 'rgba', 'bgra')
@@ -61,7 +61,7 @@ CODEC_H264 = "h264"
 KEEP_CUTS = 8
 # Bumped whenever the assembly would produce different bytes for the same inputs,
 # so a cached cut from an older rule is not reused.
-_ASSEMBLY_VERSION = "1"
+_ASSEMBLY_VERSION = "2"   # 2: YUV decoded with accurate rounding (video_colour.to_rgb24)
 _BUILD_LOCK = threading.Lock()
 # MiniMax H3's fixed clock (comfy_extras/nodes_minimax_h3.py hard-codes FPS = 24).
 H3_FPS = 24
@@ -204,8 +204,7 @@ def _iter_frames(path, frame_rate, start_idx, end_idx):
                     rgb = upright(rgb, frame_turns(frame))
                 if rgb is None:
                     try:
-                        rgb = frame.reformat(format="rgb24", src_colorspace=cs, src_color_range=cr,
-                                             dst_color_range=dst).to_ndarray(format="rgb24")
+                        rgb = to_rgb24(frame, cs, cr, dst)
                     except Exception:
                         rgb = frame.to_ndarray(format="rgb24")
                     rgb = upright(rgb, frame_turns(frame))
@@ -713,6 +712,156 @@ def swap_joins(path, out_dir=None):
 
 
 # ---------------------------------------------------------------------------
+# carried joins: a Swap job's joins followed through Timeline -> Result Preview -> Timeline
+# ---------------------------------------------------------------------------
+# One splice per run means a fixed assembly becomes a new file (the result) that is not an
+# assembly, so its joins would vanish from the strip. Instead each Timeline run records the
+# joins that land in its cut (by cut frame), and Result Preview turns that into the joins of
+# the result: those inside the regenerated span marked fixed, those after it moved by the
+# frames the splice added. "use as timeline" then shows them on the result, and the next
+# result carries them on. Records live in seamstitch_swap/_carried/ and name only files the
+# server itself wrote; a client path is only ever compared with them.
+CARRIED_SUBDIR = "_carried"
+
+
+def _carried_dir(out_dir=None):
+    return os.path.join(_swap_base(out_dir), CARRIED_SUBDIR)
+
+
+def _norm(p):
+    return os.path.normcase(os.path.normpath(os.path.abspath(p)))
+
+
+def _record_name(kind, path):
+    return f"{kind}_{hashlib.sha256(_norm(path).encode()).hexdigest()[:16]}.json"
+
+
+def _write_record(name, rec, out_dir=None):
+    d = _carried_dir(out_dir)
+    os.makedirs(d, exist_ok=True)
+    tmp = os.path.join(d, name + ".part")
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(rec, f, indent=1)
+    os.replace(tmp, os.path.join(d, name))
+
+
+def _read_record(name, out_dir=None):
+    try:
+        with open(os.path.join(_carried_dir(out_dir), name), encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return None
+
+
+def find_carried_result(path, out_dir=None):
+    """The carried-joins record of a result a sequence path names, or None. Matched against
+    the paths the records hold (output-relative line or absolute); a result rewritten
+    since (other size) no longer matches."""
+    if not isinstance(path, str) or not path.strip():
+        return None
+    d = _carried_dir(out_dir)
+    if not os.path.isdir(d):
+        return None
+    want = path.strip().replace("\\", "/")
+    want_abs = _norm(path.strip()) if os.path.isabs(path.strip()) else None
+    for f in os.listdir(d):
+        if not (f.startswith("result_") and f.endswith(".json")):
+            continue
+        rec = _read_record(f, out_dir)
+        if not rec or not (want == rec.get("path") or (want_abs and want_abs == _norm(rec.get("abs", "")))):
+            continue
+        try:
+            if os.path.getsize(rec["abs"]) != rec.get("size"):
+                return None
+        except (OSError, KeyError):
+            return None
+        return rec
+    return None
+
+
+def file_joins(path, out_dir=None):
+    """Swap joins of a strip clip, in its own frames: a job's assembly, or a result that
+    carried them on. None for any other file."""
+    if find_swap_assembly(path, out_dir) is not None:
+        return swap_joins(path, out_dir)
+    rec = find_carried_result(path, out_dir)
+    if rec is None:
+        return None
+    return {"job": rec.get("job"), "file": os.path.basename(rec["abs"]), "path": rec["path"],
+            "mtime": rec.get("mtime"), "frames": rec.get("frames"), "fps": rec.get("fps"), "window": None,
+            "carried": True, "joins": sorted(rec.get("joins") or [], key=lambda j: j["frame"])}
+
+
+def cut_joins(cut, fr, out_dir=None):
+    """The Swap joins inside a cut, by cut frame (each clip's joins moved by where it sits and
+    rescaled when the strip runs at another rate - as the strip's own marks do)."""
+    joins, jobs = [], []
+    for p in cut["pieces"]:
+        sw = file_joins(p["path"], out_dir)
+        if not sw:
+            continue
+        if sw.get("job") and sw["job"] not in jobs:
+            jobs.append(sw["job"])
+        k = fr / sw["fps"] if sw.get("fps") and abs(fr - sw["fps"]) > 1e-6 else 1.0
+        for j in sw["joins"]:
+            f = int(round(j["frame"] * k))
+            if p["enter"] <= f < p["exit"]:
+                joins.append(dict(j, frame=p["cut_start"] + f - p["enter"]))
+    joins.sort(key=lambda j: j["frame"])
+    return joins, jobs
+
+
+def record_cut_joins(cut, fr, cut_path, out_dir=None):
+    """Called by the Timeline's run: remember which joins the cut it hands on holds."""
+    name = _record_name("cut", cut_path)
+    joins, jobs = cut_joins(cut, fr, out_dir)
+    if not joins:
+        try:
+            os.remove(os.path.join(_carried_dir(out_dir), name))
+        except OSError:
+            pass
+        return None
+    rec = {"cut": os.path.abspath(cut_path), "frames": cut["frames"], "jobs": jobs, "joins": joins}
+    _write_record(name, rec, out_dir)
+    return rec
+
+
+_FIX_VERDICT = {"seamless": "green", "soft bump": "amber", "hard cut": "red"}
+
+
+def carry_joins(source_path, result_path, timeline_path, start, end, analysis, fps, out_dir=None):
+    """Called by Result Preview: the cut's joins, as the result's. A join inside the
+    regenerated span (for a pure insert: at its join) is marked fixed, rated by the worse of
+    the splice's two seams; joins after it move by the frames the splice added. Returns the
+    record, or None when the cut held no Swap joins."""
+    rec = _read_record(_record_name("cut", source_path), out_dir)
+    if not rec or _norm(rec.get("cut", "")) != _norm(source_path):
+        return None
+    removed, inserted = int(analysis["removed"]), int(analysis["inserted"])
+    seams = [r for r in analysis["joins"][:2] if r.get("ratio") is not None]
+    worst = max(seams, key=lambda r: r["ratio"]) if seams else None
+    fix = {"verdict": _FIX_VERDICT.get(worst["verdict"]) if worst else None,
+           "ratio": round(worst["ratio"], 3) if worst else None,
+           "result": os.path.basename(result_path), "range": [start, start + inserted - 1]}
+    joins = []
+    for j in rec["joins"]:
+        f = int(j["frame"])
+        inside = start <= f <= end if removed > 0 else f == start
+        if inside:
+            joins.append(dict(j, frame=min(f, start + max(inserted, 1) - 1), fixed=fix))
+        elif f >= start:
+            joins.append(dict(j, frame=f + inserted - removed))
+        else:
+            joins.append(dict(j))
+    st = os.stat(result_path)
+    out = {"abs": os.path.abspath(result_path), "path": str(timeline_path).replace("\\", "/"),
+           "size": st.st_size, "mtime": st.st_mtime, "fps": fps, "frames": int(analysis["frames"]),
+           "job": (rec.get("jobs") or [None])[0], "jobs": rec.get("jobs") or [], "joins": joins}
+    _write_record(_record_name("result", result_path), out, out_dir)
+    return out
+
+
+# ---------------------------------------------------------------------------
 # routes
 # ---------------------------------------------------------------------------
 
@@ -773,7 +922,10 @@ async def _swap_jobs_route(request):
 @PromptServer.instance.routes.get("/seamstitch/timeline/swap_joins")
 async def _swap_joins_route(request):
     try:
-        return web.json_response(swap_joins(request.query.get("path", "")))
+        j = file_joins(request.query.get("path", ""))
+        if j is None:
+            raise tm.SequenceError("not a Swap job's assembly or a result that carries its joins")
+        return web.json_response(j)
     except Exception as e:
         return _json_error(e, 404)
 
@@ -897,6 +1049,13 @@ class SeamStitchTimeline:
         plan = tm.resolve_target(tm.parse_target(target), cut)
         tm.validate_context(plan, cut, context_frames)
         path = build_cut(cut, fr, assemble_crf, mismatch_fit, cut_codec, conform_to_24fps)
+        try:
+            carried = record_cut_joins(cut, fr, path)
+            if carried:
+                print(f"[SeamStitch] Timeline: {len(carried['joins'])} Swap join(s) in the cut "
+                      f"({', '.join(carried['jobs'])}) - Result Preview carries them onto the result.")
+        except Exception as e:   # the marks are a help; never fail a run over them
+            print(f"[SeamStitch] Timeline: Swap joins not recorded: {e}")
         # The conformed cut has the same frames at the same indices, so the plan (markers,
         # range, context, grid rounding - all frame counts) is unchanged; only the clock is
         # H3's. The Loader reads the cut at the rate it is labelled.

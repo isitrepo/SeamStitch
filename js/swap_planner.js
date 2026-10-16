@@ -204,6 +204,36 @@ function colouredTextarea(style, height) {
     return { wrap, ta, paint };
 }
 
+// The prompt in a large editor over the page: the same text, saved back through the panel's own save.
+function openLargeEditor(src, onDone) {
+    const shade = el("div", { position: "fixed", inset: "0", background: "rgba(0,0,0,0.6)", zIndex: "10000",
+        display: "flex", alignItems: "center", justifyContent: "center" });
+    const pane = el("div", { width: "85vw", height: "85vh", display: "flex", flexDirection: "column", gap: "6px",
+        background: "#0f1115", border: "1px solid #3b4252", borderRadius: "8px", padding: "10px", boxSizing: "border-box" });
+    const head = el("div", { display: "flex", alignItems: "center", gap: "8px", color: "#b4bccb" },
+        "The chunk's prompt (Ctrl+Enter or close saves it; Esc closes too)");
+    const ta = el("textarea", { flex: "1 1 auto", width: "100%", boxSizing: "border-box", resize: "none",
+        background: "#111", color: "#e5e7eb", border: "1px solid #444", borderRadius: "4px", padding: "8px",
+        fontFamily: "monospace", fontSize: "14px", lineHeight: "1.45", whiteSpace: "pre-wrap" });
+    ta.value = src.value;
+    const close = () => {
+        if (ta.value !== src.value) { src.value = ta.value; onDone(); }
+        shade.remove();
+    };
+    const done = el("button", { marginLeft: "auto", padding: "0.2em 0.9em", cursor: "pointer" }, "close");
+    done.onclick = close;
+    head.append(done);
+    ta.onkeydown = (e) => {
+        e.stopPropagation();
+        if (e.key === "Escape" || (e.key === "Enter" && (e.ctrlKey || e.metaKey))) { e.preventDefault(); close(); }
+    };
+    shade.onpointerdown = (e) => { if (e.target === shade) close(); };
+    pane.append(head, ta);
+    shade.append(pane);
+    document.body.append(shade);
+    ta.focus();
+}
+
 // ---------------------------------------------------------------- the node
 
 app.registerExtension({
@@ -331,8 +361,9 @@ function buildPlanner(node) {
     const bVideo = button("load video ▾", "Choose the job's video: from the input folder or upload one (or drop it on the node). A new job is named after it, and its cuts and splits are found straight away.", (ev) => openSourceMenu(ev));
     head.append(el("span", { color: C.dim }, "job"), jobSel, el("span", { width: "8px" }), el("span", { color: C.dim }, "video"), videoName, videoFacts, bVideo);
 
-    // Who the job replaces: SAM3's source text (the mark and the render's own track; the output score keeps "person")
-    // and the drafter's main person. A chunk can name its own. Invert marks everything but them (a background swap).
+    // What the job swaps (one two-way switch: character replace, or background replace = mark everything but the
+    // person) and who: SAM3's source text (the mark and the render's own track; the output score keeps "person") and
+    // the drafter's main person. A chunk can name its own.
     const targetRow = el("div", { display: "flex", gap: "6px", alignItems: "center", flexShrink: "0", padding: "2px 6px" });
     const targetIn = el("input", { flex: "0 1 22em", background: "#111", color: C.text, border: "1px solid #3b4252", borderRadius: "4px", padding: "0.15em 0.3em" });
     targetIn.placeholder = "person (the drafter picks who)";
@@ -340,13 +371,38 @@ function buildPlanner(node) {
     targetIn.onpointerdown = (e) => e.stopPropagation();
     targetIn.onkeydown = (e) => { e.stopPropagation(); if (e.key === "Enter") targetIn.blur(); };
     targetIn.onchange = () => op({ op: "set_target", target: targetIn.value });
-    const invertIn = el("input"); invertIn.type = "checkbox";
-    invertIn.onpointerdown = (e) => e.stopPropagation();
-    invertIn.onchange = () => op({ op: "set_target", invert: invertIn.checked });
-    const invertL = el("label", { display: "flex", alignItems: "center", gap: "3px" });
-    invertL.title = "Mark everything but the target (for a background swap). Draft with the Draft Prompts template 'background replace (Ref2VA)'; a chunk with nobody in it still needs its prompt written by hand, and the R score still measures a person swap.";
-    invertL.append(invertIn, el("span", null, "invert (mark everything else)"));
-    targetRow.append(el("span", { color: C.dim }, "replace"), targetIn, invertL);
+    const MODE_TIPS = {
+        character: "Character replace: the person is replaced by the character on the sheet (Load Character Sheet).",
+        background: "Background replace: the person is kept and everything around them becomes the place on the sheet "
+            + "(Load Character Sheet: a picture of the place). A chunk with nobody in it still needs its prompt written by hand.",
+    };
+    const modeBox = el("div", { display: "flex", border: "1px solid #3b4252", borderRadius: "4px", overflow: "hidden", flexShrink: "0" });
+    const modeBtns = {};
+    for (const [m, t] of [["character", "Character replace"], ["background", "Background replace"]]) {
+        const b = el("button", { border: "none", padding: "0.2em 0.7em", cursor: "pointer", font: "inherit" }, t);
+        b.title = MODE_TIPS[m] + " Switching keeps everything: each mode has its own subject, prompts and takes, and flipping back brings them back.";
+        b.onpointerdown = (e) => e.stopPropagation();
+        b.onclick = () => { if (P() && jobMode() !== m) op({ op: "set_mode", mode: m }); };
+        modeBtns[m] = b;
+        modeBox.append(b);
+    }
+    // character replace only: what the guide marks. The backdrop (everything but the person) is EXPERIMENTAL:
+    // made for a plain green screen, but over ~50 test renders it made no reliable difference (2026-10-08)
+    const guideBox = el("div", { display: "flex", alignItems: "center", gap: "4px", flexShrink: "0" });
+    const guideInner = el("div", { display: "flex", border: "1px solid #3b4252", borderRadius: "4px", overflow: "hidden" });
+    const guideBtns = {};
+    for (const [g, t, tip] of [["person", "person", "Mark the person in the guide (the usual way)."],
+        ["backdrop", "backdrop (exp.)", "Experimental: mark everything but the person in the guide, and still replace the person. Made for a plain green or blue screen; in testing it made no reliable difference to the character following the person."]]) {
+        const b = el("button", { border: "none", padding: "0.2em 0.6em", cursor: "pointer", font: "inherit" }, t);
+        b.title = tip;
+        b.onpointerdown = (e) => e.stopPropagation();
+        b.onclick = () => { if (P() && jobGuide() !== g) op({ op: "set_guide", guide: g }); };
+        guideBtns[g] = b;
+        guideInner.append(b);
+    }
+    guideBox.append(el("span", { color: C.dim }, "mark"), guideInner);
+    const targetLbl = el("span", { color: C.dim }, "replace");
+    targetRow.append(modeBox, guideBox, targetLbl, targetIn);
 
     const canvas = el("canvas", { width: "100%", height: `${CANVAS_H}px`, display: "block", cursor: "default",
         borderRadius: "4px", touchAction: "none", flex: "0 0 auto" });
@@ -365,8 +421,9 @@ function buildPlanner(node) {
     // A drag bar under a section. CSS resize corners were drawn but never started a drag inside the node (the canvas
     // takes the pointer), so the bar captures the pointer itself; the canvas zoom scales the DOM widget.
     function grip(box, key) {
-        const g = el("div", { height: "7px", flex: "0 0 auto", cursor: "ns-resize", background: "#343b4d", borderRadius: "3px", margin: "0 35%" });
-        g.title = "Drag to make this section taller or shorter (a taller node gives everything more room)";
+        const g = el("div", { height: "10px", flex: "0 0 auto", cursor: "ns-resize", borderRadius: "3px", margin: "1px 10%",
+            background: "repeating-linear-gradient(0deg, #4b5568 0 2px, #2a303d 2px 4px)", border: "1px solid #4b5568" });
+        g.title = "Drag up or down to make this section shorter or taller (a taller node gives everything more room)";
         g.onpointerdown = (e) => {
             e.stopPropagation(); e.preventDefault(); g.setPointerCapture(e.pointerId);
             const y0 = e.clientY, h0 = box.offsetHeight, k = app.canvas?.ds?.scale || 1;
@@ -427,6 +484,12 @@ function buildPlanner(node) {
     // ------------------------------------------------------------ plan access
     const job = () => (jobW?.value || "").trim();
     const P = () => S.plan;
+    // the job's mode: "character" or "background" (a plan from before the switch carries invert instead)
+    // the mask that renders: the backdrop marked for a background replace, or a character replace guided by the backdrop
+    const maskView = () => (jobMode() === "background" || jobGuide() === "backdrop") ? "mask_bg" : "mask";
+    const jobGuide = () => (P()?.guide === "backdrop" ? "backdrop" : "person");
+    const jobMode = () => { const p = P(); return !p ? "character" : (p.mode === "background" || p.mode === "character")
+        ? p.mode : (p.invert ? "background" : "character"); };
     const chunks = () => P()?.chunks || [];
     const splits = () => P()?.splits || [];
     const cuts = () => P()?.cuts || [];
@@ -724,7 +787,7 @@ function buildPlanner(node) {
             if (!p.output[graphPlannerId()]) throw new Error("this Planner isn't in the queued graph (bypassed or muted?)");
             const targets = targetsFor(p.output, OUT[kind]);
             // a target or invert the graph can't pass on would be marked as "person" and cached under the target's name (B7)
-            const named = P() && (P().target || P().invert || chunks().some(c => (c.options || {}).target || (c.options || {}).invert != null));
+            const named = P() && (P().target || jobMode() === "background" || chunks().some(c => (c.options || {}).target));
             if ((kind === "render" || kind === "mark") && named) {
                 const keys = new Set(Object.values(p.output).filter(n => n.class_type === "SeamStitchSwapOption").map(n => n.inputs?.key));
                 const lack = ["target", "invert"].filter(k => !keys.has(k));
@@ -817,7 +880,7 @@ function buildPlanner(node) {
             { label: "the source person mask (SAM3), cached per chunk's render range" },
             ...(sel ? [{ text: `mark chunk ${label(sel.id)} (${sel.render[0]}-${sel.render[1]}, ${shotsOf(sel).length} shot${shotsOf(sel).length === 1 ? "" : "s"})`, run: () => markChunk(sel) }] : []),
             { text: `mark every unmarked chunk (${unmarked.length})`, run: async () => { let k = 0; for (const c of unmarked) { if (!await markChunk(c, true)) break; k++; } toast(`queued the mark runs of ${k} chunk${k === 1 ? "" : "s"}, one per shot`, "green"); } },
-            { text: "view the mask row in the player", run: () => setMode("mask") },
+            { text: "view the mask row in the player", run: () => setMode(maskView()) },
         ]);
     }
     function openAssembleMenu(ev) {
@@ -906,9 +969,27 @@ function buildPlanner(node) {
         videoName.title = src ? src.path : "";
         videoFacts.textContent = src ? `${src.frames} frames · ${src.fps} fps · ${src.width}×${src.height} · ${(src.frames / src.fps).toFixed(1)} s` : "";
         if (document.activeElement !== targetIn) targetIn.value = P()?.target || "";
-        invertIn.checked = !!P()?.invert;
-        targetIn.disabled = invertIn.disabled = !has;
-        bMode.textContent = { source: "source", quick: "quick", full: "full ●", mask: "mask" }[S.mode];
+        const jm = jobMode();
+        for (const [m, b] of Object.entries(modeBtns)) {
+            const on = has && m === jm;
+            Object.assign(b.style, { background: on ? (m === "background" ? "#2f6f8f" : "#3f7f4f") : "#1b1f27",
+                color: on ? "#fff" : C.dim, fontWeight: on ? "600" : "400" });
+            b.disabled = !has;
+        }
+        targetLbl.textContent = jm === "background" ? "keep" : "replace";
+        guideBox.style.display = has && jm === "character" ? "flex" : "none";
+        for (const [g, b] of Object.entries(guideBtns)) {
+            const on = g === jobGuide();
+            Object.assign(b.style, { background: on ? "#4a5468" : "#1b1f27", color: on ? "#fff" : C.dim, fontWeight: on ? "600" : "400" });
+        }
+        targetIn.title = jm === "background"
+            ? "Who to keep, as a short noun phrase (\"man in a black t-shirt\"): what SAM3 marks in the source (everything else is replaced), and who the drafter writes about. Empty: SAM3 marks \"person\" and the drafter picks. Changing it needs a re-mark and a redraft."
+            : "Who to replace, as a short noun phrase (\"woman in a purple top\"): what SAM3 marks in the source, and who the drafter writes about. Empty: SAM3 marks \"person\" and the drafter picks. Changing it needs a re-mark and a redraft.";
+        targetIn.disabled = !has;
+        bMode.textContent = { source: "source", quick: "quick", full: "full ●", mask: "mask: character", mask_bg: "mask: background" }[S.mode];
+        // the background mask is the character one with every pixel inverted (the person back to the original,
+        // everything else marked): the same preview video, inverted in the player
+        video.style.filter = S.mode === "mask_bg" ? "invert(1)" : "";
         bMode.title = "View: source (the original) · quick (each chunk's effective take, chained) · full (the latest assembly) · mask (the cached person mask)";
         updateOverlay();
         saveUiSoon();
@@ -1309,7 +1390,7 @@ function buildPlanner(node) {
         seedIn.onchange = () => { const v = parseInt(seedIn.value, 10); if (Number.isInteger(v) && v >= 0) op({ op: "seed_mode", chunk: c.id, seed_mode: { fixed: v } }); };
         acts.append(mkL, seedSel, seedIn, keepL);
         selBox.append(acts);
-        // this chunk's own target and invert (empty / "job": the job's, above the player)
+        // this chunk's own target (empty: the job's, above the player)
         const tgt = row();
         const ownT = el("input", { flex: "0 1 22em", background: "#111", color: C.text, border: "1px solid #3b4252", borderRadius: "4px" });
         ownT.value = (c.options || {}).target || "";
@@ -1318,13 +1399,7 @@ function buildPlanner(node) {
         ownT.onpointerdown = (e) => e.stopPropagation();
         ownT.onkeydown = (e) => { e.stopPropagation(); if (e.key === "Enter") ownT.blur(); };
         ownT.onchange = () => op({ op: "set_options", chunk: c.id, options: { target: ownT.value.trim() } });
-        const invSel = el("select", { background: "#111", color: C.text, border: "1px solid #3b4252", borderRadius: "4px" });
-        [["job", `invert: the job's (${P().invert ? "on" : "off"})`], ["on", "invert: on"], ["off", "invert: off"]].forEach(([v, t]) => { const o = el("option", null, t); o.value = v; invSel.append(o); });
-        const inv = (c.options || {}).invert;
-        invSel.value = inv == null ? "job" : inv ? "on" : "off";
-        invSel.onpointerdown = (e) => e.stopPropagation();
-        invSel.onchange = () => op({ op: "set_options", chunk: c.id, options: { invert: invSel.value === "job" ? null : invSel.value === "on" } });
-        tgt.append(el("span", { color: C.dim }, "replace"), ownT, invSel);
+        tgt.append(el("span", { color: C.dim }, jobMode() === "background" ? "keep" : "replace"), ownT);
         selBox.append(tgt);
 
         // the prompt editor (adopt draft, redraft)
@@ -1349,7 +1424,9 @@ function buildPlanner(node) {
         }
         const side = el("div", { display: "flex", flexDirection: "column", gap: "3px" });
         const pSave = button("save", "Save the prompt (ctrl+enter, or leave the box)", () => savePrompt());
-        side.append(el("span", { color: st.prompt === "empty" ? C.red : st.prompt === "draft" ? C.draft : C.dim, fontWeight: "bold" }, st.prompt === "empty" ? "● no prompt" : st.prompt === "draft" ? "draft" : "edited"), pSave);
+        const pBig = button("⤢ large", "Open the prompt in a large editor over the page (Esc or close puts it back)",
+            () => openLargeEditor(ta, () => { box.paint(); S.promptDirty = true; savePrompt(); }));
+        side.append(el("span", { color: st.prompt === "empty" ? C.red : st.prompt === "draft" ? C.draft : C.dim, fontWeight: "bold" }, st.prompt === "empty" ? "● no prompt" : st.prompt === "draft" ? "draft" : "edited"), pSave, pBig);
         if (c.draft) {
             const dv = button("adopt draft", "Replace the prompt with the waiting draft (compare in the tooltip)", () => op({ op: "adopt_draft", chunk: c.id }));
             dv.title = `The draft:\n\n${c.draft.slice(0, 1500)}`;
@@ -1404,7 +1481,12 @@ ${P().subject_draft}`;
         selBox.append(sr);
 
         // the takes list: chosen radio, ▶ in context, use this prompt and seed, delete to trash
-        const takes = (c.takes || []).slice();
+        // only the job's mode's takes: the other mode's are kept, and come back with the switch
+        const takeMode = (t) => { const v = t.settings?.options?.invert; return (v === true || String(v).toLowerCase() === "true") ? "background" : "character"; };
+        const takes = (c.takes || []).filter(t => takeMode(t) === jobMode());
+        const otherTakes = (c.takes || []).length - takes.length;
+        if (otherTakes) selBox.append(el("div", { color: C.dim, fontSize: "0.9em", padding: "0 6px" },
+            `${otherTakes} ${jobMode() === "background" ? "character" : "background"} replace take${otherTakes === 1 ? "" : "s"} kept (switch to see ${otherTakes === 1 ? "it" : "them"})`));
         if (takes.length) {
             // display-only rank (the backend's swap_scores.rank_key): following first, then lost cuts; mouth shown,
             // never ranked. Nothing picks a take.
@@ -1550,7 +1632,7 @@ ${P().subject_draft}`;
             if (!a) return [{ a: 0, b: N - 1, url: null, what: "no assembly yet: assemble first" }];
             return [{ a: 0, b: N - 1, url: fileURL(joinPath(S.jobDir, a.file)), t0: 0, what: `assembly ${a.file.split("/").pop()}` }];
         }
-        if (S.mode === "mask") {
+        if (S.mode === "mask" || S.mode === "mask_bg") {
             const out = [];
             let f = 0;
             const segs = (P().masks || []).slice().sort((x, y) => String(y.created).localeCompare(String(x.created)));
@@ -1612,7 +1694,8 @@ ${P().subject_draft}`;
             { text: `${S.mode === "source" ? "●" : "○"} source: the original`, run: () => setMode("source") },
             { text: `${S.mode === "quick" ? "●" : "○"} quick: each chunk's effective take, chained (proxies)`, run: () => setMode("quick") },
             { text: `${S.mode === "full" ? "●" : "○"} full: the latest assembly`, run: () => setMode("full") },
-            { text: `${S.mode === "mask" ? "●" : "○"} mask: the cached person mask (marked guide)`, run: () => setMode("mask") },
+            { text: `${S.mode === "mask" ? "●" : "○"} mask: character (the person marked, as a character replace renders it)`, run: () => setMode("mask") },
+            { text: `${S.mode === "mask_bg" ? "●" : "○"} mask: background (everything but the person marked, as a background replace renders it)`, run: () => setMode("mask_bg") },
         ]);
     }
     function playReview(c, t) {
@@ -1836,7 +1919,7 @@ ${P().subject_draft}`;
     canvas.addEventListener("dblclick", (ev) => {
         const h = hit(local(ev));
         if (h.kind === "cut") { const c = cuts().find(x => x.frame === h.frame); if (c) op({ op: "confirm_cut", frame: c.frame, confirmed: c.confirmed === false }); }
-        else if (h.kind === "mask") setMode("mask");
+        else if (h.kind === "mask") setMode(maskView());
         else if (h.kind === "chunk") { seek(x2f(local(ev).x)); splitAtPlayhead(); }
     });
     canvas.addEventListener("wheel", (ev) => {

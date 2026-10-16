@@ -60,6 +60,95 @@ def _ff():
     return tl._ffmpeg_exe()
 
 
+# pin level match (2026-10-15): a pinned frame comes back out of H3 about 2.3 levels darker than the take it was pinned
+# to (the 60 s test job, c2 -> c7: -2.7, -2.0, -2.2, -2.4, -2.2 at each join, flat inside each chunk; the VAE round trip
+# SatoDive reports as ~2.4% per hop), and each chunk pins to the last, so the picture slid ~15 levels by c7. The take's
+# pinned frames show the same moment as the pin, so the take is scaled, per channel, to match them before it is saved:
+# the next chunk then pins to a levelled frame.
+LEVEL_CLAMP = (0.8, 1.25)       # a larger difference is not a pin round trip: left alone, and flagged
+LEVEL_FLAG = 1.0                # luma levels: a take starting further off its pin than this, uncorrected, is flagged
+
+
+def _luma(rgb_mean):
+    return float(0.299 * rgb_mean[0] + 0.587 * rgb_mean[1] + 0.114 * rgb_mean[2])
+
+
+def pin_frames_u8(plan, job, desc, side, size):
+    """The frames a side of the take was pinned to, decoded from the pinned take at the source size (uint8), with the
+    take-relative frames they pin; None for no pin, a pin onto the original (anchored onto the source, not a take) or a
+    missing file."""
+    p = (desc.get("pins") or {}).get(side)
+    if not p or p.get("source") or not p.get("take"):
+        return None
+    _c, t = sp.find_take(plan, p["take"])
+    if t is None or not os.path.isfile(os.path.join(job, t["file"])):
+        return None
+    f0, f1 = (int(x) for x in p["frames"])
+    fr = int(round(float(desc["source"]["fps"])))
+    out = []
+    for f in tl._iter_frames(os.path.join(job, t["file"]), fr, f0 - int(t["render"][0]), f1 - int(t["render"][0]) + 1):
+        if (f.shape[1], f.shape[0]) != tuple(size):
+            import cv2
+            f = cv2.resize(f, tuple(size), interpolation=cv2.INTER_AREA)
+        out.append(f)
+    r0 = int(desc["render"][0])
+    return (out, list(range(f0 - r0, f1 - r0 + 1))) if out else None
+
+
+def level_gains(out_frames, pin_frames, masks=None, contrast=True):
+    """The per-channel transform that brings the take's pinned frames to the pin's: T = [scale, offset] (3 each), a
+    pixel becoming pixel * scale + offset. With contrast, the mean AND the spread (standard deviation) are matched
+    (scale = pin spread / take spread): the 60 s test job's c3 -> c8 (2026-10-16) kept its level with the mean alone but
+    the couch's contrast still rose ~1.5-2 a chunk, darker lines and muddier weave, each chunk sharpening its pin a
+    little more. Without, the mean only (scale = pin mean / take mean, offset 0). Returns (T, luma step take - pin,
+    clamped). masks: one bool array per frame, the pixels to measure (one region: the room or the person)."""
+    def stats(frames):
+        mu, sd = [], []
+        for k, f in enumerate(frames):
+            a = np.asarray(f, np.float64).reshape(-1, 3)
+            if masks is not None:
+                a = a[np.asarray(masks[k]).reshape(-1)]
+            mu.append(a.mean(0))
+            sd.append(a.std(0))
+        return np.mean(mu, 0), np.mean(sd, 0)
+    (o, so), (q, sq) = stats(out_frames), stats(pin_frames)
+    step = _luma(o) - _luma(q)
+    mean_raw = q / np.maximum(o, 1.0)
+    if contrast:
+        raw = sq / np.maximum(so, 0.5)
+        scale = np.clip(raw, *LEVEL_CLAMP)
+        offset = q - scale * o
+        clamped = bool(np.any(scale != raw) or np.any(np.clip(mean_raw, *LEVEL_CLAMP) != mean_raw))
+    else:
+        scale = np.clip(mean_raw, *LEVEL_CLAMP)
+        offset = np.zeros(3)
+        clamped = bool(np.any(scale != mean_raw))
+    return np.stack([scale, offset]), step, clamped
+
+
+LEVEL_MIN_REGION = 0.02         # a region smaller than this share of the frame takes the other region's gains
+
+
+def _soft_mask(mask, i, size):
+    """Frame i of a MASK [N, h, w] at size (w, h) as float32 0..1 (the last frame for held frames)."""
+    import cv2
+    m = mask[min(i, int(mask.shape[0]) - 1)]
+    m = m.detach().cpu().numpy() if isinstance(m, torch.Tensor) else np.asarray(m)
+    m = np.clip(m.astype(np.float32), 0, 1)
+    if (m.shape[1], m.shape[0]) != tuple(size):
+        m = cv2.resize(m, tuple(size), interpolation=cv2.INTER_LINEAR)
+    return m
+
+
+def gain_at(i, n, start, end):
+    """The gain for take frame i of n: the start pin's at the start, the end pin's at the end, a ramp between when
+    both are given, one constant when only one side is (save_take gives the start pin's only)."""
+    if start is not None and end is not None:
+        a = i / float(max(1, n - 1))
+        return start + (end - start) * a
+    return start if start is not None else end
+
+
 def encode(frames, w, h, fr, path, codec=CODEC_LOSSLESS, crf=12, wav=None, sr=48000):
     """uint8 RGB frames -> path, with the Timeline's cut arguments: FFV1 RGB planes + FLAC
     (lossless), or BT.709 h264 + AAC. Returns the frame count written."""
@@ -275,7 +364,8 @@ def _reserve_dir(plan_file, chunk_id, want):
 
 
 def save_take(chunk, images, source_mask=None, output_mask=None, marked_guide=None, take_codec=CODEC_LOSSLESS,
-              crf=12, score=True, mouth_sync=True, review_clip=True, prompt=None, extra_pnginfo=None, progress=None):
+              crf=12, score=True, mouth_sync=True, review_clip=True, prompt=None, extra_pnginfo=None, progress=None,
+              level_match=False):
     """Everything the node does. Returns (take entry, take folder, report)."""
     t0 = time.time()
     desc = chunk
@@ -310,12 +400,82 @@ def save_take(chunk, images, source_mask=None, output_mask=None, marked_guide=No
         flags.append({"code": "resized", "text": f"the render came back {iw}x{ih}; resized to the source's {W}x{H}"})
         print(f"[SeamStitch] Swap Take: warning - {flags[-1]['text']}")
 
-    def frames_u8():
+    def raw_u8(i):
         import cv2
+        f = to_u8(images[i])
+        if resize:
+            f = cv2.resize(f, (W, H), interpolation=cv2.INTER_AREA if iw > W else cv2.INTER_CUBIC)
+        return f
+
+    # the pin level match: measured on every pinned take, applied when level_match is on
+    level, gains, person_gains = {}, {"start": None, "end": None}, {"start": None, "end": None}
+    for side in ("start", "end"):
+        try:
+            pf = pin_frames_u8(plan, job, desc, side, (W, H))
+        except Exception as e:
+            print(f"[SeamStitch] Swap Take: level match ({side}) skipped: {e}")
+            pf = None
+        if not pf:
+            continue
+        pins_u8, idx = pf
+        idx = [i for i in idx if 0 <= i < keep][:len(pins_u8)]
+        if not idx:
+            continue
+        outs, pins_ = [raw_u8(i) for i in idx], pins_u8[:len(idx)]
+        # by region when the person's mask is here: H3 darkens the room more than the kept person when it redraws a
+        # pinned frame (the 60 s test job's c5, c6: one whole-frame gain matched the room and left her 1.4-1.5 lighter
+        # each chunk), so the room and the person each get the gains of their own pixels
+        g_person = None
+        if source_mask is not None and int(source_mask.shape[0]) >= 1:
+            pm = [_soft_mask(source_mask, i, (W, H)) > 0.5 for i in idx]
+            share = float(np.mean([m.mean() for m in pm]))
+            if LEVEL_MIN_REGION <= share <= 1 - LEVEL_MIN_REGION:
+                g, step, clamped = level_gains(outs, pins_, [~m for m in pm])
+                gp, step_p, clamped_p = level_gains(outs, pins_, pm)
+                g_person = None if clamped_p else gp
+            else:
+                g, step, clamped = level_gains(outs, pins_)
+        else:
+            g, step, clamped = level_gains(outs, pins_)
+        # the start pin only: the take is levelled to the chunk before it. An end pin is the next chunk's take, which can
+        # be an older one from before a fix (the 60 s test job's c7, 2026-10-16: ramping to a stale, drifted c8 darkened c7's
+        # end 12-18% and muddied the couch); its step is measured and flagged, and Assemble's lock smooths that join
+        applied = bool(level_match) and not clamped and side == "start"
+        level[side] = {"step": round(step, 2), "gains": [round(float(x), 4) for x in g[0]],
+                       "offsets": [round(float(x), 2) for x in g[1]], "applied": applied}
+        if g_person is not None:
+            level[side].update(person_step=round(step_p, 2), person_gains=[round(float(x), 4) for x in g_person[0]],
+                               person_offsets=[round(float(x), 2) for x in g_person[1]])
+        if applied:
+            gains[side] = g
+            person_gains[side] = g_person if g_person is not None else g
+        if side == "end" and abs(step) > LEVEL_FLAG:
+            flags.append({"code": "level_end", "text": f"ends {abs(step):.1f} levels {'darker' if step < 0 else 'brighter'} "
+                          f"than the next chunk's take it's pinned to: that take may be from before a fix; re-roll "
+                          f"the next chunk after this one"})
+        elif abs(step) > LEVEL_FLAG and not applied:
+            flags.append({"code": "level", "text": f"started {abs(step):.1f} levels {'darker' if step < 0 else 'brighter'} "
+                          f"than its {side} pin and wasn't levelled ("
+                          + ("level_match is off" if not level_match else "too large a difference to be the pin's")
+                          + "): the next chunk pinned to it carries the step"})
+
+    regional = any(person_gains[k] is not None and gains[k] is not None and not np.array_equal(person_gains[k], gains[k])
+                   for k in gains)
+
+    def frames_u8():
         for i in range(keep):
-            f = to_u8(images[i])
-            if resize:
-                f = cv2.resize(f, (W, H), interpolation=cv2.INTER_AREA if iw > W else cv2.INTER_CUBIC)
+            f = raw_u8(i)
+            g = gain_at(i, keep, gains["start"], gains["end"])
+            if g is not None:
+                if regional:
+                    gp = gain_at(i, keep, person_gains["start"], person_gains["end"])
+                    m = _soft_mask(source_mask, i, (W, H))[..., None]
+                    sc = g[0].astype(np.float32)[None, None, :] * (1 - m) + gp[0].astype(np.float32)[None, None, :] * m
+                    of = g[1].astype(np.float32)[None, None, :] * (1 - m) + gp[1].astype(np.float32)[None, None, :] * m
+                    f = np.clip(f.astype(np.float32) * sc + of + 0.5, 0, 255).astype(np.uint8)
+                else:
+                    f = np.clip(f.astype(np.float32) * g[0].astype(np.float32) + g[1].astype(np.float32) + 0.5, 0,
+                                255).astype(np.uint8)
             yield f
 
     tid, tdir = _reserve_dir(plan_file, desc["chunk"], desc["take"])
@@ -385,13 +545,15 @@ def save_take(chunk, images, source_mask=None, output_mask=None, marked_guide=No
                 json.dump(wf, f)
 
         settings = settings_summary(prompt)
+        if desc.get("pass1") and not all(isinstance(v, int) for v in settings.get("pass1") or [None]):
+            settings["pass1"] = desc["pass1"]       # H3's size linked from the Planner: the size it got
         settings.update(mark=spl._parse_value(opts.get("mark", True)), conform=bool(desc.get("conform")),
                         options=opts, anchors=desc.get("anchors"))
         take = {"id": tid, "created": sp.now(), "state": "ok", "seed": desc["seed"], "render": [r0, r1],
                 "held": held, "length": L, "frames": keep, "splits": desc["splits"], "pins": desc["pins"],
                 "file": f"{rel}/{take_name}", "proxy": f"{rel}/proxy.mp4", "take_codec": take_codec,
                 "prompt_sha1": desc["prompt_sha1"], "settings": settings, "files": files, "scores": scores,
-                "gpu_s": round(t0 - float(desc.get("started") or t0)), "save_s": None, "flags": flags,
+                "gpu_s": round(t0 - float(desc.get("started") or t0)), "save_s": None, "flags": flags, "level": level,
                 "nonce": desc.get("nonce"), "planner_rev": desc.get("plan_rev")}
     except BaseException:
         shutil.rmtree(tdir, ignore_errors=True)
@@ -465,6 +627,19 @@ class SeamStitchSwapTake:
                 "source_mask": ("MASK", {"tooltip": "SAM3 person mask of the source frames (the marking group's)."}),
                 "output_mask": ("MASK", {"tooltip": "SAM3 person mask of the render (group Swap Score)."}),
                 "marked_guide": ("IMAGE", {"tooltip": "What H3 saw as its guide; saved when the chunk's mark option is on."}),
+                "free_memory_after": ("BOOLEAN", {"default": True, "tooltip":
+                    "When this run finishes, ComfyUI drops its models and its cache, as its own /free does, so the next "
+                    "chunk starts on a clear machine (each render reloads its models, about half a minute). Off: the "
+                    "models stay loaded, and on a 64 GB PC the second render in a row can page to disk (2026-10-15: "
+                    "282 s a step against 76, ComfyUI holding 67.7 GB)."}),
+                "level_match": ("BOOLEAN", {"default": True, "tooltip":
+                    "Before the take is saved, match its brightness and contrast, per colour channel, to the frame it "
+                    "was pinned to at its start (the same moment): a pinned frame comes out of H3 2-3 levels darker and "
+                    "a little harsher, and with each chunk pinned to the last the picture slid darker and muddier chunk "
+                    "by chunk. With the person's mask wired (source_mask) the room and the person are matched apart. "
+                    "Only the start pin is followed: an end that lands more than 1 level off the next chunk's take gets "
+                    "a level_end flag (that take may be older), and a start too far off to be the pin's (or level_match "
+                    "off) gets a level flag."}),
             },
             "hidden": {"prompt": "PROMPT", "extra_pnginfo": "EXTRA_PNGINFO"},
         }
@@ -478,7 +653,8 @@ class SeamStitchSwapTake:
                    "lineage, masks, scores and a review clip of both joins. Refuses anything that isn't 1:1.")
 
     def save(self, chunk, images, take_codec=CODEC_LOSSLESS, crf=12, score=True, mouth_sync=True, review_clip=True,
-             source_mask=None, output_mask=None, marked_guide=None, prompt=None, extra_pnginfo=None):
+             source_mask=None, output_mask=None, marked_guide=None, free_memory_after=True, level_match=True,
+             prompt=None, extra_pnginfo=None):
         pbar = None
         try:
             from comfy.utils import ProgressBar
@@ -491,16 +667,25 @@ class SeamStitchSwapTake:
                 pbar.update_absolute(int(100 * i / n), 100)
 
         take, tdir, report = save_take(chunk, images, source_mask, output_mask, marked_guide, take_codec, crf, score,
-                                       mouth_sync, review_clip, prompt, extra_pnginfo, progress)
+                                       mouth_sync, review_clip, prompt, extra_pnginfo, progress, level_match)
         lines = [f"{take['id']}: {take['frames']} frames {take['render'][0]}-{take['render'][1]}, seed {take['seed']}"
                  + (f", pose IoU {take['scores']['pose_iou']}" if take["scores"].get("pose_iou") is not None else "")
                  + (f", mouth {take['scores']['mouth']}" if take["scores"].get("mouth") is not None else "")]
+        lv = take.get("level") or {}
+        for side in ("start", "end"):
+            if lv.get(side):
+                x = lv[side]
+                lines.append(f"  level ({side} pin): started {x['step']:+.1f} levels off its pin"
+                             + (f" (the person {x['person_step']:+.1f})" if "person_step" in x else "") + "; "
+                             + ("levelled" if x["applied"] else "not levelled"))
         quality = ss.chunk_flags(take["scores"])
         for j in report["joins"]:
             fl = j.get("frame_luma") or {}
             cl = j.get("char_luma") or {}
             lines.append(f"  {j['split']} @ {j['frame']}: {j['type']}, splice {j['splice']}, {j.get('override') or j['repair']}; "
                          f"jump {fl.get('at_splice')} / char {cl.get('at_splice')}, ratio {j.get('join_ratio')}")
+        if free_memory_after and request_free():
+            lines.append("  memory: ComfyUI drops its models and cache when this run finishes")
         print("[SeamStitch] Swap Take: " + "\n[SeamStitch] Swap Take: ".join(lines))
         try:
             from server import PromptServer
@@ -516,6 +701,21 @@ class SeamStitchSwapTake:
               "text": "\n".join(lines)}
         return {"ui": {"seamstitch_swap_take": [ui]},
                 "result": (os.path.join(tdir, os.path.basename(take["file"])), take["id"], json.dumps(report))}
+
+
+def request_free():
+    """Ask ComfyUI to unload its models and drop its cache once the running prompt is done: the flags its /free route
+    sets, which the prompt worker applies between queue items (dropping them mid-run would only make later nodes
+    reload). Measured idle after a render: 54.6 -> 11.1 GB private, the card 31.4 -> 1.7 GB. -> True when asked."""
+    try:
+        from server import PromptServer
+        q = PromptServer.instance.prompt_queue
+        q.set_flag("unload_models", True)
+        q.set_flag("free_memory", True)
+        return True
+    except Exception as e:
+        print(f"[SeamStitch] Swap Take: couldn't ask ComfyUI to free its memory: {e}")
+        return False
 
 
 def output_person(desc, track_data, source_mask, images=None, sheet=None):

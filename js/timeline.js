@@ -89,11 +89,14 @@ function nextMark(marks, f, dir) {
     return best;
 }
 const JOIN_KINDS = { straight: "straight", forward: "forward lock", entry: "entry lock", exit: "exit lock", pending: "pending" };
+// A join a later splice bridged (a result carried it on) takes the colour of that splice's
+// own rating; it is drawn hollow, and stepping through the marks passes over it.
 function joinColour(j) {
+    if (j.fixed) return j.fixed.verdict === "red" ? "#f87171" : j.fixed.verdict === "amber" ? "#fbbf24" : "#34d399";
     return j.verdict === "red" ? "#f87171" : j.verdict === "amber" ? "#fbbf24" : j.verdict === "green" ? "#34d399" : "#9ca3af";
 }
-// Only paths that could be a Swap assembly are asked about; the server decides.
-const maybeSwapPath = (p) => /(^|[\\/])seamstitch_swap[\\/][^\\/]+[\\/]assembled[\\/]/.test(p || "");
+// The marks still to fix: what [ / ] and "join ▸" step through.
+const openMarks = (marks) => marks.filter(m => !m.fixed);
 
 function snapUp(n, grid) {
     n = Math.max(1, Math.round(n));
@@ -108,6 +111,37 @@ function snapNearest(n, grid) {
     n = Math.max(floor, Math.round(n));
     const lo = Math.floor((n - base) / step) * step + base, hi = lo + step;
     return (n - lo) < (hi - n) ? lo : hi;
+}
+
+// Bridge sizes for the cut / join menus: frames regenerated either side, chosen so the generator's length
+// (the range + context_frames each side + extend_frames) lands exactly on its grid, near 0.5 / 1 / 1.5 / 2 / 2.5 / 3 s.
+// A size off the grid is rounded up by the generator, so the bridge comes back longer than the range and plays
+// slow: join 422 (2026-10-14), 24 + 24 frames with context 5 -> 58 -> 73 for minimax, 63 frames for 48 (x1.3).
+// Odd totals put the extra frame before the cut.
+const BRIDGE_SECONDS = [0.5, 1, 1.5, 2, 2.5, 3];
+function bridgeChoices(grid, k, ext, fr) {
+    fr = fr || 24;
+    const fixed = 2 * (k | 0) + (ext | 0);
+    const totals = [];
+    if (grid === GRID_NONE) {
+        for (const sec of BRIDGE_SECONDS) totals.push(Math.max(2, 2 * Math.round(sec * fr / 2)));
+    } else {
+        const step = grid === GRID_MM ? 17 : 8, base = grid === GRID_MM ? 5 : 1, floor = grid === GRID_MM ? 5 : 9;
+        const exact = [];
+        for (let g = base; g <= Math.max(...BRIDGE_SECONDS) * fr * 1.5 + fixed + step; g += step) {
+            if (g >= floor && g - fixed >= 2) exact.push(g - fixed);
+        }
+        for (const sec of BRIDGE_SECONDS) {
+            const want = sec * fr;
+            let best = null;
+            for (const t of exact) if (best === null || Math.abs(t - want) < Math.abs(best - want)) best = t;
+            if (best !== null) totals.push(best);
+        }
+    }
+    return [...new Set(totals)].sort((a, b) => a - b).map(t => ({
+        before: Math.ceil(t / 2), after: Math.floor(t / 2), total: t, seconds: t / fr, gen: t + fixed,
+        exact: grid !== GRID_NONE,
+    }));
 }
 
 function hideWidget(w) {
@@ -397,7 +431,9 @@ function buildTimeline(node) {
     // saved in the workflow. Re-read every time (an assembly's report can be rewritten).
     async function loadSwapJoins(paths) {
         const swap = {};
-        await Promise.all(paths.filter(maybeSwapPath).map(async p => {
+        // Every clip is asked about: an assembly, or a result that carried a job's joins on
+        // (it can be saved anywhere). The server answers only for files it listed or wrote.
+        await Promise.all(paths.map(async p => {
             try {
                 const r = await api.fetchApi(`/seamstitch/timeline/swap_joins?path=${encodeURIComponent(p)}`);
                 if (r.ok) swap[p] = await r.json();
@@ -521,9 +557,10 @@ function buildTimeline(node) {
             g.strokeStyle = col; g.globalAlpha = 0.45;
             g.beginPath(); g.moveTo(x, RULER_H); g.lineTo(x, TRACK_Y + TRACK_H); g.stroke(); g.globalAlpha = 1;
             g.fillStyle = col;
-            g.beginPath(); g.moveTo(x - r, RULER_H - 2 * r); g.lineTo(x + r, RULER_H - 2 * r); g.lineTo(x, RULER_H); g.fill();
+            g.beginPath(); g.moveTo(x - r, RULER_H - 2 * r); g.lineTo(x + r, RULER_H - 2 * r); g.lineTo(x, RULER_H); g.closePath();
+            if (m.fixed) { g.lineWidth = 1.5 * U; g.stroke(); g.lineWidth = 1; } else g.fill();
             if (m.type !== "straight" || hot) {
-                const label = `${m.frame}`;
+                const label = m.fixed ? `✓${m.frame}` : `${m.frame}`;
                 g.font = font(9, true);
                 const lw = g.measureText(label).width;
                 if (x - lw / 2 > lastLabel + 4 || hot) {
@@ -754,11 +791,22 @@ function buildTimeline(node) {
         setTarget(defaultGapMarks(gapInfo()));
         toast("gap opened - I / O mark the footage either side to regenerate with it; drag them on the purple row", "ok");
     }
-    function bridgeSeam(i, each) {
+    function bridgeSeam(i, before, after = before) {
         const x = layout()[i];
         const c = x.cut;
-        setTarget({ mode: "replace", start: c - each, end: c + each - 1 });
-        toast(`marked ${each} frames either side of the cut - drag the purple row's edges to adjust`, "ok");
+        setTarget({ mode: "replace", start: c - before, end: c + after - 1 });
+        toast(`marked ${before} + ${after} frames around the cut - drag the purple row's edges to adjust`, "ok");
+    }
+    // The menu rows for bridging a cut or a join: one per size in bridgeChoices.
+    function bridgeItems(what, run) {
+        const g = grid();
+        return bridgeChoices(g, ctxK(), extN(), S.fr).map(b => ({
+            text: `bridge this ${what}: ${b.before} + ${b.after} frames (${b.total}, ${b.seconds.toFixed(2)} s)`,
+            title: b.exact
+                ? `The generator gets ${b.gen} frames (${b.total} + ${ctxK()} context each side${extN() ? ` + ${extN()} extend` : ""}), exactly on its ${g} grid: nothing is rounded up, so the bridge plays at real speed`
+                : "Replace mode across the cut",
+            run: () => run(b.before, b.after),
+        }));
     }
 
     async function addFiles(files, at) {
@@ -820,11 +868,9 @@ function buildTimeline(node) {
     }
 
     function seamMenu(ev, i) {
-        const each = Math.max(4, Math.round(S.fr / 4));
         popup(ev, [
             { label: "the cut between these two clips" },
-            { text: `bridge this cut: regenerate ${each} frames each side`, title: "Replace mode across the join - the S5-proven way to smooth a hard cut", run: () => bridgeSeam(i, each) },
-            { text: `bridge this cut: regenerate ${each * 2} frames each side`, run: () => bridgeSeam(i, each * 2) },
+            ...bridgeItems("cut", (b, a) => bridgeSeam(i, b, a)),
             { text: "open a gap here (insert new frames)", title: "Insert mode: nothing is replaced, new frames go in between", run: () => openGapAt(i) },
             { sep: true },
             { text: "jump here", run: () => seekStrip(layout()[i].strip) },
@@ -855,7 +901,8 @@ function buildTimeline(node) {
         await addPath(a.path, at);
         const x = layout()[at];
         const marks = joinMarks(layout(), S.swap, S.fr).filter(m => m.i === at);
-        const worst = marks.find(m => m.verdict === "red") || marks.find(m => m.verdict === "amber");
+        const open = openMarks(marks);
+        const worst = open.find(m => m.verdict === "red") || open.find(m => m.verdict === "amber");
         S.sel = at;
         if (worst) seekStrip(worst.strip); else if (x) seekStrip(x.strip);
         refresh();
@@ -864,35 +911,36 @@ function buildTimeline(node) {
 
     function joinLabel(m) {
         const chunks = m.left_chunk && m.right_chunk ? ` · ${m.left_chunk} → ${m.right_chunk}` : "";
-        return `Swap join at frame ${m.frame} · ${JOIN_KINDS[m.type] || m.type}${m.verdict ? ` · ${m.verdict}` : ""}${chunks}`;
+        const fixed = m.fixed ? ` · fixed${m.fixed.ratio != null ? ` (${m.fixed.ratio.toFixed(2)}x)` : ""} in ${m.fixed.result}` : "";
+        return `Swap join at frame ${m.frame} · ${JOIN_KINDS[m.type] || m.type}${m.verdict ? ` · ${m.verdict}` : ""}${chunks}${fixed}`;
     }
     // Returns false when the strip has no marks (so the [ / ] keys stay free on any other strip).
     function stepJoin(dir) {
-        const marks = joinMarks(layout(), S.swap, S.fr);
-        if (!marks.length) return false;
+        const all = joinMarks(layout(), S.swap, S.fr);
+        if (!all.length) return false;
+        const marks = openMarks(all);
+        if (!marks.length) { toast(`all ${all.length} joins are fixed`, "ok"); return true; }
         const m = nextMark(marks, S.playhead, dir);
-        if (!m) { toast(dir > 0 ? "no join after the playhead" : "no join before the playhead", "warn"); return true; }
+        if (!m) { toast(dir > 0 ? "no join left to fix after the playhead" : "no join left to fix before the playhead", "warn"); return true; }
         seekStrip(m.strip);
         toast(`${joinLabel(m)} - click its mark to bridge it`, m.verdict === "red" ? "err" : m.verdict === "amber" ? "warn" : "ok");
         return true;
     }
 
     function joinMenu(ev, m) {
-        const each = Math.max(4, Math.round(S.fr / 4));
         popup(ev, [
             { label: joinLabel(m) },
-            { text: `bridge this join: regenerate ${each} frames each side`, title: "Replace mode across the join, as ✂ does between two clips", run: () => bridgeJoin(m, each) },
-            { text: `bridge this join: regenerate ${each * 2} frames each side`, run: () => bridgeJoin(m, each * 2) },
+            ...bridgeItems("join", (b, a) => bridgeJoin(m, b, a)),
             { text: "open a gap here (insert new frames)", title: "Splits the clip at the join and opens a gap there", run: () => gapAtJoin(m) },
             { sep: true },
             { text: "jump here", run: () => seekStrip(m.strip) },
         ]);
     }
-    function bridgeJoin(m, each) {
+    function bridgeJoin(m, before, after = before) {
         const c = stripToCut(m.strip);
-        setTarget({ mode: "replace", start: c - each, end: c + each - 1 });
-        seekStrip(Math.max(0, m.strip - each - 12));
-        toast(`marked ${each} frames either side of the join at ${m.frame} - drag the purple row's edges to adjust`, "ok");
+        setTarget({ mode: "replace", start: c - before, end: c + after - 1 });
+        seekStrip(Math.max(0, m.strip - before - 12));
+        toast(`marked ${before} + ${after} frames around the join at ${m.frame} - drag the purple row's edges to adjust`, "ok");
     }
     function gapAtJoin(m) {
         const x = layout()[m.i];
@@ -1311,8 +1359,12 @@ function buildTimeline(node) {
             save(false);
             await probeAll();
             requestFit();
-            seekStrip(0);
-            toast("the result is now the strip - mark the next thing to fix", "ok");
+            const all = joinMarks(layout(), S.swap, S.fr), open = openMarks(all);
+            const next = open.find(m => m.verdict === "red") || open.find(m => m.verdict === "amber") || open[0];
+            seekStrip(next ? next.strip : 0);
+            toast(all.length
+                ? `the result is now the strip · ${all.length - open.length} of ${all.length} joins fixed${next ? ` · at frame ${next.frame} - mark it to fix` : ""}`
+                : "the result is now the strip - mark the next thing to fix", "ok");
         },
         state: S,
     };

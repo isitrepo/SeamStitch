@@ -363,7 +363,7 @@ def assemble(plan_file, hand_back=12, fmt="video/h264-mp4", crf=12, pix_fmt="yuv
         if sp.is_kept(c):                       # kept as the original (§4.10): the source, untouched
             eff.append((dict(sp.source_take(N), _path=source), sp.ORIGINAL))
             continue
-        t, state = sp.effective_take(c)
+        t, state = sp.effective_take(c, sp.job_mode(plan))
         if t is not None and not sp.take_covers(t, *c["deliver"]):
             flags.append({"chunk": c["id"], "code": "range_changed",
                           "text": f"chunk {c['id']}: take {t['id']} renders {t['render']}, which no longer "

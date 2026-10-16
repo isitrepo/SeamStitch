@@ -166,6 +166,9 @@ HS_MIN = 40                  # saturation and value floor: grey, white and black
 SHEET_TIE = 0.02             # sheet matches this close are a tie: the overlap with her source mask decides
 SHEET_MIN_PX = 200           # coloured pixels a person needs before their colours are compared
 SHEET_FRAMES = 12            # frames sampled per shot for a person's colours
+# a candidate far smaller than the person she replaces isn't her (wrestling c4-t009, 2026-10-09: SAM3 followed 64 people,
+# most of them the crowd, and a spectator in pink won on the sheet's colours, 0.52, with 0.0005 overlap)
+PICK_MIN_AREA = 0.25
 COLOUR_W = 640               # frames (and the sheet) are compared at about this width
 
 
@@ -240,6 +243,10 @@ def pick_person(objects, src_masks, cuts=(), frames=None, sheet=None):
             if not here or len(seen) < 0.5 * len(here):
                 continue
             ov = float(np.mean([iou(src[i], objects[i, j]) or 0.0 for i in here]))
+            src_area = float(np.mean([src[i].sum() for i in here])) or 1.0
+            obj_area = float(np.mean([mask_thumb(objects[i, j], PICK_W, PICK_H).sum() for i in seen]))
+            if obj_area < PICK_MIN_AREA * src_area:
+                continue
             sm = None
             if ref is not None:
                 samp = seen[:: max(1, len(seen) // SHEET_FRAMES)]

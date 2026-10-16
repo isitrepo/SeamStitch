@@ -120,7 +120,7 @@ def test_descriptor_refuses_an_empty_prompt_and_snapshots_the_run():
         spl.render_descriptor(p, "plan.json", {"action": "render", "chunk": p["chunks"][1]["id"]})
     d = spl.render_descriptor(p, "plan.json", {"action": "render", "chunk": p["chunks"][1]["id"], "prompt": "x", "seed": 7,
                                                 "options": {"mark": False}})
-    assert d["prompt"] == "x" and d["seed"] == 7 and d["options"] == {"mark": False} and d["length"] == 209
+    assert d["prompt"] == "x" and d["seed"] == 7 and d["options"] == {"mark": False, "mode": "character"} and d["length"] == 209
     assert d["take"] == f"{p['chunks'][1]['id']}-t001" and d["render_fps"] == 24 and d["source"]["fps"] == 25
     with pytest.raises(spl.PlannerError, match="run.action"):
         spl.parse_run('{"action": "explode"}')
@@ -157,7 +157,7 @@ def test_planner_render_run_emits_frames_audio_and_pins_from_the_takes(nodes):
     assert all(isinstance(o, spl.ExecutionBlocker) for o in out[15:17]) and out[18] is False
     assert draft.message is None
     assert length == c[1]["length"] == images.shape[0] and (w, h) == (W_, H_) and (frate, sfr) == (24, 25)
-    assert prompt == f"prompt {c[1]['id']}" and seed == 11 and json.loads(opts) == {"mark": True}
+    assert prompt == f"prompt {c[1]['id']}" and seed == 11 and json.loads(opts) == {"mark": True, "mode": "character"}
     held = c[1]["held"]
     n = r[1][1] - r[1][0] + 1
     src = nodes["src"]
@@ -179,7 +179,7 @@ def test_planner_render_run_emits_frames_audio_and_pins_from_the_takes(nodes):
 def test_planner_assemble_and_empty_runs_block_the_render(nodes):
     out = _run(nodes, "assemble")["result"]
     assert out[14] == nodes["plan"] and all(isinstance(o, spl.ExecutionBlocker) for o in out[:14] + out[15:])
-    assert len(out) == len(spl.RETURN_TYPES) == len(spl.RETURN_NAMES) == 19
+    assert len(out) == len(spl.RETURN_TYPES) == len(spl.RETURN_NAMES) == 21
     out = spl.SeamStitchSwapPlanner().plan("t", "", 39, 6, 5, 10, 260, True, "")["result"]
     assert all(isinstance(o, spl.ExecutionBlocker) for o in out)
     sp.update_plan(nodes["plan"], lambda p: p["chunks"][2].__setitem__("prompt", " "))
@@ -242,3 +242,120 @@ def test_a_windowed_assembly_is_the_full_assembly_over_those_frames(job, tmp_pat
     assert len(win) == 41 and np.array_equal(win, full[20:61])
     assert [j["splice"] for j in rep["joins"]] == [30, 55]
     assert len(sp.load_plan(job["plan"])["assembled"]) == 1          # a window never writes the plan
+
+
+def test_take_asks_comfyui_to_free_its_memory_after_the_run(monkeypatch):
+    # 2026-10-15: a second render in a row paged to disk (282 s a step against 76) with ComfyUI holding 67.7 GB; the
+    # Take node sets the flags ComfyUI's /free sets, which its prompt worker applies once the run is done
+    import types
+    import server
+    import swap_take as st
+    flags = {}
+    q = types.SimpleNamespace(set_flag=lambda k, v: flags.__setitem__(k, v))
+    monkeypatch.setattr(server.PromptServer, "instance", types.SimpleNamespace(prompt_queue=q, routes=None))
+    assert st.request_free() is True and flags == {"unload_models": True, "free_memory": True}
+    monkeypatch.setattr(server.PromptServer, "instance", types.SimpleNamespace())
+    assert st.request_free() is False                       # no queue (tests, an old ComfyUI): nothing breaks
+    opt = st.SeamStitchSwapTake.INPUT_TYPES()["optional"]
+    assert list(opt)[-2:] == ["free_memory_after", "level_match"] and opt["free_memory_after"][1]["default"] is True
+
+
+def test_take_levels_itself_to_its_pin(nodes):
+    # 2026-10-15: each pinned take came out ~2.3 levels darker than its pin, and the job slid ~15 levels by c7; the
+    # take is scaled per channel so its pinned frames match the pin before it is saved
+    import swap_take as st
+    p = sp.load_plan(nodes["plan"])
+    c = p["chunks"]
+    r = [x["render"] for x in c]
+    A = _clip(r[0][1] - r[0][0] + 1, 100, 0.5, seed=2)
+    _add_take(nodes, 0, A, r[0])
+    desc, images = _run(nodes, "render", chunk=c[1]["id"], seed=11)["result"][:2]
+    keep = desc["length"] - desc["held"]
+    dark = torch.clamp(images * 0.9, 0, 1)                          # the render 10% darker than its source
+    off, tdir0, _ = st.save_take(desc, dark, review_clip=False)
+    assert off["level"]["start"]["step"] < -1 and not off["level"]["start"]["applied"]
+    assert [f["code"] for f in off["flags"]] == ["level"]            # off: flagged, the frames kept as rendered
+    on, tdir, _ = st.save_take(_run(nodes, "render", chunk=c[1]["id"], seed=12)["result"][0], dark, review_clip=False,
+                               level_match=True)
+    lv = on["level"]["start"]
+    assert lv["applied"] and all(0.8 <= g <= 1.25 for g in lv["gains"]) and on["flags"] == []
+    got = _frames(os.path.join(tdir, "take.mkv"))
+    pin = np.stack(A[r[1][0] - r[0][0]:r[1][0] - r[0][0] + 5]).astype(np.float64)
+    assert abs(got[:5].mean() - pin.mean()) < 1.0                   # the pinned frames now sit at the pin's level
+    assert got.shape[0] == keep
+    # gains: clamped differences are left alone; a ramp between two pins
+    g, step, clamped = st.level_gains([np.full((4, 4, 3), 50, np.uint8)], [np.full((4, 4, 3), 100, np.uint8)])
+    assert clamped and abs(step + 50) < 1e-6
+    a, b = np.array([1.1, 1.1, 1.1]), np.array([0.9, 0.9, 0.9])
+    assert np.allclose(st.gain_at(0, 11, a, b), a) and np.allclose(st.gain_at(10, 11, a, b), b)
+    assert np.allclose(st.gain_at(5, 11, a, None), a) and st.gain_at(3, 11, None, None) is None
+
+
+def test_take_levels_the_room_and_the_person_apart(nodes):
+    # the 60 s test job's c5, c6 (2026-10-15): H3 darkened the room more than the kept person; one whole-frame gain matched
+    # the room and left her ~1.5 lighter each chunk. With the person's mask, each region gets its own gains.
+    import swap_take as st
+    p = sp.load_plan(nodes["plan"])
+    c = p["chunks"]
+    r = [x["render"] for x in c]
+    A = _clip(r[0][1] - r[0][0] + 1, 100, 0.5, seed=2)
+    _add_take(nodes, 0, A, r[0])
+    desc, images = _run(nodes, "render", chunk=c[1]["id"], seed=11)["result"][:2]
+    L = desc["length"]
+    h, w = int(images.shape[1]), int(images.shape[2])
+    mask = torch.zeros((L, h, w))
+    mask[:, :, : w // 2] = 1.0                                          # the person: the left half
+    # the render: the pinned frames as the left take shows them, then the room darkened 12%, the person only 4%
+    base = images.clone()
+    k0 = r[1][0] - r[0][0]
+    for i in range(5):
+        base[i] = torch.from_numpy(A[k0 + i].astype(np.float32) / 255.0)
+    m3 = mask[..., None]
+    gen = torch.clamp(base * (0.88 * (1 - m3) + 0.96 * m3), 0, 1)
+    take, tdir, _ = st.save_take(desc, gen, source_mask=mask, review_clip=False, level_match=True)
+    lv = take["level"]["start"]
+    assert lv["applied"] and "person_gains" in lv
+    assert all(abs(g - 1 / 0.88) < 0.03 for g in lv["gains"]) and all(abs(g - 1 / 0.96) < 0.03 for g in lv["person_gains"])
+    got = _frames(os.path.join(tdir, "take.mkv")).astype(np.float64)
+    pinf = np.stack(A[k0:k0 + 5]).astype(np.float64)
+    for sl in (np.s_[:, :, : w // 2 - 2], np.s_[:, :, w // 2 + 2:]):  # each half lands on the pin's level
+        assert abs(got[:5][sl].mean() - pinf[sl].mean()) < 1.0
+
+
+def test_take_levels_to_its_start_pin_only_and_flags_a_stale_end(nodes):
+    # the 60 s test job's c7 (2026-10-16): ramping to an end pin on an older, drifted next take darkened c7's end 12-18%
+    import swap_take as st
+    p = sp.load_plan(nodes["plan"])
+    c = p["chunks"]
+    r = [x["render"] for x in c]
+    A = _clip(r[0][1] - r[0][0] + 1, 100, 0.5, seed=2)
+    _add_take(nodes, 0, A, r[0])
+    D = [np.clip(f.astype(np.int16) - 40, 0, 255).astype(np.uint8) for f in _clip(r[2][1] - r[2][0] + 1, 100, 0.5, seed=5)]
+    _add_take(nodes, 2, D, r[2])                                     # the next chunk: an old, much darker take
+    desc, images = _run(nodes, "render", chunk=c[1]["id"], seed=11)["result"][:2]
+    if not desc["pins"].get("end"):
+        pytest.skip("the fixture's right split isn't anchored")
+    take, tdir, _ = st.save_take(desc, images, review_clip=False, level_match=True)
+    assert take["level"]["end"]["applied"] is False and "level_end" in [f["code"] for f in take["flags"]]
+    got = _frames(os.path.join(tdir, "take.mkv"))
+    keep = desc["length"] - desc["held"]
+    exp_last = st.to_u8(images[keep - 1]).astype(np.float64)
+    st_ = take["level"].get("start", {})
+    g = np.asarray(st_["gains"]) if st_.get("applied") else np.ones(3)
+    o = np.asarray(st_["offsets"]) if st_.get("applied") else np.zeros(3)
+    assert abs(got[keep - 1].astype(np.float64).mean() - np.clip(exp_last * g + o, 0, 255).mean()) < 1.5   # not pulled to the dark take
+
+
+def test_level_match_matches_the_spread_too():
+    # the 60 s test job's c3 -> c8 (2026-10-16): the mean held but the couch's contrast rose ~1.5-2 a chunk; the transform
+    # now matches each channel's spread (standard deviation) at the pinned frame as well as its mean
+    import swap_take as st
+    rng = np.random.default_rng(0)
+    pin = rng.normal(100, 20, (32, 32, 3)).clip(0, 255)
+    out = ((pin - 100) * 1.15 + 97).clip(0, 255)                    # the take: 15% more contrast, 3 levels darker
+    T, step, clamped = st.level_gains([out], [pin])
+    assert not clamped and np.allclose(T[0], 1 / 1.15, atol=0.02) and step < -2
+    fixed = out * T[0] + T[1]
+    assert abs(fixed.mean() - pin.mean()) < 0.5 and abs(fixed.std() - pin.std()) < 0.5
+    T2, _, _ = st.level_gains([out], [pin], contrast=False)       # the mean only: no offset
+    assert np.allclose(T2[1], 0) and abs((out * T2[0]).mean() - pin.mean()) < 0.5

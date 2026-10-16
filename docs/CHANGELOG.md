@@ -1,5 +1,126 @@
 # Changelog
 
+## 0.5.0 — Swap: background replace mode, single pass, level and contrast match, forward chain
+
+### New
+
+- **Swap: one *Character replace | Background replace* switch per job.** Flipping it stashes the job's subject
+  and chunk prompts for the mode it leaves and brings back the other mode's; each mode chooses its own take, and
+  the strip lists only the mode's takes. It replaces the invert tick. The strip's view menu gains *mask:
+  character* and *mask: background*.
+- **Character replace can mark the backdrop** (`mark: person | backdrop`, for green screens; experimental).
+- **Swap Draft Prompts, the timeline templates:**
+  - the draft says where the person is, from the chunk's source mask: the place in the frame, the framing, the
+    direction, when they leave and come back, and the pace; moments where the mask shows nobody lose their
+    pose and hand lines;
+  - with someone else in the clip, each moment also asks where they touch, and each shot gets one sentence on
+    how the two sit against each other;
+  - a person the scene missed is found from the moment answers and described by how they look; the background
+    is a list, and the crowd, screens and overlays stay in it;
+  - **lean** (now the default): the timeline's questions written short: one look sentence, the character's look
+    moved onto the person, the background named once, hand lines only when something is handled.
+- **Draft node: Qwen's questions are editable** (`qwen_questions`, one `###` section per question, the built-in
+  text pre-filled), with a large prompt editor in the strip and a clearer panel drag bar.
+- **Draft node: the template list shows the background templates too** (`background replace (Ref2VA)` and
+  `... 2 references`), and lean forms of both (`background replace (Ref2VA, lean)` and `..., lean, 2 references`): the
+  same one-call draft of the kept person with the six sections written short (one place sentence, one clause per
+  retention line, no style paragraph; the summary says nothing of the original backdrop remains and that a
+  colour-marked guide only shows where the backdrop is; the retention lines keep the guide's `(appears ...)`
+  labels; the opening sentence and the first shot establish the place, as the guide's example does, and the first
+  shot says a still camera outright, in positive terms (see the template review below), when Qwen
+  saw one hold still, and the `<Video 1>` line leaves out shot-size words such as "in medium close-up", both
+  background forms: three zooming renders had them, and without them the zoom came on slower and smaller); picked from
+  the list only. The job's mode still decides the kind: a background job always drafts with a background
+  template (a character one in the widget, its default, lets a wired `sheet_2` pick the 2 references one), a
+  character job given a background template drafts with the default character one, and the draft's report
+  says which template was used.
+- **Draft templates reviewed against H3's prompt guides** (`ref-en.txt`, `base-en.txt`), the same fixes in every
+  template, so the forms stop drifting apart:
+  - later shots open on their cut time, in the guide's form ("[Shot 2] At 00:03.500, the shot cuts to the next
+    part of `<Video 1>`."), on the render's clock, where they said "Jump cut.";
+  - a camera Qwen saw holding still is said inside each shot in the guide's own words ("The camera holds a static
+    shot"), in every template (it was the lean background forms only, as "stays fixed at the same distance and
+    angle");
+  - the lean character forms gain the guide's opening sentence before `[Shot 1]` and the `(appears ...)` labels on
+    their retention lines;
+  - background forms: `<Video 1>` is `partially_preserved` (its backdrop is replaced; `fully_preserved` said to keep
+    all of it), the kept person's place and size come from the chunk's mask as in the timeline templates, and a
+    shot whose place holds says it holds to the end of the shot (also in the timeline templates); the full form
+    takes the lean form's `<Picture 2>` retention wording and says where the person sits or stands, not "the floor";
+  - H3-facing text says things positively: "never moves to the centre, never poses for the camera" and "no
+    transition, dissolve or morph" are gone (Qwen's one-call and per-shot questions also stop telling it to put a
+    centred person off-centre);
+  - the background question asks how much of the person shows, no shot-size names, and only what happens; Qwen's
+    "across all images" talk is taken out; `overall_soundscape` ends on a full stop.
+  A box saved with the old built-in questions still counts as unedited.
+- **Background drafts: `<Picture 2>` stays out of the shots, and the lean form takes the layout from `<Picture 1>`
+  only** (as the full form does). Same chunk, same seed: the lean form with "its surfaces detailed from `<Picture 2>`"
+  in Shot 1 zoomed and panned fast, twice; the lean form with one picture and the full form with two held the camera
+  (a picture cited in a shot is a frame anchor in the guide). Qwen's "centered" goes where the mask puts the person
+  elsewhere.
+- **Background drafts: the second picture is described as the view it is.** Qwen now says whether it is a closer
+  view, another angle or the same view (it was asked for "the surface seen close up", so a same-view picture was
+  written as a close-up); only a closer view is "surface detail only", the others "add detail of the same place". A
+  subject line drafted before this reads as the same view; delete it in the strip to have it asked again.
+- **Swap Planner: `forward_chain`** (appended last, off). On: a render pins to the newest take of the chunk before it,
+  chosen or not, and never to the chunk after it, so renders queued in order (c6, c7, c8 ...) each start from the take
+  just made and an old take further on can't pull a chunk towards it. Off: pins follow the chosen takes on both sides,
+  as before (re-rolling one chunk between two chosen takes). Choices in the strip are untouched. Found when queued
+  re-rolls each pinned to the previous roll, and c7 to an old c8 at its end (zoom x1.46, a darker, muddier couch).
+- **Swap Take: `level_match`** (appended last, on). A pinned frame comes back out of H3 about 2-3 levels darker than the
+  take it was pinned to, and each chunk pins to the last, so a 60 s job slid ~15 levels darker by its seventh chunk
+  (a 60 s background-replace test job: -3.0, -2.7, -2.2, -2.4 at the joins, flat inside each chunk). The take is scaled per colour channel so
+  its pinned frames match the pin (the same moment) before it is saved (gains 1.07-1.10 on that job), a ramp between the
+  two when both ends are pinned; gains outside 0.8-1.25 are left alone. A take starting more than 1 level off its pin that
+  isn't levelled (off, or too large a difference) gets a `level` flag in its takes list; take.json records each side's
+  step and gains.
+  With the person's mask wired (source_mask), the room and the person are levelled apart: H3 darkens the room more than
+  the kept person when it redraws a pinned frame, and one whole-frame gain left her ~1.5 lighter each chunk (c5, c6).
+  Levelled to the start pin only (the chunk before): an end pin is the next chunk's take, which can be older and drifted
+  (c7: ramping to a stale c8 darkened its end 12-18%); an end more than 1 level off gets a `level_end` flag instead.
+  It matches contrast too: each channel's spread (standard deviation) as well as its mean, as pixel * scale + offset
+  (take.json: gains + offsets). The mean alone held c3-c8's level, but the couch's contrast rose ~1.5-2 a chunk; the saved
+  c6-c8 takes measure 5-6% more spread in the room than their pins (3-4% on the person).
+- **Swap Take: `free_memory_after`** (appended last, on). When the run finishes, ComfyUI drops its models and its cache,
+  as its own /free does, so the next chunk starts on a clear machine however it was queued (the strip already freed
+  before its own renders; a render queued from ComfyUI's Run button didn't). A second render in a row had paged to disk:
+  282 s a step against 76, ComfyUI holding 67.7 GB; a free took it from 54.6 to 11.1 GB.
+- **Lean draft templates frozen (2026-10-14).** Words for a view, a size or a framing act as camera cues in H3: the
+  background question no longer asks how much of the person shows ("in full view", "from the waist up" and the like
+  leave Qwen's camera line), the lean background summary drops the "colour-marked area" sentence, character placement
+  says only the share of the frame's height and the head near the top (no "framed close", no "cutting across her
+  body": a seated whole figure with her feet on the bottom edge reads the same to the mask, and H3 pushed in), and Qwen's
+  "during this entire segment" is taken out. Same-chunk renders showed the mask leaks follow the guide's strength and the
+  seed, not the wording; any later wording change needs a same-seed A/B first.
+- **Draft node: `free_memory_after`** (on) unloads ComfyUI's models and hands back cached GPU and pinned memory
+  when a draft is done, and reports how much was freed.
+- **Draft node: a second reference picture** (`sheet_2`, appended last). Qwen describes it once per job and the
+  job's subject defines it on its own line as `<Picture 2>`; in the prompts every template cites it inside
+  `<Subject 1>`'s line, with what it provides (H3's prompt guide keeps a standalone `<Picture N>` line for a target
+  frame or a shot-planning anchor, and a close-up declared that way zoomed the shot in). Templates using it: `background replace (Ref2VA, 2
+  references)` (picked when `sheet_2` is wired on a background job) and `character replace (Ref2VA, timeline,
+  lean, 2 references)`. A subject already in use is kept as it is and gains the `<Picture 2>` line under it the
+  first time a draft runs with `sheet_2` wired (even when every chunk already has a prompt; the report says so).
+- **Swap Planner: `first_pass_megapixels`** (appended last, off at 0). Above 0 the render is a single pass at that
+  size (1.0 = H3's own canvas): a multiple of 32 each way, as close to the source's shape as those allow (1312 x
+  736 for 1280 x 720; `render_width` / `render_height` carry it), and the pins arrive stretched to exactly that
+  size. The Guides node centre-crops each pin to the canvas's shape, so a canvas off the source's shape (1344 x
+  768 on 1280 x 720: 1.6% of the width) cost a strip of every pin, and with each chunk pinned to the one before,
+  the picture crept wider chunk by chunk (the couch got longer, the luggage left the frame). The two-pass flow
+  keeps its pins at the source's size, for the refine pass.
+- **Swap Planner: H3's first pass in the source's shape** (`render_width` / `render_height`, outputs 19 and 20,
+  about 0.3 MP, a multiple of 32). The example wires them into the H3 node; a saved workflow needs those two
+  links, or a portrait source renders landscape and is stretched.
+
+### Fixed
+
+- Swap Output Person never picks someone far smaller than the person being replaced (a spectator in the stands).
+- Swap Draft Prompts: a prompt named `<Picture 2>` whenever the job's subject carried the picture's line, even with
+  `sheet_2` unwired or a template that doesn't use it, so H3 was told about a picture it never got. The prompts now
+  leave it out unless a second picture is in use (the job's subject keeps its line, and the report says so).
+- Swap Draft Prompts, background: a missing pronoun line from Qwen made the person "they" in the subject and
+  the retention lines while the shot said "her"; the pronoun is now read off who the person is, then off the shots.
+
 ## 0.4.2 — Background replace template; phone rotation
 
 ### New

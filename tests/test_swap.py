@@ -653,3 +653,27 @@ def test_the_lock_heading_follows_the_source_not_a_bent_line():
     # three frames, each carried by the source's change since: a still source averages the last three
     k3 = sj.source_heading(left, sj.source_ratios(np.full((4, 3), 50.0)))
     assert np.allclose(k3, left[-3:].mean(0)) and sj.HEADING_K == 3
+
+
+def test_forward_chain_pins_to_the_newest_take_before_and_never_the_next(job):
+    # 2026-10-16: renders queued c6 -> c8 each pinned to the CHOSEN take before them (the previous roll, not the one
+    # just made), and c7 got an end pin to an old c8; the forward chain pins to the newest take before, no end pin
+    import swap_planner as spl
+    p = sp.load_plan(job["plan"])
+    r = [c["render"] for c in p["chunks"]]
+    A1 = _clip(r[0][1] - r[0][0] + 1, 100, 0.5, seed=2)
+    t1 = _add_take(job, 0, A1, r[0])
+    t2 = _add_take(job, 0, A1, r[0])                                  # a newer roll, not chosen
+    sp.update_plan(job["plan"], lambda q: q["chunks"][0].__setitem__("chosen", t1))
+    tn = _add_take(job, 2, _clip(r[2][1] - r[2][0] + 1, 100, 0.5, seed=3), r[2])   # an old take after
+    p = sp.load_plan(job["plan"])
+    off, _ = spl.resolve_pins(p, 1)
+    assert off["start"]["take"] == t1                                 # off: the chosen one, as before
+    sp.update_plan(job["plan"], lambda q: spl.apply_op(q, {"op": "settings", "settings": {"forward_chain": True}}))
+    p = sp.load_plan(job["plan"])
+    on, notes = spl.resolve_pins(p, 1)
+    assert on["start"]["take"] == t2 and on["end"] is None and any("forward chain" in n for n in notes)
+    assert [c["render"] for c in p["chunks"]] == r                    # a pin switch doesn't move the chunks
+    assert tn                                                         # (the next chunk did have a take to pin to)
+    assert "forward_chain" in spl.SeamStitchSwapPlanner.INPUT_TYPES()["optional"]
+    assert list(spl.SeamStitchSwapPlanner.INPUT_TYPES()["optional"])[-1] == "forward_chain"

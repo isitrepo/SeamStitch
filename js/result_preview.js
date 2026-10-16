@@ -175,21 +175,27 @@ function build(node) {
     }, { passive: false });
     video.addEventListener("timeupdate", () => {
         drawBar();
-        if (loopSeam != null && D && video.currentTime * D.frame_rate > loopSeam + D.frame_rate * 1.0) {
-            video.currentTime = Math.max(0, (loopSeam - D.frame_rate) / D.frame_rate);
+        if (loopSeam != null && D && video.currentTime * D.frame_rate > loopSeam.b) {
+            video.currentTime = Math.max(0, loopSeam.a / D.frame_rate);
         }
     });
     video.addEventListener("seeked", drawBar);
+    // a loop that runs to the last frame: the video stops there instead of passing b
+    video.addEventListener("ended", () => { if (loopSeam != null && D) { video.currentTime = loopSeam.a / D.frame_rate; video.play().catch(() => { }); } });
     if (video.requestVideoFrameCallback) {
         const onFrame = () => { drawBar(); video.requestVideoFrameCallback(onFrame); };
         video.requestVideoFrameCallback(onFrame);
     }
 
-    function seamLoop(f) {
-        loopSeam = f;
-        video.currentTime = Math.max(0, (f - D.frame_rate) / D.frame_rate);
+    // Loop strip frames a..b (loopSeam = {a, b}): a second either side of a seam, or the
+    // whole bridge with half a second of footage either side.
+    function spanLoop(a, b) {
+        loopSeam = { a: Math.max(0, a), b: Math.min(D.frames - 1, b) };
+        video.currentTime = loopSeam.a / D.frame_rate;
         video.play().catch(() => { });
     }
+    function seamLoop(f) { spanLoop(f - D.frame_rate, f + D.frame_rate); }
+    function bridgeLoop() { spanLoop(D.joins[0].frame - D.frame_rate / 2, D.joins[1].frame + D.frame_rate / 2); }
 
     async function saveFrame() {
         if (!D) return;
@@ -228,12 +234,13 @@ function build(node) {
             button("▶ seam 1", "Loop a second either side of the join into the new frames", () => seamLoop(d.joins[0].frame)),
             button("▶ seam 2", "Loop a second either side of the join back to the footage", () => seamLoop(d.joins[1].frame)),
             button("▶ worst inside", "Loop around the biggest picture change inside the new frames", () => seamLoop(d.joins[2].frame)),
+            button("▶ whole bridge", "Loop all the new frames, with half a second of footage either side", bridgeLoop),
             button("■ stop", "", () => { loopSeam = null; video.pause(); }),
             button("📷 save frame", "Save the frame under the playhead as a PNG (output/seamstitch_frames), colour-converted from the saved video - use it as a first/last-frame reference instead of a screen grab", saveFrame),
             button("use as timeline", "Put this result on the SeamStitch Timeline node as its only clip, so the next splice starts from here", () => useAsTimeline(d.timeline_path || d.path)));
         const delta = d.inserted - d.removed;
         const where = d.saved ? `saved: ${d.path.split(/[\\/]/).pop()}` : d.path.split(/[\\/]/).pop();
-        note.textContent = `${d.frames} frames at ${d.frame_rate} fps · ${d.removed} replaced by ${d.inserted} (${delta >= 0 ? "+" : ""}${delta} = ${(delta / d.frame_rate).toFixed(2)}s) · ${where}${d.play_path && d.play_path !== d.path ? " (playing a proxy)" : ""}`;
+        note.textContent = `${d.frames} frames at ${d.frame_rate} fps · ${d.removed} replaced by ${d.inserted} (${delta >= 0 ? "+" : ""}${delta} = ${(delta / d.frame_rate).toFixed(2)}s) · ${where}${d.play_path && d.play_path !== d.path ? " (playing a proxy)" : ""}${d.carried ? ` · ${d.carried.job || "Swap"} joins: ${d.carried.fixed} of ${d.carried.joins} fixed, ${d.carried.left} left - "use as timeline" shows them` : ""}`;
         note.title = d.path;
         drawBar();
     }

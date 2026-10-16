@@ -104,6 +104,16 @@ def _decode_independently(path, indices, fps):
     return out
 
 
+def _same_frame(got, ref):
+    """The same frame decoded two ways. The nodes decode YUV with accurate rounding and full-resolution chroma
+    interpolation (video_colour.to_rgb24, 2026-10-13); this test's plain decode doesn't, so a few pixels along colour
+    edges differ by more than rounding (4.mp4: mean 1.2 levels, 99% within 3, 0.5% of pixels up to 29). A different
+    frame differs everywhere: so the mean and the 99th percentile are checked, not the maximum."""
+    import numpy as np
+    d = np.abs(np.asarray(got, np.float64) - np.asarray(ref, np.float64)) * 255.0
+    return d.mean() < 2.0 and np.percentile(d, 99) <= 4.0
+
+
 def test_insert_anchors_match_independent_decode(loader_mod):
     import numpy as np
     path = os.path.join(VIDS, "4.mp4")
@@ -119,8 +129,7 @@ def test_insert_anchors_match_independent_decode(loader_mod):
     assert count == 49 and dur == pytest.approx(49 / 24)
     ref = _decode_independently(path, {join - 1, join}, 24)
     for got, idx in ((first, join - 1), (last, join)):
-        diff = np.abs(got[0].numpy() - ref[idx]).max()
-        assert diff < 3 / 255.0, (idx, diff)   # only YUV->RGB matrix rounding may differ
+        assert _same_frame(got[0].numpy(), ref[idx]), idx
     assert audio["waveform"].shape[-1] < 4096
     assert full["waveform"].shape[-1] > 4096
 
@@ -212,8 +221,7 @@ def test_insert_anchors_are_decode_order_on_an_offset_stream(offset_clip, loader
                 break
 
     for got, idx in ((first, join - 1), (last, join)):
-        diff = np.abs(got[0].numpy() - want[idx]).max()
-        assert diff < 3 / 255.0, f"anchor for decode frame {idx} is off (max diff {diff})"
+        assert _same_frame(got[0].numpy(), want[idx]), f"anchor for decode frame {idx} is off"
 
     # And the two anchors must actually be different frames, which is the symptom
     # that reached the render: a freeze is what you get when they are the same.
@@ -256,8 +264,7 @@ def test_context_frames_are_decode_order_either_side_of_the_range(which, offset_
     want = _decode_order(path, set(range(got_sf - k, got_sf)) | set(range(got_ef + 1, got_ef + 1 + k)))
     for i in range(k):
         for got, idx in ((start_ctx[i], got_sf - k + i), (end_ctx[i], got_ef + 1 + i)):
-            diff = np.abs(got.numpy() - want[idx]).max()
-            assert diff < 3 / 255.0, f"context frame for decode index {idx} is off (max diff {diff})"
+            assert _same_frame(got.numpy(), want[idx]), f"context frame for decode index {idx} is off"
 
 
 def test_context_zero_is_first_and_last_frame(loader_mod):

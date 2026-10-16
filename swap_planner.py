@@ -70,14 +70,52 @@ ACTION_RENDER, ACTION_ASSEMBLE, ACTION_DRAFT, ACTION_MARK, ACTION_NONE = "render
 ACTIONS = (ACTION_RENDER, ACTION_ASSEMBLE, ACTION_DRAFT, ACTION_MARK, ACTION_NONE)
 
 # Outputs are only ever appended (links are by slot). 15-16 carry a mark run (the source's person mask,
-# tracked up front and cached per range); 17-18 a render run's cached source mask, when one covers it.
+# tracked up front and cached per range); 17-18 a render run's cached source mask, when one covers it; 19-20 the
+# first pass's size in the source's shape (H3's width / height).
 RETURN_TYPES = (CHUNK_TYPE, "IMAGE", "AUDIO", "STRING", "INT", "INT", "IMAGE", "IMAGE", "INT", "INT", "INT",
-                "INT", "STRING", "STRING", "STRING", MARK_TYPE, "IMAGE", "MASK", "BOOLEAN")
+                "INT", "STRING", "STRING", "STRING", MARK_TYPE, "IMAGE", "MASK", "BOOLEAN", "INT", "INT")
 RETURN_NAMES = ("chunk", "images", "audio", "prompt", "seed", "length", "start_pins", "end_pins", "width",
                 "height", "frame_rate", "source_frame_rate", "options", "draft_plan", "assemble_plan",
-                "mark_chunk", "mark_images", "source_mask", "has_source_mask")
+                "mark_chunk", "mark_images", "source_mask", "has_source_mask", "render_width", "render_height")
 OUT_OPTIONS, OUT_DRAFT, OUT_ASSEMBLE = 12, 13, 14
 OUT_MARK_CHUNK, OUT_MARK_IMAGES, OUT_SOURCE_MASK, OUT_HAS_MASK = 15, 16, 17, 18
+OUT_RENDER_W, OUT_RENDER_H = 19, 20
+# H3's first pass: about 0.3 MP (736 x 416 for 16:9). The example graph had 736 x 416 fixed, so a portrait source
+# (the 720 x 1280 wrestling clip, 2026-10-09) was generated landscape and stretched to 9:16 by the resize.
+PASS1_AREA = 736 * 416
+PASS1_STEP = 32
+
+
+def pass1_size(width, height, area=PASS1_AREA, step=PASS1_STEP):
+    """The first pass's width and height: the source's shape at about `area` pixels, multiples of `step`
+    (1920 x 1080 -> 736 x 416, 720 x 1280 -> 416 x 736, 1080 x 1080 -> 544 x 544)."""
+    a = float(width) / float(height)
+    h = (area / a) ** 0.5
+    w = a * h
+    return max(step, int(round(w / step)) * step), max(step, int(round(h / step)) * step)
+
+
+def fit_size(width, height, megapixels, step=32, tolerance=0.15):
+    """A single pass's width and height: multiples of `step` within `tolerance` of `megapixels` that keep the
+    source's shape closest (1280 x 720 at 1.0 -> 1312 x 736, off by 0.3% where the two-sides-rounded size 1344 x 736
+    is off by 2.7%; 720 x 1280 -> 736 x 1312; 1080 x 1080 -> 1024 x 1024). The pins are stretched to this size, so
+    what shape error is left is undone when the render is stretched back to the source's size."""
+    import math
+    a = float(width) / float(height)
+    area = float(megapixels) * 1e6
+    best = None
+    lo, hi = max(step, int(math.sqrt(area * (1 - tolerance) * a) // step) * step), int(math.sqrt(area * (1 + tolerance) * a) // step + 2) * step
+    for w in range(lo, hi + 1, step):
+        for h in (int(round(w / a / step)) * step + d for d in (-step, 0, step)):
+            if h < step:
+                continue
+            miss = abs(w * h / area - 1.0)
+            if miss > tolerance:
+                continue
+            key = (abs(math.log((w / float(h)) / a)), miss)
+            if best is None or key < best[0]:
+                best = (key, (w, h))
+    return best[1] if best else pass1_size(width, height, area=area, step=step)
 SCENE_THRESHOLD = 0.15           # ffmpeg scene score (> 0.15 found every cut of the 978-frame test clip)
 # same-room jump cuts score lower: the test clip's 131, 448, 669, 713, 764 and 850 read 0.10-0.14 (B5a); they come in as
 # faint suggestions only (never confirmed by "detect + plan"), for the user to confirm or delete by eye
@@ -86,7 +124,8 @@ WEAK_NEAR = 2                    # a weak hit this close to a stronger one is th
 
 # widget name -> plan setting
 WIDGET_SETTINGS = {"target_render_frames": "target_render", "overlap_frames": "overlap", "anchor_frames": "anchors",
-                   "floor_frames": "floor", "ceiling_frames": "ceiling", "conform_to_24fps": "conform_to_24fps"}
+                   "floor_frames": "floor", "ceiling_frames": "ceiling", "conform_to_24fps": "conform_to_24fps",
+                   "first_pass_megapixels": "first_pass_mp", "forward_chain": "forward_chain"}
 
 
 class PlannerError(Exception):
@@ -154,6 +193,45 @@ def create_job(job, source, settings=None, out_dir=None):
 # plan edits (pure: plan dict in, plan dict changed in place)
 # ---------------------------------------------------------------------------
 
+# what each mode keeps of its own: the subject (a character or a place) and each chunk's prompt and draft
+_MODE_PLAN_KEYS = ("subject", "subject_draft", "subject_pronoun")
+_MODE_CHUNK_KEYS = ("prompt", "prompt_state", "draft", "drafted", "chosen")     # each mode chooses its own take
+
+
+def switch_mode(plan, mode):
+    """Character replace <-> background replace. Nothing is cleared: the mode being left keeps its subject and
+    every chunk's prompt (under by_mode), the other mode's come back (empty the first time: draft prompts fills
+    them). Takes stay where they are; only the mode's own count (sp.effective_take). The cached masks serve both
+    (the paint mask is inverted at render)."""
+    old = sp.job_mode(plan)
+    plan.pop("invert", None)
+    plan["mode"] = mode
+    for c in plan.get("chunks", []):                      # the mode is per job now (a chunk's own invert is gone)
+        (c.get("options") or {}).pop("invert", None)
+    if mode == old:
+        return {"mode": mode, "switched": False}
+    store = plan.setdefault("by_mode", {})
+    store[old] = {"plan": {k: plan.get(k) for k in _MODE_PLAN_KEYS},
+                  "chunks": {c["id"]: {k: c.get(k) for k in _MODE_CHUNK_KEYS} for c in plan.get("chunks", [])}}
+    back = store.pop(mode, None) or {}
+    for k in _MODE_PLAN_KEYS:
+        plan[k] = (back.get("plan") or {}).get(k)
+    plan["subject"] = plan.get("subject") or ""
+    saved = back.get("chunks") or {}
+    restored = 0
+    for c in plan.get("chunks", []):
+        s = saved.pop(c["id"], None)
+        if s:
+            restored += 1
+        for k in _MODE_CHUNK_KEYS:
+            c[k] = (s or {}).get(k)
+        c["prompt"] = c.get("prompt") or ""
+        c["prompt_state"] = c.get("prompt_state") or ("edited" if c["prompt"].strip() else "empty")
+    if saved:                                             # chunks re-split meanwhile: their prompts are kept, unused
+        plan.setdefault("by_mode_unplaced", []).extend(dict(v, chunk=k, mode=mode, at=sp.now()) for k, v in saved.items())
+    return {"mode": mode, "switched": True, "from": old, "restored_prompts": restored}
+
+
 def _split(plan, body):
     sid = body.get("split") or body.get("id")
     for d in plan.get("splits", []):
@@ -196,7 +274,8 @@ def apply_op(plan, body):
                 raise sp.PlanError(f"unknown setting {k!r}")
             s[k] = type(sp.DEFAULT_SETTINGS[k])(v)
         plan["settings"] = s
-        geo = True
+        # the render's size doesn't move a chunk: every other setting rebuilds the geometry
+        geo = any(k not in ("first_pass_mp", "forward_chain") for k in (body.get("settings") or {}))
     elif op == "add_cut":
         f = int(body["frame"])
         cuts = [c for c in plan.get("cuts", []) if c["frame"] != f]
@@ -263,7 +342,8 @@ def apply_op(plan, body):
         c["prompt_state"] = "edited"
     elif op == "set_options":
         c = _chunk(plan, body["chunk"])
-        c["options"] = dict(c.get("options") or {}, **(body.get("options") or {}))
+        c["options"] = dict(c.get("options") or {}, **{k: v for k, v in (body.get("options") or {}).items()
+                                                      if k != "invert"})      # the mode is per job
     elif op == "seed_mode":
         c = _chunk(plan, body["chunk"])
         m = body.get("seed_mode", "new")
@@ -283,11 +363,19 @@ def apply_op(plan, body):
         res["subject_replaced_in"] = n
     elif op == "set_target":
         # the job's who-to-replace (SAM3's source text, the drafter's main person; "" = "person" and the drafter's
-        # pick) and invert (mark everything but them); a chunk's own go in its options
+        # pick); a chunk's own goes in its options. ("invert" from an older strip: the mode switch.)
         if "target" in body:
             plan["target"] = (body.get("target") or "").strip()
         if "invert" in body:
-            plan["invert"] = bool(body["invert"])
+            res.update(switch_mode(plan, sp.MODE_BACKGROUND if body["invert"] else sp.MODE_CHARACTER))
+    elif op == "set_guide":
+        if body.get("guide") not in sp.GUIDES:
+            raise sp.PlanError(f"guide is one of {', '.join(sp.GUIDES)}, not {body.get('guide')!r}")
+        plan["guide"] = body["guide"]
+    elif op == "set_mode":
+        if body.get("mode") not in sp.MODES:
+            raise sp.PlanError(f"mode is one of {', '.join(sp.MODES)}, not {body.get('mode')!r}")
+        res.update(switch_mode(plan, body["mode"]))
     elif op == "adopt_subject_draft":
         if not (plan.get("subject_draft") or "").strip():
             raise sp.PlanError("there's no subject draft to adopt")
@@ -299,6 +387,9 @@ def apply_op(plan, body):
             c, _t = sp.find_take(plan, take)
             if body.get("chunk") and _chunk(plan, body["chunk"]) is not c:
                 raise sp.PlanError(f"take {take} isn't chunk {body['chunk']}'s")
+            if sp.take_mode(_t) != sp.job_mode(plan):
+                raise sp.PlanError(f"take {take} is a {sp.take_mode(_t)} replace take: switch the job to "
+                                   f"{sp.take_mode(_t).capitalize()} replace to choose it")
             c["chosen"] = take
         else:
             _chunk(plan, body["chunk"])["chosen"] = None
@@ -782,7 +873,7 @@ def plan_text(plan):
             + (" ⚠" if d["id"] in warn_splits else "") for d in plan["splits"]))
     lines.append("chunks:")
     for c in plan.get("chunks", []):
-        t, state = sp.effective_take(c)
+        t, state = sp.effective_take(c, sp.job_mode(plan))
         fill = c.get("fill")
         fill_s = f" +{fill['kind']} {fill['frames']}" if fill else ""
         takes = ", ".join(x["id"].split("-")[-1] + ("*" if x["id"] == c.get("chosen") else "")
@@ -848,7 +939,7 @@ def chunk_status(plan, jd):
                         "takes": len(c.get("takes") or []), "prompt": "not needed", "draft": False, "mask": None,
                         "mask_empty": [], "mask_filled": [], "take_flags": {}, "rank": []})
             continue
-        t, st = sp.effective_take(c)
+        t, st = sp.effective_take(c, sp.job_mode(plan))
         if t is not None and not sp.take_covers(t, *c["deliver"]):
             st = "range changed"
         elif t is not None and not os.path.isfile(os.path.join(jd, t["file"])):
@@ -955,6 +1046,16 @@ def output_dir_or(out_dir):
 # a render run
 # ---------------------------------------------------------------------------
 
+def newest_take(chunk, mode, frames):
+    """(take, "newest"): the chunk's most recent usable take in the job's mode that covers the frames, or (None,
+    "pending"). The forward chain pins to it, chosen or not."""
+    ok = [t for t in (chunk.get("takes") or []) if t.get("state", "ok") == "ok" and sp.take_mode(t) == mode
+          and sp.take_covers(t, *frames)]
+    if not ok:
+        return None, "pending"
+    return max(ok, key=lambda t: (t.get("created") or "", t.get("id") or "")), "newest"
+
+
 def resolve_pins(plan, k):
     """Which pins chunk k gets, from the lineage at this moment: every anchored side whose
     neighbour has an effective take covering the K frames. {side: {"take", "frames"} | None},
@@ -964,6 +1065,7 @@ def resolve_pins(plan, k):
     K = int(sp._settings(plan.get("settings"))["anchors"])
     splits = {d["id"]: d for d in plan.get("splits", [])}
     pins, notes = {"start": None, "end": None}, []
+    forward = bool(sp._settings(plan.get("settings")).get("forward_chain"))
     if K <= 0:
         return pins, ["anchor_frames is 0: no pins"]
     if sp.is_kept(c):
@@ -973,17 +1075,20 @@ def resolve_pins(plan, k):
     if k > 0 and left and left["mode"] == sp.MODE_ANCHORED and sp.is_kept(chunks[k - 1]):
         pins["start"] = {"source": True, "frames": [r0, r0 + K - 1]}       # anchored onto the original
     elif k > 0 and left and left["mode"] == sp.MODE_ANCHORED:
-        t, _st = sp.effective_take(chunks[k - 1])
         f = [r0, r0 + K - 1]
+        t, _st = (newest_take(chunks[k - 1], sp.job_mode(plan), f) if forward
+                  else sp.effective_take(chunks[k - 1], sp.job_mode(plan)))
         if t is not None and sp.take_covers(t, *f):
             pins["start"] = {"take": t["id"], "frames": f}
         else:
             notes.append(f"start: {chunks[k - 1]['id']} has no take covering {f[0]}-{f[1]}: free start")
-    if k + 1 < len(chunks):
+    if forward:
+        notes.append("end: forward chain is on: no end pin (the chunk after is rendered from this one)")
+    elif k + 1 < len(chunks):
         right = splits.get(chunks[k + 1].get("left"))
         if right and right["mode"] == sp.MODE_ANCHORED:
             f = [r1 - K + 1, r1]
-            t, _st = sp.effective_take(chunks[k + 1])
+            t, _st = sp.effective_take(chunks[k + 1], sp.job_mode(plan))
             if int(c.get("held") or 0):
                 notes.append("end: the render ends in held frames, so it can't be pinned at its end")
             elif sp.is_kept(chunks[k + 1]):
@@ -1019,6 +1124,7 @@ def render_descriptor(plan, plan_file, run, settings=None):
     options.pop("invert", None)
     if sp.chunk_invert(plan, c):
         options["invert"] = True
+    options["mode"] = sp.job_mode(plan)             # the take's mode, whichever way the guide marks
     splits = {d["id"]: d for d in plan.get("splits", [])}
     left = splits.get(c.get("left"))
     right = splits.get(plan["chunks"][k + 1].get("left")) if k + 1 < len(plan["chunks"]) else None
@@ -1086,22 +1192,29 @@ def render_inputs(desc, job_dir, plan):
     if desc["conform"] and desc["render_fps"] != fr:
         wav = tl.conform_audio(wav, sr, total, fr)
     audio = {"waveform": torch.from_numpy(np.ascontiguousarray(wav, dtype=np.float32)).unsqueeze(0), "sample_rate": sr}
+    # the render's size. first_pass_mp 0: the two-pass first pass (~0.3 MP) and pins at the source's size, which the
+    # refine pass's own guides resize. > 0: a single pass at that size, and the pins arrive STRETCHED to it: the guides
+    # node would otherwise centre-crop each pin to the canvas's shape, and a canvas a hair off the source's shape
+    # (1344 x 768 against 1280 x 720) cost a strip of the picture per chunk, chunk after chunk (the couch got longer).
+    mp = float(sp._settings(plan.get("settings")).get("first_pass_mp") or 0.0)
+    desc["pass1"] = list(fit_size(w, h, mp) if mp > 0 else pass1_size(w, h))
+    pin_size = tuple(desc["pass1"]) if mp > 0 else (w, h)
     pins = {}
     for side in ("start", "end"):
         p = desc["pins"].get(side)
         if not p:
-            pins[side] = torch.zeros((0, h, w, 3), dtype=torch.float32)
+            pins[side] = torch.zeros((0, pin_size[1], pin_size[0], 3), dtype=torch.float32)
             continue
         if p.get("source"):                      # anchored onto the original: the source's own frames
             f0, f1 = p["frames"]
-            pins[side] = decode_frames(path, fr, f0, f1 - f0 + 1, (w, h))
+            pins[side] = decode_frames(path, fr, f0, f1 - f0 + 1, pin_size)
             continue
         _c, t = sp.find_take(plan, p["take"])
         tp = os.path.join(job_dir, t["file"])
         if not os.path.isfile(tp):
             raise PlannerError(f"pins for {desc['chunk']} ({side}): take {t['id']}'s file is missing: {tp}")
         f0, f1 = p["frames"]
-        pins[side] = decode_frames(tp, fr, f0 - int(t["render"][0]), f1 - f0 + 1, (w, h))
+        pins[side] = decode_frames(tp, fr, f0 - int(t["render"][0]), f1 - f0 + 1, pin_size)
     return frames, audio, pins, (w, h, fr)
 
 
@@ -1195,6 +1308,22 @@ class SeamStitchSwapPlanner:
                     "Set by the Planner's UI (or a script) before each queue: what this run does."}),
                 "ui_state": ("STRING", {"default": "", "tooltip": "The strip's zoom and selection."}),
             },
+            "optional": {
+                # appended last, so a saved workflow's widget values keep their places
+                "first_pass_megapixels": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 2.0, "step": 0.05, "tooltip":
+                    "0: the two-pass first pass (about 0.3 MP in the source's shape; the pins arrive at the source's "
+                    "size, for the refine pass). Above 0: a single pass at this many megapixels (1.0 = H3's own canvas) "
+                    "in the source's shape, a multiple of 32 each way, wired from render_width / render_height into "
+                    "the H3 node: the pins arrive stretched to exactly that size, so the guides node doesn't crop a "
+                    "strip off every pin (it did, 1.6% of the width per chunk at 1344 x 768 on a 1280 x 720 source, "
+                    "and the picture crept wider chunk by chunk)."}),
+                "forward_chain": ("BOOLEAN", {"default": False, "tooltip":
+                    "On: a render pins to the NEWEST take of the chunk before it (not the chosen one) and never to the "
+                    "chunk after it, so renders queued in order (c6, c7, c8 ...) each start from the take just made, "
+                    "and an old take further down the chain can't pull a chunk towards it. Your choices in the strip "
+                    "stay yours: this only decides what a render pins to. Off: pins follow the chosen takes on both "
+                    "sides, for re-rolling one chunk between two takes you've chosen."}),
+            },
         }
 
     RETURN_TYPES = RETURN_TYPES
@@ -1218,10 +1347,12 @@ class SeamStitchSwapPlanner:
         return h.hexdigest()
 
     def plan(self, job, source, target_render_frames=209, overlap_frames=12, anchor_frames=5, floor_frames=124,
-             ceiling_frames=209, conform_to_24fps=True, run="", ui_state=""):
+             ceiling_frames=209, conform_to_24fps=True, run="", ui_state="", first_pass_megapixels=0.0,
+             forward_chain=False):
         widgets = {"target_render_frames": target_render_frames, "overlap_frames": overlap_frames,
                    "anchor_frames": anchor_frames, "floor_frames": floor_frames, "ceiling_frames": ceiling_frames,
-                   "conform_to_24fps": conform_to_24fps}
+                   "conform_to_24fps": conform_to_24fps, "first_pass_megapixels": first_pass_megapixels,
+                   "forward_chain": bool(forward_chain)}
         settings = {WIDGET_SETTINGS[k]: v for k, v in widgets.items()}
         r = parse_run(run)
         jd, pp = job_paths(job)
@@ -1258,6 +1389,7 @@ class SeamStitchSwapPlanner:
                 c["rendering"]["started"] = sp.now()
             plan = sp.update_plan(pp, mark)
             desc["plan_rev"] = plan["rev"]
+            out[OUT_RENDER_W], out[OUT_RENDER_H] = desc["pass1"]          # set by render_inputs, with the pins' size
             out[:13] = [desc, frames, audio, desc["prompt"], desc["seed"], desc["length"], pins["start"], pins["end"],
                         w, h, desc["render_fps"], fr, json.dumps(desc["options"])]
             m, why = cached_mask(plan, jd, desc["render"][0], desc["render"][1], desc["held"],

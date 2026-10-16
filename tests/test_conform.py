@@ -449,7 +449,7 @@ def test_old_workflows_widget_values_land_on_the_same_widgets():
     assert opt["source_frame_rate"][1]["forceInput"] is True
 
 
-def test_kays_saved_timeline_workflow_still_maps(request):
+def test_a_saved_timeline_workflow_still_maps(request):
     """The real saved graph, when this machine has it: every SeamStitch Timeline / Result
     Preview node's widgets_values maps onto the same names as before."""
     import timeline as tl

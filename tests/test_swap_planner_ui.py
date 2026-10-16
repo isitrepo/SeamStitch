@@ -309,7 +309,7 @@ def test_a_named_target_reaches_sam3_and_keys_the_mask_cache(nodes):
     m = torch.ones((r1 - r0 + 1, 12, 16))
     sm.SeamStitchSwapMask().save(out[15], m, save_preview=False, fill_holes=0)
     out = _run(nodes, "render", chunk=c[1]["id"], seed=3)["result"]
-    assert json.loads(out[12]) == {"mark": True, "target": "woman in a red dress"}
+    assert json.loads(out[12]) == {"mark": True, "target": "woman in a red dress", "mode": "character"}
     assert out[18] is True                                    # cached for this target
     out = _run(nodes, "render", chunk=c[2]["id"], seed=3)["result"]
     assert json.loads(out[12])["target"] == "woman in a purple top"
@@ -320,12 +320,21 @@ def test_a_named_target_reaches_sam3_and_keys_the_mask_cache(nodes):
     assert {s["chunk"]: s for s in spl.chunk_status(q, str(nodes["dir"]))}[c[1]["id"]]["mask"] == 0.0
     out = _run(nodes, "render", chunk=c[1]["id"], seed=3)["result"]
     assert out[18] is False
-    # invert: the job's, unless the chunk says
+    # background replace (the mode switch; an older strip's invert means the same): the render inverts, for the
+    # whole job; a chunk's own invert is ignored
+    prompt = sp.load_plan(nodes["plan"])["chunks"][1]["prompt"]
     spl.do_op({"job": "t", "op": "set_target", "invert": True}, jobs)
+    q = sp.load_plan(nodes["plan"])
+    assert sp.job_mode(q) == "background" and "invert" not in q and q["chunks"][1]["prompt"] == ""   # its own prompts
+    spl.do_op({"job": "t", "op": "set_prompt", "chunk": c[1]["id"], "prompt": "a background prompt"}, jobs)
     assert json.loads(_run(nodes, "render", chunk=c[1]["id"], seed=3)["result"][12])["invert"] is True
     spl.do_op({"job": "t", "op": "set_options", "chunk": c[1]["id"], "options": {"invert": False}}, jobs)
-    assert "invert" not in json.loads(_run(nodes, "render", chunk=c[1]["id"], seed=3)["result"][12])
-    assert sp.load_plan(nodes["plan"])["target"] == "woman in a purple top"      # an invert edit leaves the target
+    assert json.loads(_run(nodes, "render", chunk=c[1]["id"], seed=3)["result"][12])["invert"] is True
+    assert sp.load_plan(nodes["plan"])["target"] == "woman in a purple top"      # the switch leaves the target
+    spl.do_op({"job": "t", "op": "set_mode", "mode": "character"}, jobs)
+    q = sp.load_plan(nodes["plan"])
+    assert q["chunks"][1]["prompt"] == prompt and "invert" not in json.loads(
+        _run(nodes, "render", chunk=c[1]["id"], seed=3)["result"][12])
 
 
 def test_the_strip_refuses_a_target_the_workflow_cant_pass_on():

@@ -13,7 +13,9 @@ hard cut 9.8x -> after: seamless 1.1x".
 
 "use as timeline" in the node's UI puts the result back onto the Timeline node as
 its only clip, so the next splice starts from this one - one splice at a time,
-as many times as it takes.
+as many times as it takes. When the cut held a Swap job's joins, the result carries
+them (timeline.carry_joins): the one just bridged is marked fixed, the rest stay where
+their pictures went, so the strip shows what is left to fix.
 
 SAVING. Wire Recombine's combined_images / audio into `images` / `audio` and this
 node writes the final video itself, through the very encode path VHS Video Combine
@@ -480,6 +482,18 @@ class SeamStitchResultPreview:
         master = _view_params(result)
         timeline_path = (f"{master['subfolder']}/{master['filename']}" if master['subfolder'] else master['filename']) \
             if master and master["type"] == "output" else result
+        carried = None
+        try:
+            rec = tl.carry_joins(source_video_path, result, timeline_path, int(start_frame), int(end_frame), a, out_fr)
+            if rec:
+                left = sum(1 for j in rec["joins"] if not j.get("fixed"))
+                carried = {"joins": len(rec["joins"]), "fixed": len(rec["joins"]) - left, "left": left,
+                           "job": rec.get("job")}
+                print(f"[SeamStitch] Result: carried {carried['joins']} Swap join(s) of {carried['job']} onto the "
+                      f"result - {carried['fixed']} fixed, {left} left.")
+        except Exception as e:   # the marks are a help; never fail a saved result over them
+            print(f"[SeamStitch] Result: Swap joins not carried: {e}")
         ui = dict(a, path=result, frame_rate=out_fr, start=int(start_frame), view=_view_params(play),
-                  play_path=play, saved=bool(images is not None and save_output), timeline_path=timeline_path)
+                  play_path=play, saved=bool(images is not None and save_output), timeline_path=timeline_path,
+                  carried=carried)
         return {"ui": {"seamstitch_result": [ui]}, "result": (result, filenames)}
