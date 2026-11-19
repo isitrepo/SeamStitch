@@ -676,4 +676,7 @@ def test_forward_chain_pins_to_the_newest_take_before_and_never_the_next(job):
     assert [c["render"] for c in p["chunks"]] == r                    # a pin switch doesn't move the chunks
     assert tn                                                         # (the next chunk did have a take to pin to)
     assert "forward_chain" in spl.SeamStitchSwapPlanner.INPUT_TYPES()["optional"]
-    assert list(spl.SeamStitchSwapPlanner.INPUT_TYPES()["optional"])[-1] == "forward_chain"
+    # new optional inputs are appended last so saved widget values keep their places: forward_chain was last when it was
+    # added (0.5.0); 7e29484 then appended object_cutout / object_cutout_mask after it, on purpose (Q4 fault 3, 2026-11-17)
+    opt = list(spl.SeamStitchSwapPlanner.INPUT_TYPES()["optional"])
+    assert opt[:2] == ["first_pass_megapixels", "forward_chain"]

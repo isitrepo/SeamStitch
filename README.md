@@ -13,6 +13,10 @@ with picture and audio kept in sync, then saves it and tells you how smooth the 
 | **SeamStitch Recombine** | Splices the regenerated frames (and audio) back into the source video. |
 | **SeamStitch Result Preview** | Saves the final video, plays it with the new span marked, rates the joins. |
 | **SeamStitch LTX Guides** / **MiniMax Guides** | Pin the real frames around the gap onto the generator's latent, so motion carries through the join. |
+| **SeamStitch Batch Splice** | Joins several separately bridged seams of one cut into one video (the Timeline's **fix all**). See [Batch Splice](#seamstitch-batch-splice). |
+| **SeamStitch Timeline Prompt (27B)** | A large local model writes the Timeline's bridge prompt from the two pictures and the footage either side. See [Timeline Prompt](#seamstitch-timeline-prompt-27b). |
+| **SeamStitch Frame Grab** | Pulls a first and a last frame out of a video as lossless images. See [Frame Grab](#seamstitch-frame-grab). |
+| **SeamStitch VOSR Polish** | Optional last step that sharpens a finished clip with VOSR 2.0. See [VOSR Polish](#seamstitch-vosr-polish). |
 | **SeamStitch Swap** nodes | Replace the person in a whole video with a character, in planned MiniMax H3 chunks joined back over the original audio. See [SeamStitch Swap](#seamstitch-swap). |
 | *SeamStitch Loader* and *SeamStitch Combine* | **Legacy** — the original two-node way in, replaced by the Timeline. Still supported; see [Legacy nodes](#legacy-nodes). |
 
@@ -110,6 +114,31 @@ the first new frame), the generator at **2× the source size** (its frames come 
 size; Recombine scales them back), and Recombine's **`match_to_source`** on, which ramps the bridge's detail
 and colour from one take to the other. Without it the bridge is softer than both sides and the jump in
 sharpness only moves to the bridge's far edge.
+
+### Fixing many joins at once: fix all
+
+**fix all ▾** on the strip toolbar bridges every open Swap join with the same settings you pick in its menu: one queued
+run per join (the Timeline's target set to that join, Result Preview saving into its own `seamstitch_batch/<id>` folder),
+then one [Batch Splice](#seamstitch-batch-splice) run that lays every bridge into the cut. Joins too close to the end of the cut
+or overlapping the join before are skipped and named. The seams are independent runs, so one weak seam can be re-queued alone
+and the splice run again. It needs a Result Preview in the graph that is not bypassed or muted. It runs the graph exactly as it
+stands, so whatever prompt the graph holds is asked for at every join: check that it describes a seam repair, not an event.
+
+What was measured (one real 7-chunk job, 3 joins, one seed): fix all ran end to end (3 seam runs and the splice), and the bridges
+stay in the scene when the prompt says to carry on. A small bump at a join (a jump of 2.8 and 4.9, against about 0.5 to 1.5 for normal
+motion) goes away at the join but leaves smaller bumps (2.1 to 3.2) where each bridge meets the footage. **It does not hide a framing
+cut**: a wide-to-close cut stayed a cut, a few frames earlier. Whether the motion looks smooth is for your eye.
+
+### Deeper context
+
+**deeper** on the toolbar switches the real frames pinned each side of a bridge between **5** (off) and **22** (about 0.9 s; the
+guides accept 1, 5, 22 or 39). It sets the Timeline's own `context_frames`, so the strip's bridge sizes and the node agree: pick the
+bridge size again after switching. The sizes that fit the generator's 17k+5 grid depend on it, and a hand-typed target that does not fit
+makes the node round the gap up, so the video comes out longer. Measured on one gap of a continuous two-person shot, one seed: with 22 the
+jump into the gap was as small as ordinary motion (2.8 against 4.8 with 5), but the regenerated motion was no closer to the real footage
+(error 9.5 against 8.0 to 10.2). **It smooths the entry into a gap; it does not recover what was there**, and it costs 44 more frames of
+generation. Recombine's **`audio_mode: original`** keeps the source's own sound under the new frames exactly (matched to the original at
+1.00; `combined` changed the speech in the gap).
 
 ### Widgets
 
@@ -222,7 +251,7 @@ audio at the same frames so sound and picture stay in sync → encode.
 | `insert` | Off: the new frames **replace** `[start_frame, end_frame]`. On: they are **inserted** at the join and nothing is removed (`end_frame` may equal `start_frame − 1`); the clip's first/last frame are always dropped; the gap's audio is `bridge_audio` or silence — never the source's audio from around the join. Needs ≥ 3 frames. Wire from the Timeline's `insert`. |
 | `context_frames` | Wire from the Timeline's `context_frames`: drops K frames from each end of the clip before anything else. Replace mode only. |
 | `skip_encode` | Splice only: no video is written (`Filenames` is empty). Turn on when Result Preview saves the video, so it isn't encoded twice. |
-| `match_to_source` | Off by default. On: the new frames' **detail and colour ramp** from the 6 source frames before them to the 6 after (an unsharp amount solved per frame, a per-channel colour offset), so a bridge softer than the footage, or two sides that differ (two Swap takes), changes gradually instead of jumping at one frame. Replace mode only. |
+| `match_to_source` | Off by default. On: the new frames' **detail and colour ramp** from the 6 source frames before them to the 6 after (an unsharp amount solved per frame, a per-channel colour offset), so a bridge softer than the footage, or two sides that differ (two Swap takes), changes gradually instead of jumping at one frame. Replace mode only. Since 0.6.0 it runs on several threads and reuses its buffers: about 3.6x faster (12 real 1920x1080 frames: 25.9 s to 7.1 s) with byte-identical output. |
 
 If you extend the bridge (longer than the original gap), set `audio_mode` to `bridge` or `combined` —
 `original` plays silence under the extra frames.
@@ -339,6 +368,86 @@ H3 support; without it only this node is skipped.
 
 ---
 
+## SeamStitch Timeline Prompt (27B)
+
+An alternative to the 8B captioner for the Timeline's bridge prompt. It shows a large local vision model (a GGUF vision model on disk with its
+mmproj, run through ComfyUI-QwenVL's llama.cpp side, the same runner Swap Draft uses) Picture 1, Picture 2 and, if you wire the Timeline's source
+path and frame numbers, a few small frames from the seconds before Picture 1 and after Picture 2, so the prompt can carry on the movement and the
+camera and lead into what follows. Wire the instruction (the same text the 8B gets) into `prompt`, and `response` to where the prompt goes. The
+answer opens with a blank line, so it sits apart from a time note ahead of it. The model is unloaded when the call ends, because the generator
+needs the memory.
+
+Inputs: `first_frame`, `last_frame`, `prompt`, `qwen_model` (GGUF vision models only), `context_pictures` (0 to 8 frames each side; 0 = just the two
+pictures), `context_seconds` (how many seconds of footage each side they are spread over), `think` (reason first: slower, sometimes more careful),
+`max_tokens`; optional `source_video_path`, `start_frame`, `end_frame`, `frame_rate` from the Timeline. Output: `response`.
+
+Measured on one 148-frame seam, one seed per template: a plain "smooth" instruction gave joins at 1.25x and 1.17x of normal motion but ended in a hard
+cut on the last frame; a free "wacky" instruction gave a soft bump with no snap. These are single runs, not a ranking.
+
+## SeamStitch Frame Grab
+
+Pulls a first and a last frame out of a video as lossless images, to edit and use as start or end pins. Pick the video (a *choose video file* button
+uploads one), type a `first_frame` and a `last_frame` (`-1` = the final frame; a number past the end is clamped), and both frames come out as
+`first_image` and `last_image`, with their numbers and an `info` string; `save_png` also writes both as lossless PNGs in `output/seamstitch_frames`.
+Frames count the way the Swap Planner and the Timeline count them: from the file's own first frame at its frame rate rounded to a whole number (the
+optional `frame_rate` changes that only to match another tool). Wire an `images` batch (the Timeline's output or a Loader's) and the numbers index that
+batch instead of a file. Nothing is re-encoded or resized.
+
+| Input | Default | What it does |
+| --- | --- | --- |
+| `video` | the video files in your input folder | The clip to take the frames from. |
+| `first_frame` | `0` | Frame number of the first frame. 0 is the clip's first frame. |
+| `last_frame` | `-1` | Frame number of the last frame. -1 is the final frame of the clip. |
+| `save_png` | `True` | Also save both frames as lossless PNGs in output/seamstitch_frames. |
+| `images` *(opt.)* | socket (IMAGE) | Optional: take the frames from this batch (e.g. the Timeline's output) instead of the video file. |
+| `frame_rate` *(opt.)* | `0` | 0 = the file's own rate, rounded (what the Planner uses). Only change it to match another tool's numbering. |
+
+## SeamStitch VOSR Polish
+
+An optional last step that sharpens a finished clip with VOSR 2.0 (one-step per-frame super-resolution), after Recombine or Swap Assemble and before the
+save node. It needs a ComfyUI-VOSR2 pack and its `VOSR2` model bundle installed (this node calls that pack's nodes at run time); with `enable` off the
+frames pass through untouched and VOSR is not even loaded. `sharpen (same size)` (default) shrinks each frame to half size and enlarges it back x2, so the
+output has the input's size and gains fine detail a ~1 MP render loses (hair, skin, wall texture); `enlarge x2` runs VOSR on the frames as they are and the
+output is twice the size. VOSR is generative per frame: sharper than a plain upscale, but about 10% more frame-to-frame flicker, and it deviates from the
+original at pixel level. Tested once end to end inside a Swap job's assembly: the polished clip had the assembly's frame count, size, frame rate and sound;
+its sharpness was not judged by eye in that run. The Swap workflow carries it as a muted group.
+
+<!-- gen:inputs SeamStitchVosrPolish -->
+| Input | Default | What it does |
+| --- | --- | --- |
+| `images` | socket (IMAGE) |  |
+| `enable` | `True` | Off = the frames pass through unchanged and VOSR is not loaded. |
+| `mode` | `sharpen (same size)` (`sharpen (same size)` / `enlarge x2`) | 'sharpen (same size)': shrink to half, VOSR x2 back to the original size. 'enlarge x2': VOSR on the frames as they are, output twice the size. |
+| `vosr_seed` | `1` |  |
+| `color_alignment` | `wavelet` (`wavelet` / `adain` / `none`) |  |
+| `tile_size` | `512` | VOSR was trained at up to 512 px; keep tiling on (512) for anything larger. |
+<!-- /gen -->
+
+## SeamStitch Batch Splice
+
+Joins several seams of one cut, each bridged on its own, into one video: the cut's own frames between the seams, each seam's bridge from its own result.
+Result Preview writes a `<result>.seam.json` beside every result it saves (which cut, which frames it replaced, how many it put there, and the join
+verdicts). The Timeline's [fix all](#fixing-many-joins-at-once-fix-all) queues the runs and then this node, but you can also point `batch_folder` at any
+folder of such results. The picture between seams is the cut's own pixels, never a copy of a copy; each seam's span of sound comes from its own result with
+a 0.1 s margin either side, and the stretches between from the nearest result. Seams may not overlap and each result must be the one its record names
+(size-checked). Leave `cut_path` blank: the records name the cut.
+
+<!-- gen:inputs SeamStitchBatchSplice -->
+*Joins a batch of independently bridged seams into one video: the cut's own frames between the seams, each seam's bridge from its own result.*
+
+| Input | Default | What it does |
+| --- | --- | --- |
+| `cut_path` | empty | The cut every seam was made on. Leave blank: the seams' records name it (set it only to refuse results made on any other cut). |
+| `batch_folder` | empty | The folder the seams' Result Preview saved into (their filename_prefix, under output). Each result there has a .seam.json record beside it. |
+| `filename_prefix` | `seamstitch_batch_%date:yyyyMMdd_hhmmss%` |  |
+| `format` | `video/h264-mp4` |  |
+| `crf` | `12` |  |
+| `pix_fmt` | `yuv420p` (`yuv420p` / `yuv420p10le`) |  |
+| `save_metadata` | `True` |  |
+<!-- /gen -->
+
+---
+
 ## SeamStitch Swap
 
 Whole-video character replacement with MiniMax H3. H3 renders about 8 s at a time, so the video is
@@ -429,6 +538,41 @@ group *Swap Render · Character Replace*.
 7. **Assemble.** The effective takes (chosen, else the first) with each join's repair, over the
    original audio, in one streamed encode: as many frames as the source, never the whole video in RAM.
 
+### Since 0.5.0
+
+- **Marking in pieces, "nobody in shot".** The strip's *mark* tracks each shot of a chunk on its own, and a long shot in pieces of 50 frames with its first
+  two frames alone (SAM3 lost its track after a shot's first frames on three long dark shots; in pieces it held). The **Mark** menu also has **nobody in
+  shot a-b** for each shot of the selected chunk: an empty mark, so a shot the target is not in is left as filmed (SAM3 run on such a shot marks something
+  anyway, and the render repaints it as the character).
+- **27B drafter templates.** Swap Draft lists GGUF vision models (`GGUF: <file>`, run in-process through llama.cpp, with the matching chat template and
+  thinking off for Qwen3.5-class models) and templates for a large model, `character replace (Ref2VA, lean, large model)` and `background replace (Ref2VA,
+  lean, large model)` (plus a two-characters background form). Each shot is drafted in one call with its pictures in order, the other people by
+  `<Subject N>` label, the chunk's object names and its spoken lines, written as JSON. It needs a `GGUF:` model, else the lean template is used with a
+  warning; about 3.5 minutes a chunk. On one test chunk, checked against the frames, the 8B lean draft lost one of two kept people and invented two props
+  where the 27B got both people and their head turns: one chunk, one comparison.
+- **BFS template (text only).** `character replace (BFS body_swap, large model)` fills the prompt text that the third-party *BFS* H3 character-swap LoRA
+  expects: the model describes the sheet once, head to toe, and the same prompt goes into every chunk. **The LoRA itself is not part of this pack and is
+  not distributed with it**: its authors publish it under the H3 Community License, so get it from them and read that licence. In testing it swaps when
+  the person looks unlike the character and passes the source through on look-alikes.
+- **Object jobs.** The strip's third mode, **Object** (beside Character and Background): the target is a thing ("the painting on the wall"), the job's
+  source is a finished swap's assembly and Picture 1 is the new object; Swap Assemble keeps the source everywhere and fills only the target's mask.
+  **fill: picture (flat)** fits the picture over a flat target (painting, poster, screen) per shot, matched to its light and pasted through its mask so people
+  in front stay in front: no render. Tested on a painting. The H3-render fills for objects are experimental and are not described here.
+- **Keep from source.** On a chunk's panel, type what to keep ("white shoe"), add it for the chunk or the whole video and press *mark*: SAM3 tracks it
+  under its own name, and Swap Assemble (and each take's review clip) pastes the source's pixels through that mask (grown 6 px, feathered 4 px) over the
+  takes. Nothing is re-rendered; frames where SAM3 found nothing are left alone. Level `as filmed` (default) or `match the take`. An Object job whose
+  target text matches no cached mask now says so at Assemble (matching is exact).
+- **Per-chunk "edit this" and "back to the original".** On a take, **edit this** makes that take the picture its chunk renders from, so the next change
+  builds on it: the job's source gets that chunk's frames swapped in (no assembly, under a minute), and the chunk's takes, prompt and masks are put aside.
+  **back to the original** brings them back, with the chunk's drafted record. A menu entry does it for every chunk that has a take. Run once on a real job:
+  the other chunks were unchanged.
+- **Swap Take: `detail_match`, `detail_anchor`, `person_anchor`** (all on by default; their inputs are in the Take table below). A pin round trip softens a
+  frame, and with each chunk pinned to the last the room's texture and a person's colour fade down a long chain (on the test chain a wall's detail fell by
+  about 37% and a coat's colour by about 30% over 14 chunks). `detail_match` matches each take's fine detail to its pin; `detail_anchor` aims it at the
+  job's first full chunk (rendered with no pin) instead; `person_anchor` does the same for the person's brightness and colour through the source mask. They
+  also run on a take with no pin: on one re-rendered chunk the detail ratio against the reference was 0.957 (inside the 15% band, so not boosted) and the
+  person's colour moved 6.0 levels toward it. One chunk, one seed: it ran and moved things the right way, which is not proof it fixes a long chain.
+
 ### Compass
 
 - **Render length:** 209 frames (~8 s at 25 fps). Over 209, two-pass renders failed or crashed ComfyUI
@@ -495,6 +639,8 @@ group *Swap Render · Character Replace*.
 | `conform_to_24fps` | `True` | The render's reference audio on H3's 24 fps clock (frames stay 1:1). Takes keep the original audio. |
 | `first_pass_megapixels` *(opt.)* | `0.0` | 0: the two-pass first pass (about 0.3 MP in the source's shape; the pins arrive at the source's size, for the refine pass). Above 0: a single pass at this many megapixels (1.0 = H3's own canvas) in the source's shape, a multiple of 32 each way, wired from render_width / render_height into the H3 node: the pins arrive stretched to exactly that size, so the guides node doesn't crop a strip off every pin (it did, 1.6% of the width per chunk at 1344 x 768 on a 1280 x 720 source, and the picture crept wider chunk by chunk). |
 | `forward_chain` *(opt.)* | `False` | On: a render pins to the NEWEST take of the chunk before it (not the chosen one) and never to the chunk after it, so renders queued in order (c6, c7, c8 ...) each start from the take just made, and an old take further down the chain can't pull a chunk towards it. Your choices in the strip stay yours: this only decides what a render pins to. Off: pins follow the chosen takes on both sides, for re-rolling one chunk between two takes you've chosen. |
+| `object_cutout` *(opt.)* | socket (IMAGE) | Object jobs that add a thing: the sheet's object cut out (BiRefNet of Picture 1, background black). With its mask, the render's guide is the cut-out placed on the target in every frame. |
+| `object_cutout_mask` *(opt.)* | socket (MASK) | The cut-out's mask (BiRefNet's mask output). |
 <!-- /gen -->
 
 Each queue run does one thing, set by the strip: emit one chunk's render inputs (the outputs feeding
@@ -547,7 +693,10 @@ there, never erased).
 | `output_mask` *(opt.)* | socket (MASK) | SAM3 person mask of the render (group Swap Score). |
 | `marked_guide` *(opt.)* | socket (IMAGE) | What H3 saw as its guide; saved when the chunk's mark option is on. |
 | `free_memory_after` *(opt.)* | `True` | When this run finishes, ComfyUI drops its models and its cache, as its own /free does, so the next chunk starts on a clear machine (each render reloads its models, about half a minute). Off: the models stay loaded, and on a 64 GB PC the second render in a row can page to disk (2026-10-15: 282 s a step against 76, ComfyUI holding 67.7 GB). |
-| `level_match` *(opt.)* | `True` | Before the take is saved, match its brightness and contrast, per colour channel, to the frame it was pinned to at its start (the same moment): a pinned frame comes out of H3 2-3 levels darker and a little harsher, and with each chunk pinned to the last the picture slid darker and muddier chunk by chunk. With the person's mask wired (source_mask) the room and the person are matched apart. Only the start pin is followed: an end that lands more than 1 level off the next chunk's take gets a level_end flag (that take may be older), and a start too far off to be the pin's (or level_match off) gets a level flag. |
+| `level_match` *(opt.)* | `True` | Before the take is saved, match its brightness and contrast, per colour channel, to the frame it was pinned to at its start (the same moment): a pinned frame comes out of H3 2-3 levels darker and a little harsher, and with each chunk pinned to the last the picture slid darker and muddier chunk by chunk. With the person's mask wired (source_mask) the room and the person are matched apart. Only the start pin is followed (a chunk with no start pin follows its end pin instead): an end that lands more than 1 level off the next chunk's take gets a level_end flag (that take may be older), and a start too far off to be the pin's (or level_match off) gets a level flag. |
+| `detail_match` *(opt.)* | `True` | The pin round trip also softens a frame: each chunk kept only ~0.78 of its pin's fine detail, and with each chunk pinned to the last the room's texture faded ~75% over a 2642-frame job (it looked washed out) while the level match held. Before the take is saved, its fine detail (the band a 1-2 px blur removes, luma only) is boosted, up to 1.6x, until its pinned frames carry the pin's detail; the room and the person (source_mask) are measured apart. It restores crispness, it cannot redraw lost texture. Only a take that has a start pin is touched. |
+| `detail_anchor` *(opt.)* | `True` | Aim detail_match at the job's first full chunk (rendered with no pin) instead of at the pin. Matching only the pin stops the loss at each join but not the shortfall left at every join, which still added up (wall 76 -> 48, sofa 209 -> 105 over 14 chunks); matched to the first chunk it cannot build up. The room is measured by the source mask, so a job without one falls back to the pin. |
+| `person_anchor` *(opt.)* | `True` | Her colour fades down a chain of pinned chunks (the red coat went from ~56 to ~40 and her saturation fell 141 -> 108 over 14 chunks) in a way matching each chunk to its pin cannot hold. The brightness quantiles of her pixels (per channel, by the source mask) are moved toward the job's first full chunk's, by at most 24 levels. Needs source_mask and a reference chunk (rendered with no pin). |
 <!-- /gen -->
 
 ### SeamStitch Swap Output Person
@@ -596,17 +745,21 @@ there, never erased).
 | --- | --- | --- |
 | `draft_plan` | socket (STRING) | The Planner's draft_plan output: carries the plan only in a draft run. |
 | `chunks` | `empty only` (`empty only` / `all (into the draft field)` / `selected`) | empty only: chunks with no prompt. all: every rendered chunk (a chunk with a prompt gets the draft in its draft field, never over the prompt). selected: the chunk a redraft names (a redraft always drafts its chunk, whatever this says). |
-| `qwen_model` | `Qwen3-VL-8B-Unredacted-MAX (Captioner)` | A QwenVL model on disk. |
+| `qwen_model` | `Qwen3-VL-8B-Unredacted-MAX (Captioner)` | A QwenVL model on disk. GGUF: entries are QwenVL's GGUF vision models (llama.cpp, with their mmproj); quantization doesn't apply to them. |
 | `quantization` | `None (FP16)` (`None (FP16)` / `8-bit (Balanced)` / `4-bit (VRAM-friendly)`) |  |
 | `frames_per_chunk` | `24` | Frames Qwen sees, spread over the chunk's render range (per shot: shared out by shot length, at least 4 each). The QwenVL node itself uses 16. |
 | `transcribe` | `True` | Omni Captioner Transcribe on each chunk's audio: the words and the audio events. |
 | `word_timings` | `True` | faster-whisper large-v3-turbo: word timings, so each line lands in its shot and moment. |
-| `template` | `character replace (Ref2VA, timeline, lean)` (`character replace (Ref2VA)` / `character replace (Ref2VA, per shot)` / `character replace (Ref2VA, timeline)` / `character replace (Ref2VA, timeline, lean)` / `character replace (Ref2VA, timeline, lean, 2 references)` / `background replace (Ref2VA)` / `background replace (Ref2VA, 2 references)` / `background replace (Ref2VA, lean)` / `background replace (Ref2VA, lean, 2 references)`) | timeline: one full-size picture every half second, a caption each, merged into each shot with its lines at their times; with the chunk marked, timed lines from its mask say where the person is, how framed, and when they leave and come back, and with someone else in the clip each picture is also asked where they touch. per shot: each shot from its own frames in one call. lean (the default): the timeline's questions and placement, written short (one look sentence, the character's look moved onto the person, the background named once, hand lines only when she handles something); on a wrestling chunk, same seed, pose 0.43 against the timeline's 0.40 (a hand-written lean: 0.49). The first: one call for the whole chunk. The job's mode (the strip's switch) decides the kind of template, whatever this says: a background replace job always drafts with a background template (the sheet is a place (<Subject 1>), the person is kept (<Subject 2>)); pick `background replace` here to match (the lean forms write the six sections short: one place sentence, one clause per retention line, no style paragraph; they are not the character lean's half-second moments), the 2 references ones need `sheet_2`, and a wired `sheet_2` picks the full 2 references one when this isn't a background template. A chunk with nobody in it still drafts the person in, so write that prompt by hand. A character job given a background template drafts with the default character one. The draft's report says which was used. |
+| `template` | `character replace (Ref2VA, timeline, lean)` | timeline: one full-size picture every half second, a caption each, merged into each shot with its lines at their times; with the chunk marked, timed lines from its mask say where the person is, how framed, and when they leave and come back, and with someone else in the clip each picture is also asked where they touch. per shot: each shot from its own frames in one call. lean (the default): the timeline's questions and placement, written short (one look sentence, the character's look moved onto the person, the background named once, hand lines only when she handles something). lean + 2 references: lean with a second picture (the sheet_2 socket) defined as <Picture 2>. The first: one call for the whole chunk. The job's mode (the strip's switch) decides the kind of template, whatever this says: a background replace job always drafts with a background template (pick 'background replace' here to match; its lean form writes the six sections short; the 2 references ones need sheet_2, and a wired sheet_2 picks the full 2 references one when this isn't a background template): the sheet is a place (<Subject 1>), the person is kept (<Subject 2>); a chunk with nobody in it still drafts the person in, so write that prompt by hand. A character job given a background template drafts with the default character one. The draft's report says which was used. |
 | `extra_instructions` | empty | Added to Qwen's rules for every chunk. |
 | `max_tokens` | `2048` |  |
 | `sheet` *(opt.)* | socket (IMAGE) | The character sheet (the render group's Load Image): the subject is drafted from it once per job. |
 | `free_memory_after` *(opt.)* | `True` | When the draft is done: unload everything ComfyUI has loaded and hand back PyTorch's cached GPU and pinned memory, so the next render starts clean (Qwen, Omni and Whisper are closed either way). The node's output says how much was freed. |
-| `qwen_questions` *(opt.)* | the built-in questions | What the draft asks Qwen, one ### section per question, pre-filled with the built-in text. Edit a section to change that question; delete it, or clear the box, for the built-in one. The questions actually sent are in each chunk's drafts/<chunk>/qwen.txt. |
+| `qwen_questions` *(opt.)* | the built-in questions, pre-filled | What the draft asks Qwen, one ### section per question, pre-filled with the built-in text. Edit a section to change that question; delete it, or clear the box, for the built-in one. The questions actually sent are in each chunk's drafts/<chunk>/qwen.txt. |
+| `template_form` *(opt.)* | a layout with each drafted piece | Your own template, for any job: how the prompt is laid out. Write {summary}, {subject_definitions}, {retention_analysis}, {detailed_description}, {overall_soundscape}, {non_diegetic_music} where the drafter's piece should go ({prompt} = the whole draft), and add your own words anywhere. Give it a name below and press 'save template': it joins the template list as 'my: <name>'. Pick a saved one to load it here. |
+| `template_name` *(opt.)* | empty | The name to save the template box under (the same name replaces that template). |
+| `template_example` *(opt.)* | empty | Read-only: an example of what your layout gives for the 'template_base' picked, with stand-in answers. It updates when you change the base, the layout or the template. Nothing you type here is used. |
+| `template_base` *(opt.)* | `(automatic: the job's own template)` | Which built-in template your layout is built on: it decides the questions the model is asked and how the prompt is worked out; your layout then only places the pieces. 'automatic' uses the job's own (character, background or object). |
 | `sheet_2` *(opt.)* | socket (IMAGE) | A second reference picture (the render group's second Load Image, the one in the H3 node's ref_image_1). Qwen describes it once per job and the subject defines it as <Picture 2>: a second view of the same place on a background job, of the same character on a character job (pick the '2 references' template). The subject gains the <Picture 2> line the first time a draft runs with it wired (the rest of the subject is kept as it is). |
 <!-- /gen -->
 

@@ -22,10 +22,14 @@ to the right side's, so the bridge walks from one side to the other:
     wobble, never less than FLICKER_FLOOR. A bridge that dips 5.7 levels mid-way (join 422,
     2026-10-14) is flattened; a bridge that breathes like the footage keeps it.
 """
+import os
+from concurrent.futures import ThreadPoolExecutor
+
 import cv2
 import numpy as np
 
-SIDE = 6          # source frames each side whose detail / colour set the ramp's ends
+WORKERS = max(1, min(8, (os.cpu_count() or 2) // 2))   # bridge frames matched at once (each holds a few full-size float frames)
+SIDE = 6         # source frames each side whose detail / colour set the ramp's ends
 SIGMA = 1.0       # unsharp radius at the source's own size
 AMOUNT = (-1.0, 8.0)
 GAIN = (0.5, 2.0)  # contrast gain limits: a near-flat frame must not be blown up
@@ -53,14 +57,27 @@ def _solve(rgb, target, iters=22):
     """The unsharp amount whose result has `target` detail (bisection; detail rises with amount)."""
     f = rgb.astype(np.float32)
     blur = cv2.GaussianBlur(f, (0, 0), SIGMA)
+    diff = f - blur
+    buf = np.empty_like(f)
+
+    def trial(amount):
+        # detail of the sharpened frame as it is stored: the same operations, in the same order, as
+        # _q(_unsharp(f, blur, amount)) but into one reused buffer (no full-size array allocated per trial,
+        # which was most of the time); the same bytes
+        np.multiply(diff, amount, out=buf)
+        np.add(buf, f, out=buf)
+        np.clip(buf, 0, 255, out=buf)
+        np.rint(buf, out=buf)
+        return detail(buf.astype(np.uint8))
+
     lo, hi = AMOUNT
-    if detail(_q(_unsharp(f, blur, hi))) <= target:
+    if trial(hi) <= target:
         return hi, _unsharp(f, blur, hi)
-    if detail(_q(_unsharp(f, blur, lo))) >= target:
+    if trial(lo) >= target:
         return lo, _unsharp(f, blur, lo)
     for _ in range(iters):
         mid = (lo + hi) / 2
-        if detail(_q(_unsharp(f, blur, mid))) < target:
+        if trial(mid) < target:
             lo = mid
         else:
             hi = mid
@@ -84,9 +101,10 @@ def _spread(frames):
     return a.reshape(a.shape[0], -1, 3).std(1)
 
 
-def match_bridge(bridge, left, right):
+def match_bridge(bridge, left, right, workers=None):
     """bridge: (n, H, W, 3) uint8 array; left / right: up to SIDE source frames before / after it.
-    Returns (matched uint8 array, rows) - rows say what was done to each frame."""
+    Returns (matched uint8 array, rows) - rows say what was done to each frame. workers = frames matched at
+    once (default WORKERS; 1 = one at a time); the result is the same bytes either way."""
     bridge = np.asarray(bridge)
     n = bridge.shape[0]
     if n == 0 or len(left) == 0 or len(right) == 0:
@@ -108,8 +126,11 @@ def match_bridge(bridge, left, right):
     sp_l, sp_r = _spread(left), _spread(right)
     rel = np.maximum(_wobble(sp_l) / np.maximum(sp_l.mean(0), 1e-6), _wobble(sp_r) / np.maximum(sp_r.mean(0), 1e-6))
     cap_s = np.maximum(FLICKER_MULT * rel, FLICKER_FLOOR[1])
-    out, rows = np.empty_like(bridge), []
-    for k in range(n):
+    out = np.empty_like(bridge)
+
+    def one(k):
+        # one bridge frame; it reads only the shared ramps above and writes only out[k], so frames are
+        # independent and can run on separate threads (numpy and OpenCV release the GIL) with the same bytes
         t = (k + 1) / (n + 1)
         target = d_l + (d_r - d_l) * t
         # Contrast and colour first, then the sharpening solved on the frame as it will be (an
@@ -147,11 +168,18 @@ def match_bridge(bridge, left, right):
         fix = np.rint(aim - f.reshape(-1, 3).mean(0))
         f = np.clip(f + fix[None, None, :], 0, 255)
         out[k] = np.rint(f).astype(np.uint8)
-        rows.append({"frame": k, "detail_before": round(detail(bridge[k]), 1), "detail_target": round(target, 1),
-                     "detail_after": round(detail(out[k]), 1), "amount": round(amount, 3),
-                     "gain": [round(float(x), 4) for x in gain],
-                     "flicker_cut": [round(float(x), 2) for x in (flicker - kept)],
-                     "offset": [round(float(x), 2) for x in (aim - mu + fix)]})
+        return {"frame": k, "detail_before": round(detail(bridge[k]), 1), "detail_target": round(target, 1),
+                "detail_after": round(detail(out[k]), 1), "amount": round(amount, 3),
+                "gain": [round(float(x), 4) for x in gain],
+                "flicker_cut": [round(float(x), 2) for x in (flicker - kept)],
+                "offset": [round(float(x), 2) for x in (aim - mu + fix)]}
+
+    workers = max(1, min(int(workers if workers is not None else WORKERS), n))
+    if workers == 1:
+        rows = [one(k) for k in range(n)]
+    else:
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            rows = list(pool.map(one, range(n)))      # in frame order
     return out, rows
 
 

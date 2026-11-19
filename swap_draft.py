@@ -21,6 +21,7 @@ into the chunk's `draft` field (checked under the plan lock at write time). Kept
 drafted (swap_planner.draft_chunks).
 """
 
+import contextvars
 import difflib
 import gc
 import importlib
@@ -56,8 +57,13 @@ CHUNK_MODES = ["empty only", "all (into the draft field)", "selected"]
 TEMPLATES = ["character replace (Ref2VA)", "character replace (Ref2VA, per shot)",
              "character replace (Ref2VA, timeline)", "character replace (Ref2VA, timeline, lean)",
              "character replace (Ref2VA, timeline, lean, 2 references)",
+             "character replace (Ref2VA, lean, large model)",
              "background replace (Ref2VA)", "background replace (Ref2VA, 2 references)",
-             "background replace (Ref2VA, lean)", "background replace (Ref2VA, lean, 2 references)"]
+             "background replace (Ref2VA, lean)", "background replace (Ref2VA, lean, 2 references)",
+             "background replace (Ref2VA, lean, large model)",
+             "character replace (BFS body_swap, large model)",
+             "object replace / add (Ref2VA)",
+             "background replace (Ref2VA, lean, large model, 2 characters)"]
 # lean (2026-10-09): the timeline's questions and placement, written short, after his pre-Swap prompt that worked:
 # one look sentence, attribute_transfer onto the person, the source's background / camera / light named once, no
 # per-moment hand lines unless she handles something. Wrestling c4, same seed: pose 0.49 against the timeline's 0.37.
@@ -65,20 +71,163 @@ LEAN_TEMPLATE = TEMPLATES[3]
 # the lean template with a second reference picture (the node's sheet_2): <Picture 2> is a second view of the same
 # character (a face close-up, another angle), described once per job and defined in the subject
 LEAN_2REF = TEMPLATES[4]
+# the lean template for a large GGUF model (2026-10-16, Qwen3.8-27B): the lean sections and scene questions, but each
+# shot in one call (its pictures in order with their times, the cast by label, its lines) written by the model,
+# where lean captions one picture at a time and merges the captions in code (test clip c5 on the 27B: the merge kept
+# the first picture's pose, and the relation question put him across the wrong person's lap)
+LARGE_TEMPLATE = TEMPLATES[5]
+LARGE_SHOT_FRAMES = 8           # pictures per shot call (one per half second, at most this many)
+LARGE_FRAME_SIDE = 896          # their long side: 8 x ~350 tokens fits GGUF_CTX with the instruction and the answer
+LARGE_THINK = True              # its calls reason first (thinking mode): test clip c5, 3 seeds each, thinking caught the
+                                # crossed legs 3/3 (instruct 0/2) and each head turn; ~225 s a chunk against ~130 s
 # background replace (the strip's mode switch): the sheet is a place, the person stays (<Subject 2>). The job's mode
 # decides the kind of template: a background job always drafts with one of these two, a character job with one of
 # the character templates, whatever the widget says (the report says which was used).
-BACKGROUND = TEMPLATES[5]
+BACKGROUND = TEMPLATES[6]
 # the same with a second reference picture: <Picture 2> is a second view of the same place (a closer look at a
 # surface, another angle). A background job takes it when sheet_2 is wired, or when the widget asks for it.
-BACKGROUND_2REF = TEMPLATES[6]
+BACKGROUND_2REF = TEMPLATES[7]
 # the lean forms of the two: the same one-call draft of the kept person, the six sections written short (one place
 # sentence, the retention lines in one clause each, no style paragraph). Not the character lean's half-second
 # moments and mask placement: a background job keeps the person as filmed, so what the prompt adds is the place.
 # Picked from the widget only (a character template in the widget still gets the full form).
-BACKGROUND_LEAN = TEMPLATES[7]
-BACKGROUND_LEAN_2REF = TEMPLATES[8]
-BACKGROUND_TEMPLATES = (BACKGROUND, BACKGROUND_2REF, BACKGROUND_LEAN, BACKGROUND_LEAN_2REF)
+BACKGROUND_LEAN = TEMPLATES[8]
+BACKGROUND_LEAN_2REF = TEMPLATES[9]
+# the background lean form for a large GGUF model (2026-10-17): the lean sections, placement lines and place sentence
+# unchanged, but each shot of the kept person in one call (its pictures in order with their times), the clip's camera
+# and sounds from one picture per shot, and the who / place / object questions through the same calls, as the
+# character large template does
+LARGE_BG_TEMPLATE = TEMPLATES[10]
+# the same, for a clip with TWO people kept as filmed (2026-10-28): the place is <Subject 1>, the first person
+# <Subject 2>, the second <Subject 3>; each shot is described for both, and how they sit or stand against each other
+LARGE_BG2_TEMPLATE = TEMPLATES[13]
+LARGE_TEMPLATES = (TEMPLATES[5], LARGE_BG_TEMPLATE, LARGE_BG2_TEMPLATE)
+# the BFS H3 Character Swap LoRA's prompt (2026-10-18): for the workflow's BFS switch (BFS LoRA + an aligned guide of
+# the plain source, no <Video 1>). The LoRA wants its own body_swap template with a head-to-toe description of the
+# character; the drafter asks the model ONCE, from the sheet, for that description (BFS's own instruction, from their
+# TextGenerate node), fills the template (the {target} form when the job has a target) and writes the same prompt
+# into every chunk drafted. No dialogue and no per-shot lines: the guide carries the motion. Tested on an unlike swap:
+# a full swap; on look-alike swaps (a look-alike test clip) the LoRA passes the source actor through whatever the prompt.
+# The text is BFS's v1.1 template (Civitai 3412620, for minimax_h3_character_swap_v1.1_ref2va_fro): "complete
+# identity ... facial structure" where v1.0 said "complete look ... head, face", and v1.0's "no trace of the original
+# subject" / "real, photographic video" lines are gone.
+BFS_TEMPLATE = TEMPLATES[11]
+BFS_BODY_SWAP = (
+    "body_swap: subject_definitions: <Subject 1> is the {details} shown in <Picture 1>, whose identity, face, head, "
+    "hair or fur, skin, body shape, proportions and clothing define the character in the target video. The guide video "
+    "provides the scene and the performance: its background, environment, lighting, camera, framing, body pose, hand "
+    "and arm movement, head rotation, gaze direction, lip movement and facial expression, frame by frame; only {who} "
+    "is replaced: {their} face, hair, body and clothing become <Subject 1>.  summary: [video generation + reference] "
+    "Replace {who_short} with <Subject 1>, keeping the scene, camera and the complete motion and performance of the "
+    "guide video.  detailed_description: [Shot 1] <Subject 1> takes the exact place of {who_place} and moves with the "
+    "same timing, body pose, gestures, head motion, gaze, speech and facial expressions, while keeping the complete "
+    "identity from <Picture 1>: facial structure, hair or fur, skin, body shape and clothing stay stable in every "
+    "frame. The background, lighting, colors and camera of the guide video are preserved. Prevent identity drift, "
+    "clothing changes, texture crawling and flicker.")
+BFS_DETAILS_INSTRUCTION = """Look at the character in this picture (a character sheet: one character, possibly shown from several angles) and describe their complete visible appearance from head to toe as ONE detailed, comma-separated attribute list.
+
+Include, in this exact order:
+1. Gender, apparent height, body type, physique, shoulder width, waist, and body proportions.
+2. Head and face shape, jawline, facial structure, skin tone, eye color, and distinctive facial characteristics.
+3. Hair color, hairstyle, length, texture, beard, mustache, and other visible facial hair.
+4. Upper-body clothing, including garment types, exact colors, fit, fabric appearance, textures, collars, sleeves, buttons, zippers, pockets, logos, patterns, and clothing layers.
+5. Lower-body clothing, including pants, jeans, shorts, skirts or other garments, with colors, materials, fit, and visible design details.
+6. Footwear, including shoes, boots, or sneakers, with colors, materials, style, and visible details.
+7. All visible accessories, including hats, glasses, earrings, necklaces, chains, watches, bracelets, rings, belts, bags, scarves, wings, halos and piercings.
+8. Distinctive features, including tattoos, scars, wrinkles, makeup, and other identifying characteristics.
+
+Rules: start with the gender ("Male, ..." or "Female, ..."), with no article before it; describe only what is visible; never invent unseen parts; omit what can't be told from the picture; concise, visually specific English attributes; no background, camera, lighting or composition; one line.
+
+Answer with the attribute list ONLY (it is inserted after "<Subject 1> is the" and before "shown in <Picture 1>"). Example of the format only: Male, average height, sturdy build, broad shoulders, oval face, light brown skin, blue eyes, grayish-white tousled hair, long thick beard, dark gray flat cap, dark jacket, black inner shirt, silver wristwatch"""
+# object job (swap_plan.MODE_OBJECT, 2026-10-20): the sheet is a thing; the job's target is what it replaces (or, for
+# "add", where it goes). The model is asked twice: once about the sheet (what the object looks like, as BFS's sheet
+# question), once per chunk about a few of its frames (the scene, and where the target is and how it moves). The six
+# sections are H3's (the same order as the character prompts); retention for the object is attribute_transfer (the
+# guide's visual relationships: fully_preserved, partially_preserved, attribute_transfer, weak_reference), the rest of
+# <Video 1> partially_preserved. Only the inside of the target's mask is kept at assembly, so the prompt needn't hold
+# the rest of the frame perfectly; it just mustn't move the target.
+OBJECT_TEMPLATE = TEMPLATES[12]
+OBJECT_DETAILS_INSTRUCTION = """Look at the main object in this picture and describe how it looks as ONE comma-separated attribute list: what it is, its colours, its materials and finish, its shape and proportions, any markings or details on it, and what it shows if it is a picture or a screen. Describe only what is visible; no background, camera or lighting; one line.
+
+Answer with the attribute list ONLY (it is inserted after "<Subject 1> is the" and before "shown in <Picture 1>"). Example of the format only: framed oil painting of a ship at sea, dark wooden frame, landscape format, muted blue and grey tones"""
+# a flat thing that shows a picture (2026-10-20, test clip: "replace the painting with this photo of a car"): the
+# sheet is what the picture shows, not an object to stand in its place, so the model describes it as a picture
+# (asked of a car photo as an object, the 27B wrote "vintage four-door sedan", and the prompt then put a car there)
+OBJECT_PICTURE_TARGET = re.compile(r"(?i)\b(painting|picture|photo(graph)?|poster|print|portrait|canvas|frame|screen|"
+                                   r"monitor|tv|television|sign|billboard|mural|artwork|tapestry)s?\b")
+OBJECT_PICTURE_INSTRUCTION = """This picture will be shown as the image inside a flat picture in a video (a painting, a framed photo, a poster or a screen on a wall). Describe it as that image in ONE comma-separated attribute list: what kind of image it is (photograph or painting, colour or black-and-white), what it shows and where in the image, its tones and colours, its overall shape (landscape or portrait). One line, no camera or lighting of the room.
+
+Answer with the attribute list ONLY (it is inserted after "<Subject 1> is the" and before "shown in <Picture 1>"). Example of the format only: black-and-white photograph of a sailing ship on a calm sea, ship in the centre, grey sky, landscape format"""
+OBJECT_SCENE_INSTRUCTION = """You are shown {n} pictures, frames sampled in order from one clip of a video ({secs:.1f} seconds). Answer in exactly three lines:
+video_1: ONE sentence about the clip as a whole: the setting, who is in it and what they do, the light, and the camera (whether it moves, its angle and framing).
+placement: ONE sentence about {the_target}: where it is in the frame (left, centre or right; top, middle or bottom), how large it is in the frame, what is right around it, and whether it stays still or moves (and how) during the clip. If it isn't in some pictures, say when it is out of frame.
+people: every whole person you can see, each in a few words by how they look and where they are in the frame (left, centre or right), separated by semicolons (for example "a man in a red jacket in the centre; a woman with a skull face on the left"); or "none". Leave out {the_target} and anything worn on it or attached to it, and never list a body part on its own (a leg, a foot, a hand): a person who is only partly in frame is listed as that person.
+Write about what you see, not about an edit."""
+# the person making the edit says what to add, in their own words (the job's brief); the model, who sees the frames, turns it into the
+# sentence the prompt needs: where the new subject is, what it does, who it is next to. The zone never feeds the drafter.
+OBJECT_ADDITION_LINE = """
+addition: ONE sentence saying how the new subject is in this clip, following this request from the person making the edit: "{brief}". Say where in the frame the new subject is (left, centre or right; near or far), its position or action (standing, sitting, walking in), who it is next to or touching, and when it comes into the clip if the request says so. This is an edit still to be made, so the new subject is NOT in these pictures yet: never say it is absent, unseen or not visible. Describe where it will be, as the request says, using what the pictures show of the room (the seat, the space beside the people) and say the side explicitly if the request does; call it "the new subject"."""
+OBJECT_BRIEF_NOTE = """
+
+The person making the edit describes the picture's subject as: "{brief}". Use their words for who or what it is where they fit what is visible, and do not compare it to any named character, film or style."""
+_OBJ_HEAD = ("subject_definitions:\n<Subject 1> is the {details} shown in <Picture 1>.\n"
+             "<Video 1> is the source video for the target video edit: {video_1}\n"
+             "<Audio 1> is the synchronized audio track of <Video 1>, and is reused in the target video.\n\n")
+_OBJ_TAIL = ("<Audio 1>: fully_copy - the original sound of <Video 1> is kept as it is.\n\n")
+_OBJ_END = "\n\noverall_soundscape:\nThe original sound of <Video 1>.\n\nnon_diegetic_music:\nN/A"
+OBJECT_FORMS = {
+    "replace": (
+        _OBJ_HEAD
+        + "summary:\n[video editing + reference generation + audio reuse] The target video is an edited version of <Video 1>. "
+          "<Subject 1> replaces {the_target} at its exact place, size and perspective in every frame, while the people, the "
+          "rest of the background, the camera and the action remain as recorded.\n\n"
+          "retention_analysis:\n<Subject 1> (appears wherever {the_target} is in frame): attribute_transfer - {the_target} "
+          "takes the look of <Subject 1> from <Picture 1>, keeping its place, size, angle and perspective in the frame.\n"
+          "<Video 1> (whole-video temporal structure, people, camera, background, lighting): partially_preserved - preserve "
+          "every person and their movements, everything around {the_target}, the camera, the framing, every cut and the "
+          "lighting.\n"
+        + _OBJ_TAIL
+        + "detailed_description:\nThe target video keeps the camera, framing, lighting and colour of <Video 1>, with "
+          "<Subject 1> in place of {the_target}. {placement} <Subject 1> is lit by the scene's own light and keeps the "
+          "place, size and movement of {the_target} in every frame; everything else stays exactly as in <Video 1>."
+        + _OBJ_END),
+    "add": (
+        _OBJ_HEAD
+        + "summary:\n[video editing + reference generation + audio reuse] The target video is an edited version of <Video 1>. "
+          "<Subject 1> is added on {the_target} in every frame, at a natural size for the scene, while the people, the "
+          "background, the camera and the action remain as recorded.\n\n"
+          "retention_analysis:\n<Subject 1> (appears wherever {the_target} is in frame): attribute_transfer - <Subject 1> "
+          "from <Picture 1> rests on {the_target} with its own look, at a natural size, and moves with it.\n"
+          "<Video 1> (whole-video temporal structure, people, camera, background, lighting): partially_preserved - preserve "
+          "every person, their look and their movements, the background, the camera, the framing, every cut and the "
+          "lighting.\n"
+        + _OBJ_TAIL
+        + "detailed_description:\nThe target video keeps the camera, framing, lighting and colour of <Video 1>, with "
+          "<Subject 1> added on {the_target}. {placement} <Subject 1> stays on {the_target} and moves with it in every "
+          "frame, lit by the scene's own light; everything else stays exactly as in <Video 1>."
+        + _OBJ_END),
+}
+OBJECT_FRAMES = 4
+
+# the Qwen instruction of a zone add (the anchor frame: the new thing drawn into one frame), written by the large model from the
+# anchor frame and the sheet, to Qwen-Image-2.1's own edit-rewriting rules (QwenLM/Qwen-Image-2.1, prompt_rewrite/prompts/
+# system_prompt_edit.txt, read 2026-10-25): lead with the operation; refer to the pictures only as <image1> / <image2> and state each
+# one's role; point to the reference for identity instead of describing features; edit only what is asked, push it to a clearly
+# visible degree, one blanket preservation clause; observable properties only; one paragraph, affirmative, no hedging or ratios.
+QWEN_ANCHOR_INSTRUCTION = """You write the instruction for Qwen-Image-2.1's image-editing model. It will draw a new subject into one frame of a video. The pictures that follow are <image1> (the frame of the video: the canvas) and <image2> (the reference picture of the new subject).
+
+The job: add the person or thing shown in <image2> into <image1>, {where}.{contact}{size}{lightsrc}
+
+Write ONE paragraph of about five plain sentences, with no line breaks, no JSON and no quotation marks around it, following Qwen's own rewriting rules:
+- Lead with the operation ("Add the ... from <image2> into <image1> ..."), written as someone who sees only these pictures. Refer to the pictures only as <image1> and <image2>, never "image 1" or "the first picture".
+- State each picture's role: <image1> is the canvas whose composition, room and people survive; <image2> is the source of the new subject's identity. Point to <image2> for how he or she looks (face, hair, costume), and do not describe those features in words.
+- Edit only what is asked, and make the addition clearly visible: the whole subject inside the frame, a natural size for the room, feet or base resting where they would, cropped by the frame edge only where a real camera would crop. Hold everything else at input fidelity with ONE blanket clause naming what stays unchanged ({target}, the room, the furniture, the framing and the lighting).
+- Lighting (the part that decides whether the new subject looks like it was filmed there): look at the people already in <image1> (or at <image3> when there is one), not at the furniture or the walls, and name the colour of the light on their skin, hair and clothes in plain words that say both the colour and the temperature, as one would tell a colourist (for example "warm orange light from the right with soft grey shadows", or "cool blue and purple light with deep dark shadows"; use the colours you actually see, not these). Also say how bright those people are (for example "dim, mostly in shadow, with light only on one side", or "evenly and brightly lit") and where the light falls on them. Then write one sentence saying the new subject is lit by the same light as those people, with the same colour tint on his or her skin and clothes (for example "a pale warm tint on his skin and jacket"), exactly as bright and as saturated as they are and no more (skin and clothes no brighter than theirs), with highlights on the same side and the same shadows where he or she touches the room. Do not call the room's own colours the light, and do not invent light you cannot see.
+- Base every claim on what is visible in <image1> and leave out what you cannot see. No hedging, no alternatives, no ellipses, no resolution or aspect-ratio words; say what to do rather than what not to do.
+Answer with the paragraph only."""
+
+BACKGROUND_TEMPLATES = (BACKGROUND, BACKGROUND_2REF, BACKGROUND_LEAN, BACKGROUND_LEAN_2REF, LARGE_BG_TEMPLATE,
+                        LARGE_BG2_TEMPLATE)
 _BG_FORMS = {(False, False): BACKGROUND, (False, True): BACKGROUND_2REF,
              (True, False): BACKGROUND_LEAN, (True, True): BACKGROUND_LEAN_2REF}   # (lean, two references)
 MOMENT_S = 0.5                  # timeline: one picture per this many seconds of each shot
@@ -88,12 +237,203 @@ MOMENT_S = 0.5                  # timeline: one picture per this many seconds of
 # lean became the default (2026-10-09): with the kept opponent and the relation sentence, wrestling c4 on one seed:
 # lean 0.43 / timeline 0.40 pose (a hand-written lean 0.49), and a third shorter.
 DEFAULT_TEMPLATE = LEAN_TEMPLATE
+
+# ---------------------------------------------------------------------------
+# the user's own templates (2026-10-29: save / delete from the node; for character, background and object jobs alike).
+# A template is a LAYOUT for the draft: the drafter writes the prompt as it always does (its questions, its frames, the pipeline of
+# the built-in template it is "built on"), and the layout puts the pieces where you want them and adds your own text around them.
+# The pieces are the prompt's six sections, as {blanks}: {summary}, {subject_definitions}, {retention_analysis},
+# {detailed_description}, {overall_soundscape}, {non_diegetic_music}, and {prompt} for the whole draft in one. Saved by name in one
+# JSON file, listed in the dropdown as "my: <name>", deleted from the node.
+# ---------------------------------------------------------------------------
+USER_PREFIX = "my: "
+SECTION_NAMES = ("subject_definitions", "summary", "retention_analysis", "detailed_description", "overall_soundscape", "non_diegetic_music")
+USER_BLANKS = ("prompt",) + SECTION_NAMES
+AUTO_BASE = "(automatic: the job's own template)"
+USER_FORM_SKELETON = """subject_definitions:
+{subject_definitions}
+
+summary:
+{summary}
+
+retention_analysis:
+{retention_analysis}
+
+detailed_description:
+{detailed_description}
+
+overall_soundscape:
+{overall_soundscape}
+
+non_diegetic_music:
+{non_diegetic_music}
+"""
+_SECTION_RE = re.compile(r"(?m)^(" + "|".join(SECTION_NAMES) + r"):[ \t]*$")
+# what the preview shows in place of each blank
+SAMPLE_SECTIONS = {n: f"[the drafter's {n.replace('_', ' ')} goes here]" for n in SECTION_NAMES}
+
+
+def user_templates_path():
+    try:
+        import folder_paths
+        base = os.path.join(folder_paths.get_user_directory(), "default", "SeamStitch")
+    except Exception:
+        base = os.path.dirname(os.path.abspath(__file__))
+    return os.path.join(base, "draft_templates.json")
+
+
+def load_user_templates():
+    """{name: {"text": layout, "base": a built-in template name or ""}}; {} when there is no file or it can't be read."""
+    try:
+        with open(user_templates_path(), encoding="utf-8") as f:
+            d = json.load(f)
+    except Exception:
+        return {}
+    out = {}
+    for k, v in (d.items() if isinstance(d, dict) else []):
+        if isinstance(v, dict):
+            out[str(k)] = {"text": str(v.get("text") or ""), "base": str(v.get("base") or "")}
+        else:
+            out[str(k)] = {"text": str(v), "base": ""}
+    return out
+
+
+def _write_user_templates(d):
+    p = user_templates_path()
+    os.makedirs(os.path.dirname(p), exist_ok=True)
+    tmp = p + ".tmp"
+    with open(tmp, "w", encoding="utf-8", newline="\n") as f:
+        json.dump(d, f, indent=1, ensure_ascii=False)
+    os.replace(tmp, p)
+
+
+def clean_template_name(name):
+    n = " ".join((name or "").split())
+    if n.lower().startswith(USER_PREFIX.strip().lower()):
+        n = n[len(USER_PREFIX.strip()):].lstrip(": ").strip()
+    if not n or len(n) > 60:
+        raise DraftError("give the template a name of 1-60 characters")
+    return n
+
+
+def check_user_layout(text):
+    """Why a layout can't be saved, or None. Every {word} must be one of the blanks (a typo like {sumary} would leave a hole in every
+    prompt), and at least one blank must be there (or every chunk would get the same text)."""
+    used = re.findall(r"\{([A-Za-z_][A-Za-z_0-9]*)\}", text or "")
+    bad = sorted({u for u in used if u not in USER_BLANKS})
+    ok = ", ".join("{" + b + "}" for b in USER_BLANKS)
+    if bad:
+        return "these are not blanks: " + ", ".join("{" + b + "}" for b in bad) + ". The blanks are " + ok
+    if not used:
+        return "the template has no blanks, so every chunk would get the same text. Add at least one of " + ok
+    return None
+
+
+def save_user_template(name, text, base=""):
+    """Saves (or replaces) a template; returns the dropdown entry. base: the built-in template whose questions it drafts with ("" =
+    the job's own)."""
+    n = clean_template_name(name)
+    text = (text or "").replace("\r\n", "\n").strip("\n")
+    if not text.strip():
+        raise DraftError("the template box is empty: nothing to save")
+    why = check_user_layout(text)
+    if why:
+        raise DraftError(why)
+    base = base if base in TEMPLATES else ""
+    d = load_user_templates()
+    d[n] = {"text": text + "\n", "base": base}
+    _write_user_templates(d)
+    return USER_PREFIX + n
+
+
+def delete_user_template(entry):
+    n = (entry or "")[len(USER_PREFIX):] if (entry or "").startswith(USER_PREFIX) else (entry or "")
+    d = load_user_templates()
+    if n not in d:
+        raise DraftError(f"there is no saved template {n!r}")
+    del d[n]
+    _write_user_templates(d)
+    return n
+
+
+def template_choices():
+    return list(TEMPLATES) + [USER_PREFIX + n for n in sorted(load_user_templates())]
+
+
+def base_choices():
+    return [AUTO_BASE] + list(TEMPLATES)
+
+
+def is_user_template(template):
+    return bool(template) and template.startswith(USER_PREFIX) and template[len(USER_PREFIX):] in load_user_templates()
+
+
+def split_sections(text):
+    """A prompt's six sections as {name: body}; a section the prompt doesn't have is missing."""
+    ms = list(_SECTION_RE.finditer(text or ""))
+    out = {}
+    for n, m in enumerate(ms):
+        end = ms[n + 1].start() if n + 1 < len(ms) else len(text)
+        out[m.group(1)] = text[m.end():end].strip()
+    return out
+
+
+def apply_layout(layout, text):
+    """The user's layout with each {blank} replaced by that piece of the drafted prompt `text`."""
+    pieces = dict(split_sections(text), prompt=(text or "").strip())
+    out = re.sub(r"\{(" + "|".join(USER_BLANKS) + r")\}", lambda m: pieces.get(m.group(1), ""), layout)
+    return re.sub(r"\n{3,}", "\n\n", out).strip() + "\n"
+
+
+_EX_CHARACTER = ("<Subject 1> is the young woman whose motion comes from <Video 1> and whose appearance comes from <Picture 1>: "
+                 "long pink hair, a white halo, a pale blue dress.")
+_EX_VIDEO = "a woman sits on a brown couch in a dim room under a framed painting, filmed in a static medium shot."
+_EX_SHOTS = ["[Shot 1] She sits and laughs, turns her head to the left and claps her hands."]
+
+
+def sample_prompt(base):
+    """An example of the prompt a built-in template drafts (stand-in answers, no model), so a layout can be tried against each kind
+    before it is saved. Returns (text, note)."""
+    name = base if base in TEMPLATES else TEMPLATES[3]
+    note = "" if base in TEMPLATES else "automatic = the job's own template; shown here with the character one. "
+    common = dict(video_1=_EX_VIDEO, shots=_EX_SHOTS, sounds="soft room hum", n_shots=1, dialogue=False, audio=True, pronoun="she")
+    scene = scene_sentence("living room", "a brown couch, a dark textured wall and a framed landscape painting")
+    try:
+        if name == TEMPLATES[11]:
+            return fill_bfs_body_swap("Male, slim build, green hair, burgundy suit", "the man in the white suit"), note
+        if name == OBJECT_TEMPLATE:
+            return fill_object("man with green hair and a burgundy suit", _EX_VIDEO, "She sits in the centre of the frame.", "the woman", sp.OBJECT_ADD,
+                               people=[], addition="The new subject sits on the couch to her left."), note
+        if name in BACKGROUND_TEMPLATES:
+            if name == TEMPLATES[13]:
+                return fill_bg2_ref2va_lean(subject=scene, whos=["the woman", "the man"], pronouns=["she", "he"], **{k: v for k, v in common.items() if k != "pronoun"}), note
+            f = fill_bg_ref2va_lean if name in (BACKGROUND_LEAN, BACKGROUND_LEAN_2REF, LARGE_BG_TEMPLATE) else fill_bg_ref2va
+            return f(subject=scene, who="the woman", **common), note
+        f = fill_ref2va_lean if name in (LEAN_TEMPLATE, LEAN_2REF, LARGE_TEMPLATE) else fill_ref2va
+        return f(subject=_EX_CHARACTER, who="the woman", **common), note
+    except Exception as e:                                 # an example is a courtesy: never fail a preview over it
+        return "\n\n".join(f"{n}:\n{SAMPLE_SECTIONS[n]}" for n in SECTION_NAMES), note + f"(no example could be built for this template: {e}) "
+
+
+def preview_layout(layout, base=""):
+    """(the base's example prompt, the layout applied to it, a note): what a layout gives for the chosen built-in template, so it can be
+    read before it is saved."""
+    why = check_user_layout(layout)
+    if why:
+        raise DraftError(why)
+    example, note = sample_prompt(base)
+    return example, apply_layout(layout, example), note
+
+
+# the layout the run in progress applies to every chunk it writes (set by run_draft for a "my: ..." template, cleared after)
+_LAYOUT = {"text": None}
 # B4 workshop C2: parts of a long shot (4 s) and a 6-frame scene call made the shots wordier and more invented,
 # and video_1 no better, than whole shots (C1). Both kept as options, off by default.
 SEGMENT_S = 0.0                 # per shot: > 0 describes a longer shot in parts of at most this many seconds
 SCENE_FRAMES = 0                # per shot: > 0 = video_1 and sounds from this many frames (0: the chunk's frames)
 DEFAULT_FRAMES = 24             # spread over the shots (B4 workshop: 24 named the foam sheet and the booklet, 16 didn't)
 WHISPER_REPO = "mobiuslabsgmbh/faster-whisper-large-v3-turbo"
+WHISPER_ALONE_P = 0.5           # Whisper's words with Omni hearing no speech: kept only at this mean confidence or more
 SECTIONS = ("subject_definitions", "summary", "retention_analysis", "detailed_description",
             "overall_soundscape", "non_diegetic_music")
 # Qwen sampling: the QwenVL node's temperature / top_p; repetition penalty 1.15 (its process() fixes 1.2). At 1.05
@@ -180,8 +520,51 @@ def locate_omni():
         return None
 
 
+GGUF_PREFIX = "GGUF: "          # qwen_model entries run through QwenVL's GGUF (llama.cpp) side, not its HF loader
+
+
+def locate_qwen_gguf():
+    """AILab_QwenVL_GGUF's module (its catalog, loader and image helpers), or None. locate_qwen() puts the
+    pack's py/ folder on sys.path first."""
+    cls = _registered("AILab_QwenVL_GGUF")
+    if cls is not None:
+        return sys.modules.get(cls.__module__)
+    if locate_qwen() is None:
+        return None
+    try:
+        return importlib.import_module("AILab_QwenVL_GGUF")
+    except Exception as e:
+        _say(f"[SeamStitch] Swap Draft: QwenVL's GGUF side didn't import: {e}")
+        return None
+
+
+def gguf_model_file(mod, name):
+    """The GGUF catalog entry's model and mmproj files on disk, or (None, None). Never downloads."""
+    try:
+        r = mod._resolve_model_entry(name)
+        d = mod.resolve_base_dir(mod.GGUF_VL_CATALOG.get("base_dir") or "LLM/GGUF") \
+            / mod.safe_dirname(r.author or "") / mod.safe_dirname(r.repo_dirname)
+        model = mod.find_local_gguf_file(r.model_filename, d)
+        mmproj = mod.find_local_gguf_file(r.mmproj_filename, d, allow_recursive=False) if r.mmproj_filename else None
+        return (model, mmproj) if model and os.path.isfile(model) else (None, None)
+    except Exception:
+        return None, None
+
+
+def gguf_models():
+    """The GGUF catalog's vision models that are on disk (a model with its mmproj), as qwen_model entries."""
+    mod = locate_qwen_gguf()
+    if mod is None:
+        return []
+    try:
+        names = sorted((mod._load_gguf_vl_catalog().get("models") or {}).keys())
+    except Exception:
+        return []
+    return [GGUF_PREFIX + n for n in names if all(gguf_model_file(mod, n))]
+
+
 def qwen_models():
-    """The QwenVL model list (its HF VL models), for the qwen_model widget."""
+    """The QwenVL model list (its HF VL models, then the GGUF vision models on disk), for the qwen_model widget."""
     cls = locate_qwen()
     mod = sys.modules.get(getattr(cls, "__module__", ""), None) if cls else None
     try:
@@ -189,7 +572,7 @@ def qwen_models():
         names = list(mod.HF_VL_MODELS.keys())
     except Exception:
         names = []
-    return names or [DEFAULT_QWEN]
+    return (names or [DEFAULT_QWEN]) + gguf_models()
 
 
 # ---------------------------------------------------------------------------
@@ -545,10 +928,16 @@ def lines_from_text(words):
 SUBJECT_INSTRUCTION = """This picture is a character sheet: one character, shown from one or more angles. Write exactly three labelled lines and nothing else:
 
 name: a short descriptive name for the character, 2-4 words, lower case (for example "bearded sailor" or "silver robot knight").
-appearance: ONE sentence, a comma-separated list from head to toe that names every visible detail, in this order: apparent age and build; face and make-up (skin, cheeks, nose, lips, eyes); hair (colour, length, style, fringe); anything on or above the head, with its colours; anything at the neck; the top or dress (colour, neckline, sleeves, trims, buttons, bows, belts); the skirt or trousers (layers, colours); gloves or arm pieces (length, colours, cuffs); legwear; footwear; anything attached to the body (for example wings or a tail). Start with "a young woman", "an old man", "a boy", or similar.
+appearance: ONE sentence, a comma-separated list from head to toe that names every visible detail, in this order: apparent age and build; face and make-up (skin, cheeks, nose, lips, eyes; name make-up and face paint as make-up, for example "white face paint" or "black eye make-up", never as skin colour or as shadows or circles under the eyes); hair (colour, length, style, fringe); anything on or above the head, with its colours; anything at the neck; the top or dress (colour, neckline, sleeves, trims, buttons, bows, belts); the skirt or trousers (layers, colours); gloves or arm pieces (length, colours, cuffs); legwear; footwear; anything attached to the body (for example wings or a tail). Start with "a young woman", "an old man", "a boy", or similar.
 pronoun: she, he or they.
 
 Rules: describe only the character's own body, clothes and what is worn on the body. Never name an object held in the hands or lying near the character: no props. Concrete visual detail only (colour, material, shape, pattern), no mood, personality or story."""
+# 2026-10-17, test clip c14: a cosplay sheet's white face paint and black eye make-up came back as "pale skin with
+# heavy dark circles around the eyes", which fits the source actor as he is; H3 kept him on every seed and model, and
+# the same chunk swapped with the line that said "make-up" (the sheet's picture unchanged)
+_SUBJECT_BEFORE_MAKEUP = SUBJECT_INSTRUCTION.replace(
+    '; name make-up and face paint as make-up, for example "white face paint" or "black eye make-up", never as skin '
+    'colour or as shadows or circles under the eyes', "")
 
 SUBJECT_2_INSTRUCTION = """This picture is a second reference of the same character: a close-up of the face, or another view. Write exactly one labelled line and nothing else:
 
@@ -636,6 +1025,111 @@ def moment_instruction(who, touch=False):
 # against the other person ("lies across her, pinning her to the mat"); the moment captions only give a still pose
 RELATION_INSTRUCTION = """These are {n} frames from one continuous shot of a video, in order. The main person is {who}; the other person is {other}. In ONE sentence, say how the main person's body is placed against the other person through the shot (for example lying across them, kneeling over them, beside them, behind them, facing them, holding them), calling the main person "the person" and the other "the other person". Answer only "none" if they stay apart and don't touch. Never name anyone."""
 
+# the large-model template: one call per shot. The pictures come in order, each after its time (llama.cpp gives a
+# GGUF model separate pictures with no clock of their own); the cast comes by label, so the model says who is beside
+# whom instead of the code guessing it; the answer is JSON (a 27B keeps the keys; the code reads what it needs)
+LARGE_SHOT_INSTRUCTION = """This is one continuous shot ({secs:.1f} seconds) from a film clip. In an edit of the clip, one person in it is replaced by a new character; everyone else stays exactly as filmed. The pictures below are from this shot, in time order, each after its time in the shot.
+
+The person who is replaced: {who}. Below this person is called "{subj}".
+The other people in the clip, by label (use only these labels for them):
+{cast}
+{objects}{lines}
+Look at every picture before you answer: a pose that changes partway through the shot matters as much as the first picture. Then answer with one JSON object and nothing else:
+
+{{"main_visible": true or false (is {who} in any of the pictures, even only partly: the hands, an arm, the back of the head),
+"frame": "what the shot shows, in a few words",
+"others_visible": [the labels of the other people visible in any picture of this shot: check each listed person against every picture],
+"beside": "who is directly beside {subj} and on which side of the frame, by label, or none",
+"description": "2 to 4 sentences, present tense, about {subj} only, in the order things happen: how {subj} sits, stands, slumps or leans (and against what or whom), each change of pose and roughly when it comes (at the start, then, by the end), where {subj} looks, and what each hand does and holds (an object by its colour, shape and size; hands out of view get no sentence, and a hand holds only what you can see in it)"}}
+
+Rules for "description": start with "{Subj}"; call {subj} only "{subj}" and the other people only by their labels; {dialogue_rule}describe only what the pictures show; give each object one name and keep it (an object you can't make out is named by its colour and shape, never guessed); keep each sentence under 30 words; don't describe {poss} face, hair or clothes; don't name anyone or quote printed text; don't mention pictures, frames, times, "the person" or the replacement.{extra}"""
+
+
+# the large background template: the kept person is <Subject 2> from the first word (no relabelling afterwards), and
+# the rules are the background lean draft's (no backdrop, no shot size, only what happens)
+LARGE_BG_SHOT_INSTRUCTION = """This is one continuous shot ({secs:.1f} seconds) from a video. In an edit of the video, the person in it, {who}, is kept exactly as filmed and only the background behind them is replaced by a new place. Below, this person is called "<Subject 2>". The pictures below are from this shot, in time order, each after its time in the shot.
+{objects}{lines}
+Look at every picture before you answer: a movement partway through the shot matters as much as the first picture. Then answer with one JSON object and nothing else:
+
+{{"main_visible": true or false (is <Subject 2> in any of the pictures, even only partly),
+"frame": "what the shot shows, in a few words",
+"description": "1 to 4 sentences, present tense, about <Subject 2> only, in the order things happen: when <Subject 2> enters or leaves the frame and from which side, where in the frame <Subject 2> is, which way <Subject 2> faces and moves, how <Subject 2> sits, stands or walks, what each hand does and holds (an object by its colour, shape and size; hands out of view get no sentence), and where <Subject 2> looks"}}
+
+Rules for "description": start with "<Subject 2>", and after that call <Subject 2> "{subj}" or "<Subject 2>"; {dialogue_rule}describe only what the pictures show; never describe the backdrop, the walls, the floor or the light behind <Subject 2>: they are replaced; what <Subject 2> sits, lies or leans on is replaced too, so name it without its colour, pattern or material ("the sofa", "a cushion"); don't say how close the shot is or how much of <Subject 2> shows (no close-up, medium shot, wide shot, full view, waist up); write only what happens (nothing like "no one enters" or "no significant motion"); don't name anyone or quote printed text; don't mention pictures, frames, times or the replacement.{extra}"""
+
+# the clip's camera, pronoun and sounds, from one picture per shot (the background lean draft's own wording for each)
+LARGE_BG_CLIP_INSTRUCTION = """These are {n} pictures from one clip of a video, one from each shot, in order{talk}. In an edit of the clip, {who} is kept exactly as filmed and only the background behind them is replaced by a new place. Write exactly three labelled lines and nothing else:
+
+pronoun: she, he or they, for {who}.
+video_1: ONE sentence about the clip as a whole: the camera's angle and height, whether the camera moves at all (and how, if it does), where in the frame {who} is, and where {who} moves through the frame (enters, crosses, leaves). Don't say how close the shot is or how much of {who} shows (no close-up, medium shot, wide shot, full view, waist up). Don't describe the backdrop, the wall or the floor: they are replaced.
+sounds: ONE sentence: the sounds through the clip, in order{sounds_hint}.
+
+Say only what is there: leave out anything the lines ask about that the pictures don't show."""
+
+
+# the two-character large background template (LARGE_BG2_TEMPLATE): who the two people are, then the clip, then each shot for both.
+# The first person is <Subject 2>, the second <Subject 3>, from the first word of every answer.
+WHO2_INSTRUCTION = """These are {n} frames from one video clip. Who are the TWO main people or characters in it: the two most in focus, the largest, or doing the most? Prefer people or human-like characters over animals or creatures. Never name them, even when a name is written on screen. Answer with exactly two short descriptions separated by a semicolon, each telling that person apart from the other by how they look (build, hair, clothes), never by what they hold or do, which changes from shot to shot, and the first one the person who is further to the left in the frames; for example "a man in a black t-shirt; a woman in a red dress". Answer "none" only if fewer than two people or characters appear in the frames."""
+
+LARGE_BG2_CLIP_INSTRUCTION = """These are {n} pictures from one clip of a video, one from each shot, in order{talk}. In an edit of the clip, two people, {who2} and {who3}, are kept exactly as filmed and only the background behind them is replaced by a new place. Write exactly three labelled lines and nothing else:
+
+pronoun: two words, one for {who2} and then one for {who3}, each she, he or they (for example "he she").
+video_1: ONE sentence about the clip as a whole: the camera's angle and height, whether the camera moves at all (and how, if it does), where in the frame each of the two people is, and where each moves through the frame (enters, crosses, leaves). Don't say how close the shot is or how much of them shows (no close-up, medium shot, wide shot, full view, waist up). Don't describe the backdrop, the wall or the floor: they are replaced.
+sounds: ONE sentence: the sounds through the clip, in order{sounds_hint}.
+
+Say only what is there: leave out anything the lines ask about that the pictures don't show."""
+
+LARGE_BG2_SHOT_INSTRUCTION = """This is one continuous shot ({secs:.1f} seconds) from a video. In an edit of the video, the two people in it are kept exactly as filmed and only the background behind them is replaced by a new place. Below, the first person, {who2}, is called "<Subject 2>" and the second person, {who3}, is called "<Subject 3>". The pictures below are from this shot, in time order, each after its time in the shot.
+{objects}{lines}
+Look at every picture before you answer: a movement partway through the shot matters as much as the first picture. Then answer with one JSON object and nothing else:
+
+{{"visible_2": true or false (is <Subject 2> in any of the pictures, even only partly),
+"visible_3": true or false (is <Subject 3> in any of the pictures, even only partly),
+"frame": "what the shot shows, in a few words",
+"description_2": "1 to 3 sentences, present tense, about <Subject 2> only, in the order things happen: when <Subject 2> enters or leaves the frame and from which side, where in the frame <Subject 2> is, which way <Subject 2> faces and moves, how <Subject 2> sits, stands or walks, what each hand does and holds (an object by its colour, shape and size; hands out of view get no sentence), and where <Subject 2> looks",
+"description_3": "the same for <Subject 3>, about <Subject 3> only",
+"together": "ONE sentence on how <Subject 2> and <Subject 3> are placed against each other through the shot (for example side by side with <Subject 2> on the left, facing each other, one behind the other, touching, one holding the other), or \"none\" if they stay apart and don't touch"}}
+
+Rules for the descriptions: start each with its own label, "<Subject 2>" or "<Subject 3>", and call each person only by that label; {dialogue_rule}describe only what the pictures show; never describe the backdrop, the walls, the floor or the light behind them: they are replaced; what they sit, lie or lean on is replaced too, so name it without its colour, pattern or material ("the sofa", "a cushion"); don't say how close the shot is or how much of them shows (no close-up, medium shot, wide shot, full view, waist up); write only what happens (nothing like "no one enters" or "no significant motion"); don't name anyone or quote printed text; don't mention pictures, frames, times or the replacement.{extra}"""
+
+
+def large_cast(labels, people):
+    """The shot call's cast lines: "- <Subject 2>: a man in a tan jacket", or a line saying there is no one else."""
+    return "\n".join(f"- {lab}: {desc}" for lab, desc in zip(labels, people)) or "- none: no one else takes part"
+
+
+def large_objects(objects):
+    """The shot call's object names: the chunk's object list, so a shot doesn't rename the same thing (test clip
+    c5: one ticket strip was "a card", "a rod", "a scroll" and "a cigar" in four shots)."""
+    names = [o for o in (objects or []) if o]
+    return ("Objects seen in this clip, by the names to use for them: " + ", ".join(names) + ".\n") if names else ""
+
+
+def large_lines(lines_rel, fps):
+    """The shot call's spoken lines, with their times in the shot."""
+    if not lines_rel:
+        return ""
+    return "Words spoken in this shot: " + "; ".join(_line_where(ln, fps) for ln in lines_rel) + "\n"
+
+
+def parse_large_shot(text):
+    """The shot call's JSON object -> dict ({} if none parses). A reply without JSON is taken as the description."""
+    t = (text or "").strip()
+    a, b = t.find("{"), t.rfind("}")
+    if a >= 0 and b > a:
+        try:
+            d = json.loads(t[a:b + 1])
+            if isinstance(d, dict):
+                return d
+        except ValueError:
+            pass
+    return {"main_visible": True, "description": t} if t else {}
+
+
+def large_visible(value):
+    return str(value).strip().lower() not in ("false", "no", "0", "none", "")
+
+
 # when the scene named no one but the moments keep seeing someone (others_from_moments): how they look, so the prompt
 # keeps "a woman in a blue singlet" rather than "the opponent"
 OTHER_LOOK_INSTRUCTION = """These are {n} frames from one video clip. Besides the main person ({who}), there is {other}. Describe {other} in a few words by how they look: clothes, colours and hair (for example "a woman in a blue singlet" or "a man in a grey suit"). Never name anyone. Answer only with the description."""
@@ -722,6 +1216,16 @@ QUESTIONS = (("subject", "SUBJECT_INSTRUCTION", "the character sheet -> the subj
              ("recheck", "RECHECK_INSTRUCTION", "timeline: is the person there at all"),
              ("relation", "RELATION_INSTRUCTION", "timeline: how her body sits against the other person, once a shot"),
              ("other_look", "OTHER_LOOK_INSTRUCTION", "timeline: how the person the scene missed looks"),
+             ("large_shot", "LARGE_SHOT_INSTRUCTION", "the large-model template: each shot in one call"),
+             ("large_bg_shot", "LARGE_BG_SHOT_INSTRUCTION", "the large-model background template: each shot of the "
+                                                            "kept person in one call"),
+             ("large_bg_clip", "LARGE_BG_CLIP_INSTRUCTION", "the large-model background template: the camera, "
+                                                            "pronoun and sounds"),
+             ("who2", "WHO2_INSTRUCTION", "the 2 characters background template: who the two people are"),
+             ("large_bg2_clip", "LARGE_BG2_CLIP_INSTRUCTION", "the 2 characters background template: the camera, "
+                                                              "pronouns and sounds"),
+             ("large_bg2_shot", "LARGE_BG2_SHOT_INSTRUCTION", "the 2 characters background template: each shot, "
+                                                              "both people"),
              ("one_call", "DRAFT_INSTRUCTION", "the one-call template"),
              ("per_shot", "SHOT_INSTRUCTION", "the per-shot template: each shot"),
              ("per_shot_chunk", "CHUNK_INSTRUCTION", "the per-shot template: the clip and its sounds"),
@@ -739,7 +1243,8 @@ _BUILTIN_QUESTIONS = {}
 _SCENE_3_LINES = SCENE_INSTRUCTION.replace("Write exactly four labelled lines", "Write exactly three labelled lines").replace(
     'background: what is behind the people, as a short list separated by semicolons (for example "a crowd in tiered seating; an electronic scoreboard; a caption"), a caption or logo without its words, or "none".\n', "")
 OLD_SCENE_SHEET_2 = "This picture is a second view of the same place as the first reference: a closer look at a surface, another angle, or a detail. Write exactly one labelled line and nothing else:\n\ndetail: ONE sentence saying what this picture shows that a description of the whole place would miss: the surface or object seen close up (for example the weave of a fabric, a wall's texture, a pattern, a fitting), its colours, materials and pattern, and the light on it.\n\nRules: concrete visual detail only (colour, material, shape, pattern), no mood or story. Never quote printed text, logos or brand names. Don't describe any person."
-_LEGACY_QUESTIONS = {"SCENE_INSTRUCTION": [_SCENE_3_LINES, _SCENE_3_LINES.replace(
+_LEGACY_QUESTIONS = {"SUBJECT_INSTRUCTION": [_SUBJECT_BEFORE_MAKEUP],
+                     "SCENE_INSTRUCTION": [_SCENE_3_LINES, _SCENE_3_LINES.replace(
     "the background and its colour (and what is in it: a crowd or audience, seating, screens, a scoreboard, banners, "
     "and any caption or logo laid over the picture, said as \"a caption\" or \"a logo\" without its words)",
     "the background and its colour")],
@@ -1859,6 +2364,30 @@ _DETAIL = re.compile(r"(?i)\b(eyes?|lips?|eyebrows?|lashes|make-?up|choker|neckl
                      r"ribbons?|bracelets?|rings?|nails?)\b")
 _LEGWEAR = re.compile(r"(?i)\b(socks?|stockings?|tights|leggings|heels|shoes?|boots?|sandals?|sneakers|trainers|"
                       r"slippers|footwear)\b")
+_ABSENT = re.compile(r"(?i)(nothing|no|none)\b")
+_EXPRESSION = re.compile(r"(?i)\b(open|opened|closed|parted)\s+mouth\b|\bsmil(e|es|ing)\b|\bfrown")
+# "red lips", "and orange-tinged lips", "dark lipstick": up to two describing words, never "and" / "with" themselves
+_LIPS = re.compile(r"(?i)\s*(?:\b(?:and|with)\b\s*)?(?:(?!(?:and|with)\b)[\w-]+\s+){0,2}lip(?:s|stick)?\b")
+
+
+def full_look_subject(subject):
+    """The large template's look sentence: the sheet's items whole (face, make-up, accessories and their "with ..."
+    details), minus legwear, what isn't there and the sheet's own expression. test clip c5 t001 (2026-10-16):
+    lean_subject left "pale skin, greenish hair, a dark red suit", which fits the source man as well as the
+    cosplayer; the eye make-up, the lips and the bow tie that tell them apart were the details it drops, and H3
+    rebuilt the source actor from the marked guide."""
+    first, _, rest = (subject or "").strip().partition("\n")
+    m = re.match(r"<Subject 1> is the (.+?) whose motion comes from <Video 1> and whose appearance comes from "
+                 r"<Picture 1>:\s*(.+?)\.?\s*$", first)
+    if not m:
+        return fold_picture_2(subject.strip(), False)
+    # the lips' colour is left to the picture: "red lips" (the second test sheet, muted pink-red lips) came
+    # out saturated lipstick red on every frame of c4 / c15 t002
+    items = [_LIPS.sub("", x).strip(" ,") for x in re.split(r"[,;]", m.group(2))
+             if x.strip() and not _LEGWEAR.search(x) and not _ABSENT.match(x.strip()) and not _EXPRESSION.search(x)]
+    items = [x for x in items if x]
+    line = f"<Subject 1> is the {m.group(1)} in <Picture 1>: {', '.join(items)}."
+    return fold_picture_2(line + ("\n" + rest.strip() if rest.strip() else ""), False)
 
 
 def lean_subject(subject):
@@ -1872,15 +2401,20 @@ def lean_subject(subject):
                  r"<Picture 1>:\s*(.+?)\.?\s*$", first)
     if not m:
         return fold_picture_2(subject.strip(), False)
-    items = [re.split(r"\s+with\s+", x.strip(), 1)[0] for x in m.group(2).split(",")
-             if x.strip() and not _LEGWEAR.search(x) and not _DETAIL.search(re.split(r"\s+with\s+", x.strip(), 1)[0])]
+    # the items split at commas and semicolons (the 27B lists them with "; ", 2026-10-16: split at commas only, its
+    # whole list after "a young, thin man" was one item, cut at its first "with"); "nothing on the head" and
+    # "no visible trousers" say what isn't there
+    items = [re.split(r"\s+with\s+", x.strip(), 1)[0] for x in re.split(r"[,;]", m.group(2))
+             if x.strip() and not _LEGWEAR.search(x) and not _ABSENT.match(x.strip())
+             and not _DETAIL.search(re.split(r"\s+with\s+", x.strip(), 1)[0])]
     line = f"<Subject 1> is the {m.group(1)} in <Picture 1>: {', '.join(items)}."
     return fold_picture_2(line + ("\n" + rest.strip() if rest.strip() else ""), False)
 
 
 def fill_ref2va_lean(*, subject, video_1, shots, sounds, n_shots, dialogue, audio, pronoun, who=None, others=False,
-                     people=(), speaking=False, placed=False, exits=False, behind=()):
-    """The lean template's six sections: the same parts as fill_ref2va, written short (LEAN_TEMPLATE)."""
+                     people=(), speaking=False, placed=False, exits=False, behind=(), full_look=False):
+    """The lean template's six sections: the same parts as fill_ref2va, written short (LEAN_TEMPLATE). full_look:
+    the subject's look sentence keeps the sheet's details (the large template)."""
     pr = PRONOUNS[pronoun]
     n_cuts = max(0, n_shots - 1)
     tag = "[video editing + reference generation" + (" + audio reuse]" if audio else "]")
@@ -1926,7 +2460,7 @@ def fill_ref2va_lean(*, subject, video_1, shots, sounds, n_shots, dialogue, audi
     sound = soundscape(sounds, audio)
     defs = "".join(f"\n{lab} is {desc} in <Video 1>, unchanged from the source." for lab, desc, _ in people)
     a1 = ("\n<Audio 1> is the synchronized audio track of <Video 1>, and is reused in the target video." if audio else "")
-    return ("subject_definitions:\n" + lean_subject(subject) + defs
+    return ("subject_definitions:\n" + (full_look_subject if full_look else lean_subject)(subject) + defs
             + "\n<Video 1> is the source video for the target video edit: " + v1 + a1
             + "\n\nsummary:\n" + summary + "\n\nretention_analysis:\n" + "\n".join(ret)
             + "\n\ndetailed_description:\n" + opening + "\n" + "\n".join(blocks)
@@ -2318,6 +2852,80 @@ def fill_bg_ref2va_lean(*, subject, who, video_1, shots, sounds, n_shots, dialog
             + "\n\noverall_soundscape:\n" + sound + "\n\nnon_diegetic_music:\nN/A\n")
 
 
+def split_two_people(text):
+    """Two people's short descriptions out of an answer ("a man in a tan jacket; a woman in a red dress") or a hand-set
+    target ("the man and the woman"): [first, second] with their articles ("the man"), or fewer if the text names fewer."""
+    t = " ".join(re.sub(r"(?i)^\s*(main people|people|answer)\s*:\s*", "", text or "").split()).strip(' ."')
+    if not t or t.lower().startswith(("none", "n/a", "no person", "no one")) or len(t) > 320:
+        return []
+    bits = [b.strip(' ."') for b in re.split(r"\s*;\s*|\s+\band\b\s+(?=(?:the|a|an)\b)", t) if b.strip(' ."')]
+    out = []
+    for b in bits[:2]:
+        b = who_lasting(b) or b
+        out.append(re.sub(r"(?i)^(a|an)\b", "the", b) if re.match(r"(?i)(the|a|an)\b", b) else "the " + b)
+    return out
+
+
+def fill_bg2_ref2va_lean(*, subject, whos, pronouns, video_1, shots, sounds, n_shots, dialogue, audio):
+    """fill_bg_ref2va_lean for TWO kept people: the place is <Subject 1>, the first person <Subject 2>, the second
+    <Subject 3> (both from <Video 1>, fully_preserved). Same sections and labels; the backdrop behind both is replaced."""
+    pr2, pr3 = PRONOUNS[pronouns[0]], PRONOUNS[pronouns[1]]
+    m = re.match(r"\s*<Subject 1> is the (.*?) environment in <Picture 1>", subject or "")
+    name = m.group(1) if m else "new"
+    n_cuts = max(0, n_shots - 1)
+    who2, who3 = (list(whos) + ["the person", "the other person"])[:2]
+    tag = "[video editing + reference generation" + (" + audio reuse]" if audio else "]")
+    pics = "<Picture 1> and <Picture 2>" if has_picture_2(subject) else "<Picture 1>"
+    v1 = drop_shot_size(video_1) or f"{who2} and {who3} filmed in front of a plain backdrop."
+    where = "throughout" if n_shots == 1 else "in " + ", ".join(f"[Shot {k}]" for k in range(1, n_shots + 1))
+    summary = (f"{tag} The target video is an edited version of <Video 1>. The backdrop behind <Subject 2> and <Subject 3> "
+               f"is replaced by <Subject 1>, the {name} environment from {pics}, while <Subject 2>, <Subject 3>, the camera "
+               f"and the action remain as recorded" + (", every jump cut at the same moment" if n_cuts else "")
+               + "; wherever both are out of frame, only <Subject 1> shows. Nothing of the original backdrop "
+               "remains. The edit runs continuously from the first frame to the last without deviation.")
+    ret = [f"<Subject 1> (appears throughout): partially_preserved - the layout, colours, fixtures and furniture of the "
+           f"environment in <Picture 1> are the background, seen from the camera's angle in <Video 1> and moving with the "
+           f"camera; <Subject 2> and <Subject 3> are lit to match it, with natural shadows"
+           + ("; " + picture_2_retention(subject) if has_picture_2(subject) else "."),
+           f"<Subject 2> (appears {where}, whenever {pr2['subj']} {'are' if pronouns[0] == 'they' else 'is'} in frame): "
+           f"fully_preserved - {pr2['poss']} identity, face, hair, build and clothing, and every movement, position in the "
+           f"frame and timing, from <Video 1>.",
+           f"<Subject 3> (appears {where}, whenever {pr3['subj']} {'are' if pronouns[1] == 'they' else 'is'} in frame): "
+           f"fully_preserved - {pr3['poss']} identity, face, hair, build and clothing, and every movement, position in the "
+           f"frame and timing, from <Video 1>, and where {pr3['subj']} {'stand' if pronouns[1] == 'they' else 'stands'} "
+           f"or {'sit' if pronouns[1] == 'they' else 'sits'} against <Subject 2>.",
+           "<Video 1> (whole-video temporal structure, camera angle and movement, the people): partially_preserved - "
+           "the camera's angle and movement, the framing" + (", every jump cut" if n_cuts else "")
+           + "; its original backdrop is replaced by <Subject 1>."]
+    if audio:
+        ret.append("<Audio 1>: fully_copy - the original sound of <Video 1> is kept as it is.")
+    blocks = list(shots) or ["[Shot 1] <Subject 2> and <Subject 3> move exactly as in <Video 1>."]
+    tail = []
+    if dialogue:
+        tail.append("Their lips move only with their own lines, in time with the speech in <Audio 1>; everyone else's lips "
+                    "move only with their own.")
+    if n_cuts:
+        tail.append("Every jump cut happens at the same moment as in <Video 1>.")
+    if tail:
+        blocks[-1] = blocks[-1].rstrip() + " " + " ".join(tail)
+    feats = ", ".join(place_items(subject)[:4])
+    est = (f"The shot establishes <Subject 1>, the {name} environment" + (f" with its {feats}" if feats else "")
+           + ", behind <Subject 2> and <Subject 3>.")
+    blocks = camera_in_shots(blocks, video_1, lead=est)
+    sound = soundscape(sounds, audio)
+    a1 = ("\n<Audio 1> is the synchronized audio track of <Video 1>, and is reused in the target video." if audio else "")
+    return ("subject_definitions:\n" + lean_place(subject)
+            + f"\n<Subject 2> is {who2} in <Video 1>, who keeps {pr2['poss']} own appearance and movements."
+            + f"\n<Subject 3> is {who3} in <Video 1>, who keeps {pr3['poss']} own appearance and movements."
+            + "\n<Video 1> is the source video for the target video edit: " + v1 + a1
+            + "\n\nsummary:\n" + summary + "\n\nretention_analysis:\n" + "\n".join(ret)
+            + "\n\ndetailed_description:\n"
+            + "The target video keeps the camera, framing and timing of <Video 1>, with <Subject 1> behind <Subject 2> "
+              "and <Subject 3> in place of the original backdrop, moving with the camera as the original backdrop did.\n"
+            + "\n".join(blocks)
+            + "\n\noverall_soundscape:\n" + sound + "\n\nnon_diegetic_music:\nN/A\n")
+
+
 _LINE = re.compile(r"(<Subject \d+>|\b[a-z][a-z' -]*? voice) \((S\d+)\) says <d>\[([^\]]*)\](.*?)</d>")
 _VOICE = re.compile(r"[a-z][a-z' -]* voice")
 _LIPS_ALL = re.compile(r"(Her|His|Their) lips move with every word, in time with the speech in <Audio 1>, and close between "
@@ -2553,6 +3161,129 @@ class QwenRunner:
                 torch.cuda.empty_cache()
 
 
+GGUF_CTX = 16384               # 16 frames at ~530 px plus the long draft instruction and a 2048-token answer
+GGUF_TEXT_RESERVE = 4096       # of GGUF_CTX, kept for the instruction and the answer when the frames are sized
+GGUF_IMAGE_MAX_TOKENS = 1280   # one picture's cap (the sheet at 1280 px); video frames are shrunk to fit first
+GGUF_SYSTEM = ("You are a helpful vision-language assistant. "
+               "Answer directly with the final answer only. No <think> and no reasoning.")   # the GGUF node's own
+# the large-model template's calls: the Qwen3.8 model card's two sampling sets (instruct / thinking), not the 8B's
+# 0.6 / 0.9 / repetition 1.15 (the card: repetition_penalty 1.0; mixing the sets "causes mushy shorts or rambling loops")
+LARGE_SAMPLING = {"instruct": {"temperature": 0.7, "top_p": 0.8, "top_k": 20, "min_p": 0.0, "presence_penalty": 1.5,
+                               "repeat_penalty": 1.0},
+                  "think": {"temperature": 1.0, "top_p": 0.95, "top_k": 20, "min_p": 0.0, "presence_penalty": 0.0,
+                            "repeat_penalty": 1.0}}
+LARGE_THINK_TOKENS = 4096       # added to a thinking call's answer budget for the reasoning
+LARGE_SYSTEM = ("You describe film footage precisely for a video-editing pipeline. You look at every picture you are "
+                "given before answering, report only what is visible, and follow the requested output format exactly.")
+
+
+def _gguf_arch(path):
+    """general.architecture from a GGUF file's header, or ""."""
+    try:
+        import gguf
+        f = gguf.GGUFReader(str(path)).fields.get("general.architecture")
+        return bytes(f.parts[f.data[0]]).decode() if f else ""
+    except Exception:
+        return ""
+
+
+class GgufQwenRunner:
+    """A QwenVL GGUF catalog model (llama.cpp, in-process), with QwenRunner's load / ask / close. Uses the GGUF
+    node's own loader, _invoke and image helpers; only the chat handler is picked here: the node always takes
+    Qwen3VLChatHandler, but a qwen35-architecture model (Qwen3.5 / 3.6 / 3.8) wants Qwen35ChatHandler, whose
+    template closes an empty <think> block when thinking is off (under the Qwen3-VL template it thinks first and
+    spends the answer's tokens on it). Refuses a model that isn't on disk: never downloads."""
+
+    def __init__(self, mod, model):
+        self.mod = mod
+        self.name = model[len(GGUF_PREFIX):] if model.startswith(GGUF_PREFIX) else model
+        path, mmproj = gguf_model_file(mod, self.name)
+        if path is None or mmproj is None:
+            raise DraftError(f"GGUF model {self.name!r} isn't on disk with its mmproj (models/LLM/GGUF): Swap Draft "
+                             f"never downloads; place it first or pick another")
+        self.model, self.path, self.mmproj = model, str(path), str(mmproj)
+        self.arch = _gguf_arch(path)
+        self.node = mod.QwenVLGGUFBase()
+
+    def _handler(self):
+        """The chat handler class the node's loader should build, as a stand-in for Qwen3VLChatHandler."""
+        if self.arch != "qwen35":
+            return None
+        from llama_cpp.llama_chat_format import Qwen35ChatHandler
+
+        class NoThink(Qwen35ChatHandler):
+            def __init__(self, clip_model_path=None, image_max_tokens=-1, verbose=False, **_):
+                super().__init__(mmproj_path=clip_model_path, image_max_tokens=image_max_tokens, verbose=verbose,
+                                 enable_thinking=False)
+        return NoThink
+
+    def load(self):
+        import llama_cpp.llama_chat_format as fmt
+        h, old = self._handler(), getattr(fmt, "Qwen3VLChatHandler", None)
+        if h is not None:
+            fmt.Qwen3VLChatHandler = h
+        try:
+            self.node._load_model(model_name=self.name, device="auto", ctx=GGUF_CTX, n_batch=None, gpu_layers=-1,
+                                  image_max_tokens=GGUF_IMAGE_MAX_TOKENS, top_k=None, pool_size=None)
+        finally:
+            if h is not None:
+                fmt.Qwen3VLChatHandler = old
+        if self.node.chat_handler is None:
+            raise DraftError(f"GGUF model {self.name!r} loaded without its mmproj: it can't see the frames")
+
+    def ask(self, prompt, image=None, video=None, max_tokens=2048, frame_count=16):
+        m = self.mod
+        pics = []
+        if image is not None:
+            pics += [m.tensor_to_base64_png(f, max_side=1280) for f in m.sample_video_frames(image, image.shape[0])]
+        if video is not None:
+            side = m.resolve_safe_video_max_side(video, frame_count=int(frame_count),
+                                                 ctx=GGUF_CTX - GGUF_TEXT_RESERVE + 1024, video_frame_size="auto")
+            pics += [m.tensor_to_base64_png(f, max_side=side) for f in m.sample_video_frames(video, int(frame_count))]
+        s = QWEN_SAMPLING
+        return self.node._invoke(system_prompt=GGUF_SYSTEM, user_prompt=prompt, images_b64=[p for p in pics if p],
+                                 max_tokens=max_tokens, temperature=s["temperature"], top_p=s["top_p"],
+                                 repetition_penalty=s["repetition_penalty"], seed=s["seed"])
+
+    def ask_parts(self, parts, max_tokens=1024, think=False, max_side=1280):
+        """One question as text and pictures in order (a str is text, a [H, W, 3] tensor a picture; the template
+        puts "Picture n:" before each), with the model card's sampling for the mode (LARGE_SAMPLING). think: the
+        model reasons first; its <think> part is dropped from the answer."""
+        content = []
+        for p in parts:
+            if isinstance(p, str):
+                content.append({"type": "text", "text": p})
+            else:
+                b = self.mod.tensor_to_base64_png(p, max_side=max_side)
+                if b:
+                    content.append({"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b}"}})
+        h = self.node.chat_handler
+        args = getattr(h, "extra_template_arguments", None)
+        if args is not None and "enable_thinking" in args:
+            args["enable_thinking"] = bool(think)
+        s = LARGE_SAMPLING["think" if think else "instruct"]
+        try:
+            res = self.node.llm.create_chat_completion(
+                messages=[{"role": "system", "content": LARGE_SYSTEM}, {"role": "user", "content": content}],
+                max_tokens=int(max_tokens) + (LARGE_THINK_TOKENS if think else 0), seed=int(QWEN_SAMPLING["seed"]),
+                stop=["<|im_end|>", "<|im_start|>"], **s)
+        finally:
+            if args is not None and "enable_thinking" in args:
+                args["enable_thinking"] = False
+        msg = (res.get("choices") or [{}])[0].get("message", {})
+        text = msg.get("content") or ""
+        return text.split("</think>")[-1].strip()
+
+    def close(self):
+        try:
+            self.node.clear()
+        finally:
+            self.node = None
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+
+
 class OmniRunner:
     """The Omni Captioner Transcribe node, in-process (it starts its own llama.cpp process per call),
     with its default structured prompt and the full answer (transcript + audio events)."""
@@ -2613,6 +3344,55 @@ class WhisperRunner:
         gc.collect()
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
+
+
+ECHO_WORDS = 6        # an answer that repeats the question's first 6+ words is the question handed back, not an answer
+
+
+def _norm_words(s):
+    return re.sub(r"[^\w<>]+", " ", str(s or "").lower()).split()
+
+
+def echoes_instruction(instruction, answer):
+    """True when `answer` contains the opening words of `instruction` (the model handed the question back). Instructions
+    shorter than ECHO_WORDS words are never judged: a short answer can legitimately repeat them."""
+    opening = _norm_words(instruction)[:ECHO_WORDS]
+    if len(opening) < ECHO_WORDS:
+        return False
+    return " ".join(opening) in " ".join(_norm_words(answer))
+
+
+class EchoGuard:
+    """Wraps a Qwen runner (Q4 fault 5, 2026-11-17: Qwen sometimes answers with its own instruction). An answer that
+    contains the instruction's opening words is asked once more; if it echoes again the answer is "" and `echoed`
+    counts it, so the draft can leave that chunk's prompt empty and say why. Everything else goes to the runner."""
+
+    def __init__(self, inner, warnings=None):
+        self._inner, self._warnings, self.echoed = inner, warnings, 0
+        if hasattr(inner, "ask_parts"):
+            self.ask_parts = self._ask_parts
+
+    def __getattr__(self, name):
+        return getattr(self._inner, name)
+
+    def _guard(self, instruction, call):
+        out = call()
+        if not echoes_instruction(instruction, out):
+            return out
+        out = call()                                    # redraft once
+        if not echoes_instruction(instruction, out):
+            return out
+        self.echoed += 1
+        if self._warnings is not None:
+            self._warnings.append(f"Qwen answered with its own instruction twice ({str(instruction)[:50]!r}...): no answer taken")
+        return ""
+
+    def ask(self, prompt, *a, **kw):
+        return self._guard(prompt, lambda: self._inner.ask(prompt, *a, **kw))
+
+    def _ask_parts(self, parts, *a, **kw):
+        first = next((p for p in parts if isinstance(p, str)), "")
+        return self._guard(first, lambda: self._inner.ask_parts(parts, *a, **kw))
 
 
 def free_comfy_models():
@@ -2691,10 +3471,42 @@ def select_chunks(plan, mode, named=()):
     return rendered
 
 
+_DRAFT_MODE = contextvars.ContextVar("seamstitch_draft_mode", default=None)
+
+
+def update_plan_in_draft_mode(plan_file, fn):
+    """sp.update_plan(plan_file, fn) for a draft's writes into a mode's own state (subject, a chunk's prompt / draft).
+    A draft belongs to the mode the job was in when it started (_DRAFT_MODE, set by _run_draft). If the strip switched
+    the job's mode while it ran, fn edits that mode's saved copy under plan["by_mode"] (what switch_mode keeps for a mode
+    that is not current) instead of the live fields, so the finished draft can't write into the new mode (Q4 fault 1,
+    2026-11-17). Same mode, or no run in progress: the live plan, as before."""
+    mode = _DRAFT_MODE.get()
+
+    def upd(p):
+        if mode is None or sp.job_mode(p) == mode:
+            return fn(p)
+        store = p.setdefault("by_mode", {}).setdefault(mode, {"plan": {}, "chunks": {}})
+        saved = store.setdefault("chunks", {})
+        spl = _planner()
+        view = {"job": p.get("job"), "chunks": [dict({"id": c_["id"]}, **(saved.get(c_["id"]) or {}))
+                                                 for c_ in p.get("chunks", [])]}
+        view.update(store.get("plan") or {})
+        res = fn(view)
+        for k in spl._MODE_PLAN_KEYS:
+            if k in view:
+                store.setdefault("plan", {})[k] = view[k]
+        for c_ in view["chunks"]:
+            saved[c_["id"]] = {k: c_.get(k) for k in spl._MODE_CHUNK_KEYS}
+        return res
+    return sp.update_plan(plan_file, upd)
+
+
 def write_chunk_draft(plan_file, chunk_id, text, info):
     """Writes one chunk's draft under the plan lock: into the prompt only if it's empty at this
     moment, otherwise into the draft field. Returns where it went."""
     where = {}
+    if _LAYOUT["text"]:
+        text = apply_layout(_LAYOUT["text"], text)
 
     def upd(p):
         c = sp.find_chunk(p, chunk_id)
@@ -2705,7 +3517,7 @@ def write_chunk_draft(plan_file, chunk_id, text, info):
             c["draft"] = text
             where["into"] = "draft"
         c["drafted"] = dict(info, at=sp.now(), into=where["into"])
-    plan = sp.update_plan(plan_file, upd)
+    plan = update_plan_in_draft_mode(plan_file, upd)
     return where["into"], plan["rev"]
 
 
@@ -2721,7 +3533,7 @@ def write_subject(plan_file, sentence, pronoun):
             where["into"] = "subject_draft"
         if pronoun and not p.get("subject_pronoun"):
             p["subject_pronoun"] = pronoun
-    sp.update_plan(plan_file, upd)
+    update_plan_in_draft_mode(plan_file, upd)
     return where["into"]
 
 
@@ -2743,7 +3555,7 @@ def write_mode_subject(plan_file, sentence, pronoun, bg):
             where["into"] = "subject"
             if not bg and pronoun:
                 p["subject_pronoun"] = pronoun
-    sp.update_plan(plan_file, upd)
+    update_plan_in_draft_mode(plan_file, upd)
     return where["into"]
 
 
@@ -2757,7 +3569,35 @@ def _write_json(path, obj):
     _write(path, json.dumps(obj, indent=1, ensure_ascii=False))
 
 
-def run_draft(plan_file, *, sheet=None, mode=CHUNK_MODES[0], named=(), qwen_model=DEFAULT_QWEN,
+def run_draft(plan_file, *, template=None, **kw):
+    """The whole draft run. A "my: <name>" template drafts exactly as its base built-in template would (the job's own when none is set)
+    and then lays each chunk's prompt out as the user's layout says."""
+    mine = None
+    if is_user_template(template):
+        mine = load_user_templates()[template[len(USER_PREFIX):]]
+        template = mine["base"] if mine["base"] in TEMPLATES else DEFAULT_TEMPLATE
+    elif (template or "").startswith(USER_PREFIX):          # deleted since the workflow was saved
+        template = DEFAULT_TEMPLATE
+    _LAYOUT["text"] = mine["text"] if mine else None
+    try:
+        rep = _run_draft(plan_file, template=template, **kw)
+    finally:
+        _LAYOUT["text"] = None
+    if mine:
+        rep["template_info"] = "your template's layout was applied. " + (rep.get("template_info") or "")
+    return rep
+
+
+def _run_draft(plan_file, **kw):
+    """The whole draft run, filed under the mode the job is in when it starts (see update_plan_in_draft_mode)."""
+    tok = _DRAFT_MODE.set(sp.job_mode(sp.load_plan(plan_file)))
+    try:
+        return _run_draft_unscoped(plan_file, **kw)
+    finally:
+        _DRAFT_MODE.reset(tok)
+
+
+def _run_draft_unscoped(plan_file, *, sheet=None, mode=CHUNK_MODES[0], named=(), qwen_model=DEFAULT_QWEN,
               quantization=QUANTIZATIONS[0], frames_per_chunk=DEFAULT_FRAMES, transcribe=True, word_timings=True,
               extra_instructions="", max_tokens=2048, template=None, qwen_cls=None, omni_cls=None, whisper=None,
               free_models=True,
@@ -2768,6 +3608,8 @@ def run_draft(plan_file, *, sheet=None, mode=CHUNK_MODES[0], named=(), qwen_mode
     plan = sp.load_plan(plan_file)
     # the job's mode picks the kind of prompt; the widget only picks the character template's style
     bg = sp.job_mode(plan) == sp.MODE_BACKGROUND
+    if sp.job_mode(plan) == sp.MODE_OBJECT:          # an object job drafts with the object template, whatever's picked
+        template = OBJECT_TEMPLATE
     two = sheet_2 is not None                       # a second reference picture is wired
     template_notes = []
     asked, template_info = template, ""
@@ -2776,7 +3618,7 @@ def run_draft(plan_file, *, sheet=None, mode=CHUNK_MODES[0], named=(), qwen_mode
         # the job's mode picks the kind: a character template in the widget (its default is one) gets the full form
         # and leaves the choice between one and two references to the picture; a background one is taken as asked
         if asked in BACKGROUND_TEMPLATES:
-            bg_lean = asked in (BACKGROUND_LEAN, BACKGROUND_LEAN_2REF)
+            bg_lean = asked in (BACKGROUND_LEAN, BACKGROUND_LEAN_2REF, LARGE_BG_TEMPLATE, LARGE_BG2_TEMPLATE)
             wants_two = asked in (BACKGROUND_2REF, BACKGROUND_LEAN_2REF)
             if wants_two and not two:
                 template = _BG_FORMS[(bg_lean, False)]
@@ -2794,8 +3636,12 @@ def run_draft(plan_file, *, sheet=None, mode=CHUNK_MODES[0], named=(), qwen_mode
         if asked not in BACKGROUND_TEMPLATES:
             template_info = (f"background job: drafted with {template!r} (the job's mode picks the template; the "
                              f"template widget picks the style of a character job)")
+    elif template == OBJECT_TEMPLATE:
+        if asked != OBJECT_TEMPLATE:
+            template_info = f"object job: drafted with {OBJECT_TEMPLATE!r} (the job's mode picks the template)"
+        two = False
     else:
-        if asked in BACKGROUND_TEMPLATES:
+        if asked in BACKGROUND_TEMPLATES or asked == OBJECT_TEMPLATE:
             template_info = (f"character job: {asked!r} is for background jobs, drafted with {DEFAULT_TEMPLATE!r}")
             asked = DEFAULT_TEMPLATE
         template = asked if asked in TEMPLATES else DEFAULT_TEMPLATE
@@ -2838,7 +3684,26 @@ def run_draft(plan_file, *, sheet=None, mode=CHUNK_MODES[0], named=(), qwen_mode
     if qcls is None:
         raise DraftError("SeamStitch Swap Draft Prompts needs ComfyUI-QwenVL (1038lab) in custom_nodes, with the "
                          f"model {qwen_model!r}: install it (Manager: 'ComfyUI-QwenVL'), restart ComfyUI")
-    qwen = qcls if hasattr(qcls, "ask") else QwenRunner(qcls, qwen_model, quantization)
+    if hasattr(qcls, "ask"):
+        qwen = qcls
+    elif qwen_model.startswith(GGUF_PREFIX):
+        gmod = locate_qwen_gguf()
+        if gmod is None:
+            raise DraftError(f"{qwen_model!r} needs ComfyUI-QwenVL's GGUF side (llama-cpp-python), which didn't load")
+        qwen = GgufQwenRunner(gmod, qwen_model)
+    else:
+        qwen = QwenRunner(qcls, qwen_model, quantization)
+    qwen = EchoGuard(qwen, warnings)
+    if template == OBJECT_TEMPLATE:
+        return run_object_draft(plan_file, plan, chunks, qwen, sheet, report, warnings, free_models=free_models,
+                                t_run=t_run, jd=jd)
+    if template == BFS_TEMPLATE:
+        return run_bfs_draft(plan_file, plan, chunks, qwen, sheet, report, warnings, free_models=free_models,
+                             t_run=t_run, jd=jd)
+    if template in LARGE_TEMPLATES and not hasattr(qwen, "ask_parts"):
+        fallback = BACKGROUND_LEAN if template in (LARGE_BG_TEMPLATE, LARGE_BG2_TEMPLATE) else LEAN_TEMPLATE
+        warnings.append(f"the large-model template needs a GGUF: model; {qwen_model!r} drafted with {fallback!r}")
+        template = report["template"] = fallback
     omni = None
     if transcribe:
         try:
@@ -3002,14 +3867,36 @@ def run_draft(plan_file, *, sheet=None, mode=CHUNK_MODES[0], named=(), qwen_mode
                 lines, aligned = [], []
             elif po is not None and po["words"]:
                 aligned = align_words(po["words"], words, po.get("speakers")) if words else []
-                lines = dialogue_lines(aligned, fps, ci["n"]) if words else lines_from_text(po["words"])
+                # both transcribers inventing over music, apart (test clip c14/c5 2026-10-17: Omni "The
+                # reference-to-video generation process is now complete.", Whisper "I'm going to take a look at it."
+                # at mean confidence 0.29): no word in common and an unsure Whisper means no speech
+                invented = bool(words and aligned and not any(a.get("matched") for a in aligned) and
+                                sum(w.get("p", 1) for w in words) / float(len(words)) < WHISPER_ALONE_P)
+                if invented:
+                    ci["warnings"].append(f"Omni and Whisper heard different words ({po['words'][:40]!r} / "
+                                          f"{' '.join(w['word'] for w in words)[:40]!r}), Whisper unsure: dropped "
+                                          f"as invented over the music")
+                    lines, aligned = [], []
+                else:
+                    lines = dialogue_lines(aligned, fps, ci["n"]) if words else lines_from_text(po["words"])
                 if not words and (wh is not None or word_timings):
                     ci["warnings"].append("no word timings: the lines go to Qwen without frames")
             elif words:
-                good = [w for w in words if w.get("p", 1) >= 0.4]
+                # a "word" with no letters is punctuation Whisper made up; with Omni hearing no speech at all, two
+                # words or fewer are Whisper inventing over music (test clip c5, 2026-10-16: "go." and ". . ." on
+                # an instrumental, each written into shot 1 as a line he says)
+                # and when their mean confidence is under WHISPER_ALONE_P (c5's inventions, 4 runs: 0.18-0.46; 6 to 12
+                # words, "I will do it first. I'm going to get it.")
+                good = [w for w in words if w.get("p", 1) >= 0.4 and re.search(r"[^\W\d_]", w.get("word") or "")]
+                mean_p = sum(w.get("p", 1) for w in words) / float(len(words))
+                if po is not None and not po["words"] and (len(good) <= 2 or mean_p < WHISPER_ALONE_P):
+                    if good:
+                        ci["warnings"].append(f"Whisper heard {len(good)} word(s) where Omni heard no speech: "
+                                              f"dropped (likely invented)")
+                    good = []
                 aligned = [dict(w, matched=True) for w in unstretch(good)]
-                lines = dialogue_lines(aligned, fps, ci["n"])
-                if omni is not None or transcribe:
+                lines = dialogue_lines(aligned, fps, ci["n"]) if good else []
+                if good and (omni is not None or transcribe):
                     ci["warnings"].append("dialogue from Whisper alone (no Omni words)")
             else:
                 lines, aligned = [], []
@@ -3048,7 +3935,10 @@ def run_draft(plan_file, *, sheet=None, mode=CHUNK_MODES[0], named=(), qwen_mode
             else:
                 t = time.time()
                 s_instr = SCENE_SHEET_INSTRUCTION if bg else SUBJECT_INSTRUCTION
-                raw = qwen.ask(s_instr, image=sheet[:1], max_tokens=512)
+                if template in LARGE_TEMPLATES:
+                    raw = qwen.ask_parts([s_instr, sheet[0]], max_tokens=512, think=LARGE_THINK)
+                else:
+                    raw = qwen.ask(s_instr, image=sheet[:1], max_tokens=512)
                 stages["subject_s"] = round(time.time() - t, 2)
                 if bg:
                     ps = parse_scene_sheet(raw)
@@ -3104,7 +3994,7 @@ def run_draft(plan_file, *, sheet=None, mode=CHUNK_MODES[0], named=(), qwen_mode
                     cur = (p.get("subject") or "").strip()
                     if cur and not has_picture_2(cur):
                         p["subject"] = cur + "\n" + s2
-                sp.update_plan(plan_file, add_p2)
+                update_plan_in_draft_mode(plan_file, add_p2)
                 plan = sp.load_plan(plan_file)
                 subject = (plan.get("subject") or "").strip()
                 report["picture_2"] = {"into": "subject", "text": s2}
@@ -3122,8 +4012,11 @@ def run_draft(plan_file, *, sheet=None, mode=CHUNK_MODES[0], named=(), qwen_mode
                             "delete it in the strip's subject box if you won't use a second picture.")
         k_frames = max(1, int(frames_per_chunk))
         per_shot = template == TEMPLATES[1]
-        timeline = template in (TEMPLATES[2], LEAN_TEMPLATE, LEAN_2REF)
-        lean = template in (LEAN_TEMPLATE, LEAN_2REF)
+        timeline = template in (TEMPLATES[2], LEAN_TEMPLATE, LEAN_2REF, LARGE_TEMPLATE)
+        lean = template in (LEAN_TEMPLATE, LEAN_2REF, LARGE_TEMPLATE)
+        large = template == LARGE_TEMPLATE
+        large_bg = template in (LARGE_BG_TEMPLATE, LARGE_BG2_TEMPLATE)
+        two_chars = template == LARGE_BG2_TEMPLATE
         order = [c["id"] for c in plan["chunks"]]
         drafted_shots, drafted_objects = {}, {}
         stages["qwen_s"] = {}
@@ -3139,61 +4032,170 @@ def run_draft(plan_file, *, sheet=None, mode=CHUNK_MODES[0], named=(), qwen_mode
             if prev is not None and not sp.is_kept(prev):
                 prev_shots = drafted_shots.get(prev["id"]) or shots_of(prev.get("prompt") or prev.get("draft") or "")
                 prev_names = drafted_objects.get(prev["id"]) or []
+            echoed_before = qwen.echoed
             t = time.time()
-            oraw = qwen.ask(OBJECTS_INSTRUCTION.format(n=len(idx)), video=video, max_tokens=384, frame_count=len(idx))
+            if template in LARGE_TEMPLATES:
+                # the shot calls name every object by this list, so it gets their pictures and their thinking: from
+                # 24 small frames it called c14's rolled ticket strip "bone", and the shots then wrote "a long bone"
+                oidx = sample_indices(ci["n"], LARGE_SHOT_FRAMES)
+                oinstr = OBJECTS_INSTRUCTION.format(n=len(oidx))
+                oraw = qwen.ask_parts([oinstr] + list(decode_sampled(path, fps, r0, oidx, max_side=LARGE_FRAME_SIDE)),
+                                      max_tokens=384, think=LARGE_THINK, max_side=LARGE_FRAME_SIDE)
+            else:
+                oinstr = OBJECTS_INSTRUCTION.format(n=len(idx))
+                oraw = qwen.ask(oinstr, video=video, max_tokens=384, frame_count=len(idx))
             t_obj = round(time.time() - t, 2)
             objs = parse_objects(oraw)
-            log = ["==== objects: instruction ====", OBJECTS_INSTRUCTION.format(n=len(idx)), "", "==== objects: Qwen ====",
-                   oraw, ""]
+            log = ["==== objects: instruction ====", oinstr, "", "==== objects: Qwen ====", oraw, ""]
             t = time.time()
             # the render's clock (H3's 24 when conforming): placement times and cut times are the ones H3 plays
             clock = tl.conform_rate(fps, sp._settings(plan.get("settings"))["conform_to_24fps"])
             if bg:
                 widx = sample_indices(ci["n"], 5)
-                wraw = qwen.ask(WHO_INSTRUCTION.format(n=len(widx)), video=decode_sampled(path, fps, r0, widx,
-                                                                                          max_side=1280),
-                                max_tokens=64, frame_count=len(widx))
+                wq, wvid = (WHO2_INSTRUCTION if two_chars else WHO_INSTRUCTION).format(n=len(widx)), \
+                    decode_sampled(path, fps, r0, widx, max_side=1280)
+                wraw = (qwen.ask_parts([wq] + list(wvid), max_tokens=96 if two_chars else 64, think=LARGE_THINK, max_side=1024) if large_bg
+                        else qwen.ask(wq, video=wvid, max_tokens=64, frame_count=len(widx)))
                 log += ["==== who: Qwen ====", wraw, ""]
-                who = " ".join(re.sub(r"(?i)^\s*(main person|person|answer)\s*:\s*", "", wraw).split()).strip(' ."')
-                if who.lower().startswith(("none", "n/a", "no person", "no one")) or len(who) > 160:
-                    who = ""
-                who = who_lasting(who)
-                if sp.chunk_target(plan, c):
-                    who = sp.chunk_target(plan, c)
-                who = who or "the person"
-                who = who if re.match(r"(?i)(the|a|an)\b", who) else "the " + who
-                who = re.sub(r"(?i)^(a|an)\b", "the", who)
-                ci["who"] = who
-                instr = bg_instruction(n_frames=ci["n"], fps=fps, sample_idx=idx, shots_rel=ci["shots_rel"],
-                                       lines=ci["lines"], events=ci["events"], who=who, extra=extra_instructions)
-                draw = qwen.ask(instr, video=video, max_tokens=int(max_tokens), frame_count=len(idx))
-                log += ["==== draft: instruction ====", instr, "", "==== draft: Qwen ====", draw, ""]
-                parts = parse_qwen(draw, len(ci["shots"]), ci["language"])
-                pron = re.sub(r"[^a-z]", "", (_labelled(draw).get("pronoun") or "").strip().lower().split(" ")[0]) \
-                    if (_labelled(draw).get("pronoun") or "").strip() else ""
-                # Qwen's pronoun line is sometimes missing: read it off who they are, then off the shots, so the
-                # prompt doesn't say "their" in one section and "her" in the next
-                fallback = pronoun_of(who)
-                if fallback == "they":
-                    fallback = pronoun_of(" ".join(parts["shots"]))
-                ci["pronoun"] = pron if pron in PRONOUNS else fallback
-                # the kept person says the lines: <Subject 2> (S1)
-                for ln in ci["lines"]:
-                    ln["tag"] = "<Subject 2> (S1)"
-                # Qwen writes about "the man ..." and "He ..."; the prompt's label is <Subject 2>
-                parts["shots"] = [label_person(s, who, ci["pronoun"]) for s in parts["shots"]]
-                # where the kept person is and how big, from the chunk's source mask (place_beats, as the timeline
-                # templates do), and that a held place holds to the end of the shot: on a still shot H3 slowly zoomed
-                # partway through the chunk with nothing in the shot saying the framing holds (2026-10-12)
-                bmask, bwhy = spl.cached_mask(plan, jd, r0, r0 + ci["n"] - 1, 0, sp.chunk_target(plan, c))
-                if bmask is None:
-                    ci["warnings"].append(f"no placement lines ({bwhy}): mark this chunk, then redraft")
+                if two_chars:
+                    # the two kept people: the chunk's hand-set target ("the man and the woman") wins, else what the model saw
+                    by_hand = split_two_people(sp.chunk_target(plan, c) or "")
+                    whos = by_hand if len(by_hand) == 2 else (split_two_people(wraw) or by_hand)
+                    if len(whos) < 2:
+                        ci["warnings"].append("two characters were not found in this chunk (the model named "
+                                              f"{len(whos)}): set the chunk's target to both, e.g. 'the man and the woman', then redraft")
+                        whos = (whos + ["the first person", "the second person"])[:2]
+                    ci["whos"] = whos
+                    who = f"{whos[0]} and {whos[1]}"
+                    ci["who"] = who
                 else:
-                    parts["shots"] = bg_place_shots(parts["shots"], bmask.numpy(), ci["shots_rel"], fps, clock,
-                                                    ci["pronoun"])
-                    if parts["shots"] and "At the start" in parts["shots"][0] and \
-                            not _AT_CENTRE.search(parts["shots"][0]):
-                        parts["video_1"] = drop_centre(parts["video_1"])
+                    who = " ".join(re.sub(r"(?i)^\s*(main person|person|answer)\s*:\s*", "", wraw).split()).strip(' ."')
+                    if who.lower().startswith(("none", "n/a", "no person", "no one")) or len(who) > 160:
+                        who = ""
+                    who = who_lasting(who)
+                    if sp.chunk_target(plan, c):
+                        who = sp.chunk_target(plan, c)
+                    who = who or "the person"
+                    who = who if re.match(r"(?i)(the|a|an)\b", who) else "the " + who
+                    who = re.sub(r"(?i)^(a|an)\b", "the", who)
+                    ci["who"] = who
+                if large_bg and two_chars:
+                    # the clip first (each person's pronoun), from one picture per shot, then each shot for both people
+                    sidx = sorted({(a + b) // 2 for a, b in ci["shots_rel"]})[:LARGE_SHOT_FRAMES]
+                    talk = ", in which someone speaks" if ci["lines"] else ""
+                    cinstr = LARGE_BG2_CLIP_INSTRUCTION.format(n=len(sidx), talk=talk, who2=whos[0], who3=whos[1],
+                                                               sounds_hint=_sounds_hint(ci["events"], ci["lines"]))
+                    draw = qwen.ask_parts([cinstr] + list(decode_sampled(path, fps, r0, sidx, max_side=1024)),
+                                          max_tokens=448, think=LARGE_THINK, max_side=1024)
+                    log += ["==== clip: instruction ====", cinstr, "", "==== clip: Qwen ====", draw, ""]
+                    found = re.findall(r"(?i)\b(she|he|they)\b", _labelled(draw).get("pronoun") or "")
+                    ci["pronouns"] = [f.lower() for f in found[:2]] + [pronoun_of(w) for w in whos[len(found[:2]):]]
+                    blocks = []
+                    k_sh = len(ci["shots_rel"])
+                    for i, sh in enumerate(ci["shots_rel"]):
+                        mf = moment_frames(sh, fps, cap=LARGE_SHOT_FRAMES)
+                        pics = decode_sampled(path, fps, r0, mf, max_side=LARGE_FRAME_SIDE)
+                        said = lines_in_shot(ci["lines"], sh, k_sh, i)
+                        rel = [dict(ln, frames=[ln["frames"][0] - sh[0], ln["frames"][1] - sh[0]]) if "frames" in ln
+                               else ln for ln in said]
+                        q = LARGE_BG2_SHOT_INSTRUCTION.format(
+                            secs=(sh[1] - sh[0] + 1) / float(fps), who2=whos[0], who3=whos[1],
+                            objects=large_objects(objs["objects"]), lines=large_lines(rel, fps),
+                            dialogue_rule=_dialogue_rule(bool(rel), "this shot's"), extra=_extra(extra_instructions))
+                        ask = [q]
+                        for f, pic in zip(mf, pics):
+                            ask += [f"\n{(f - sh[0]) / float(fps):.1f} s:", pic]
+                        sraw = qwen.ask_parts(ask, max_tokens=800, think=LARGE_THINK, max_side=LARGE_FRAME_SIDE)
+                        sj = parse_large_shot(sraw)
+                        log += [f"==== shot {i + 1}: large, two characters (frames {[r0 + f for f in mf]}) ====", sraw, ""]
+                        d2 = " ".join(str(sj.get("description_2") or sj.get("description") or "").split())
+                        d3 = " ".join(str(sj.get("description_3") or "").split())
+                        tog = " ".join(str(sj.get("together") or "").split())
+                        if not large_visible(sj.get("visible_2", True)) or not d2:
+                            d2 = "<Subject 2> is out of frame in this shot."
+                        if not large_visible(sj.get("visible_3", True)) or not d3:
+                            d3 = "<Subject 3> is out of frame in this shot."
+                        if tog and not large_visible(tog):
+                            tog = ""
+                        blocks.append(f"[Shot {i + 1}] " + " ".join(x for x in (d2, d3, tog) if x))
+                    parts = parse_qwen(draw + "\nshots:\n" + "\n".join(blocks), len(ci["shots"]), ci["language"], cap=24)
+                elif large_bg:
+                    # the clip first (its pronoun goes into every shot question), from one picture per shot
+                    sidx = sorted({(a + b) // 2 for a, b in ci["shots_rel"]})[:LARGE_SHOT_FRAMES]
+                    talk = ", in which someone speaks" if ci["lines"] else ""
+                    cinstr = LARGE_BG_CLIP_INSTRUCTION.format(n=len(sidx), talk=talk, who=who,
+                                                              sounds_hint=_sounds_hint(ci["events"], ci["lines"]))
+                    draw = qwen.ask_parts([cinstr] + list(decode_sampled(path, fps, r0, sidx, max_side=1024)),
+                                          max_tokens=384, think=LARGE_THINK, max_side=1024)
+                    log += ["==== clip: instruction ====", cinstr, "", "==== clip: Qwen ====", draw, ""]
+                    lp = re.sub(r"[^a-z]", "", ((_labelled(draw).get("pronoun") or "").strip().lower().split() or [""])[0])
+                    lpr = PRONOUNS[lp if lp in PRONOUNS else pronoun_of(who)]
+                    blocks = []
+                    k_sh = len(ci["shots_rel"])
+                    for i, sh in enumerate(ci["shots_rel"]):
+                        mf = moment_frames(sh, fps, cap=LARGE_SHOT_FRAMES)
+                        pics = decode_sampled(path, fps, r0, mf, max_side=LARGE_FRAME_SIDE)
+                        said = lines_in_shot(ci["lines"], sh, k_sh, i)
+                        rel = [dict(ln, frames=[ln["frames"][0] - sh[0], ln["frames"][1] - sh[0]]) if "frames" in ln
+                               else ln for ln in said]
+                        q = LARGE_BG_SHOT_INSTRUCTION.format(
+                            secs=(sh[1] - sh[0] + 1) / float(fps), who=who, subj=lpr["subj"],
+                            objects=large_objects(objs["objects"]), lines=large_lines(rel, fps),
+                            dialogue_rule=_dialogue_rule(bool(rel), "this shot's"), extra=_extra(extra_instructions))
+                        ask = [q]
+                        for f, pic in zip(mf, pics):
+                            ask += [f"\n{(f - sh[0]) / float(fps):.1f} s:", pic]
+                        sraw = qwen.ask_parts(ask, max_tokens=600, think=LARGE_THINK, max_side=LARGE_FRAME_SIDE)
+                        sj = parse_large_shot(sraw)
+                        log += [f"==== shot {i + 1}: large (frames {[r0 + f for f in mf]}) ====", sraw, ""]
+                        desc = " ".join(str(sj.get("description") or "").split())
+                        if not large_visible(sj.get("main_visible", True)) or not desc:
+                            # the place still shows: only the person is away (the mask's beats say when, if marked)
+                            desc = "<Subject 2> is out of frame in this shot."
+                        blocks.append(f"[Shot {i + 1}] {desc}")
+                    parts = parse_qwen(draw + "\nshots:\n" + "\n".join(blocks), len(ci["shots"]), ci["language"],
+                                       cap=24)
+                else:
+                    instr = bg_instruction(n_frames=ci["n"], fps=fps, sample_idx=idx, shots_rel=ci["shots_rel"],
+                                           lines=ci["lines"], events=ci["events"], who=who, extra=extra_instructions)
+                    draw = qwen.ask(instr, video=video, max_tokens=int(max_tokens), frame_count=len(idx))
+                    log += ["==== draft: instruction ====", instr, "", "==== draft: Qwen ====", draw, ""]
+                    parts = parse_qwen(draw, len(ci["shots"]), ci["language"])
+                if two_chars:
+                    # both people are labelled by the shot answers already (<Subject 2>, <Subject 3>); the placement beats
+                    # of the mask are for one person, so none are written here and the people say where they are
+                    ci["pronoun"] = "they"
+                    for ln in ci["lines"]:
+                        ln["tag"] = "<Subject 2> (S1)"
+                    if ci["lines"]:
+                        ci["warnings"].append("who says each line isn't worked out for two characters: every line is "
+                                              "<Subject 2>'s; set each line's speaker in the strip")
+                else:
+                    pron = re.sub(r"[^a-z]", "", (_labelled(draw).get("pronoun") or "").strip().lower().split(" ")[0]) \
+                        if (_labelled(draw).get("pronoun") or "").strip() else ""
+                    # Qwen's pronoun line is sometimes missing: read it off who they are, then off the shots, so the
+                    # prompt doesn't say "their" in one section and "her" in the next
+                    fallback = pronoun_of(who)
+                    if fallback == "they":
+                        fallback = pronoun_of(" ".join(parts["shots"]))
+                    ci["pronoun"] = pron if pron in PRONOUNS else fallback
+                    # the kept person says the lines: <Subject 2> (S1)
+                    for ln in ci["lines"]:
+                        ln["tag"] = "<Subject 2> (S1)"
+                    # Qwen writes about "the man ..." and "He ..."; the prompt's label is <Subject 2>
+                    parts["shots"] = [label_person(s, who, ci["pronoun"]) for s in parts["shots"]]
+                    # where the kept person is and how big, from the chunk's source mask (place_beats, as the timeline
+                    # templates do), and that a held place holds to the end of the shot: on a still shot H3 slowly zoomed
+                    # partway through the chunk with nothing in the shot saying the framing holds (2026-10-12)
+                    bmask, bwhy = spl.cached_mask(plan, jd, r0, r0 + ci["n"] - 1, 0, sp.chunk_target(plan, c))
+                    if bmask is None:
+                        ci["warnings"].append(f"no placement lines ({bwhy}): mark this chunk, then redraft")
+                    else:
+                        parts["shots"] = bg_place_shots(parts["shots"], bmask.numpy(), ci["shots_rel"], fps, clock,
+                                                        ci["pronoun"])
+                        if parts["shots"] and "At the start" in parts["shots"][0] and \
+                                not _AT_CENTRE.search(parts["shots"][0]):
+                            parts["video_1"] = drop_centre(parts["video_1"])
             elif not per_shot and not timeline:
                 instr = draft_instruction(n_frames=ci["n"], fps=fps, sample_idx=idx, shots_rel=ci["shots_rel"],
                                           lines=ci["lines"], language=ci["language"], prev_names=prev_names,
@@ -3249,10 +4251,23 @@ def run_draft(plan_file, *, sheet=None, mode=CHUNK_MODES[0], named=(), qwen_mode
                 ci["who"] = who
                 # the scene knows who it's about (B7: a two-person shot's line was written around the man) and names
                 # everyone else, whom the prompt then keeps as they are
+                if large:
+                    # one picture from the middle of each shot, not the chunk's first / middle / last (test clip
+                    # c5: those were his close-up, a hand-held ticket and a slump, so video_1 missed the couch scene)
+                    sidx = sorted({(a + b) // 2 for a, b in ci["shots_rel"]})[:LARGE_SHOT_FRAMES]
                 sinstr = SCENE_INSTRUCTION.format(n=len(sidx), talk=talk, who=who or "the person most in focus",
                                                   sounds_hint=_sounds_hint(ci["events"], ci["lines"]))
-                craw = qwen.ask(sinstr, video=decode_sampled(path, fps, r0, sidx, max_side=1280), max_tokens=384,
-                                frame_count=len(sidx))
+                if large:
+                    # its first run wrote "with no caption or logo overlaid" into video_1: the question's list, echoed;
+                    # its c5 draft said "holding a cigarette" here (the shots say what the hands hold, this doesn't)
+                    sinstr += ("\nThe pictures are one from each shot of the clip, in order. Say only what is there: "
+                               "leave out anything the list asks about that the pictures don't show, and don't name "
+                               "anything held in the hands.")
+                    craw = qwen.ask_parts([sinstr] + list(decode_sampled(path, fps, r0, sidx, max_side=1024)),
+                                          max_tokens=384, think=LARGE_THINK, max_side=1024)
+                else:
+                    craw = qwen.ask(sinstr, video=decode_sampled(path, fps, r0, sidx, max_side=1280), max_tokens=384,
+                                    frame_count=len(sidx))
                 log += ["==== scene: instruction ====", sinstr, "", "==== scene: Qwen ====", craw, ""]
                 named = " ".join((_labelled(craw).get("others") or "").split()).strip(' ."')
                 if named.lower().startswith(("none", "no one", "nobody", "n/a")) or len(named) > 240:
@@ -3264,7 +4279,9 @@ def run_draft(plan_file, *, sheet=None, mode=CHUNK_MODES[0], named=(), qwen_mode
                 # the scene's own list of what's behind them (wrestling c4: the retention said only "the background")
                 for x in re.split(r"[;]", _labelled(craw).get("background") or ""):
                     x = " ".join(x.split()).strip(' ."')
-                    if x and x.lower() not in ("none", "n/a", "nothing") and x.lower() not in (b.lower() for b in behind):
+                    # "no caption or logo overlaid" says what isn't there (test clip c5, the 27B)
+                    if x and x.lower() not in ("none", "n/a", "nothing") and not _ABSENT.match(x) \
+                            and x.lower() not in (b.lower() for b in behind):
                         behind.append(x[0].lower() + x[1:])
                 ci["behind"] = behind
                 labels = [f"<Subject {k + 2}>" for k in range(len(people))]
@@ -3311,7 +4328,54 @@ def run_draft(plan_file, *, sheet=None, mode=CHUNK_MODES[0], named=(), qwen_mode
                     pcov = [v for v in pcov if v >= PLACE_MIN_COVER]
                     pref = float(np.median(pcov)) if pcov else 0.0
                 ci["placed"] = pmask is not None
+                large_seen, introduced = {lab: [] for lab in labels}, []
                 for i, sh in enumerate(ci["shots_rel"]):
+                    if large:
+                        # the whole shot in one call: its pictures in order with their times, the cast by label
+                        mf = moment_frames(sh, fps, cap=LARGE_SHOT_FRAMES)
+                        pics = decode_sampled(path, fps, r0, mf, max_side=LARGE_FRAME_SIDE)
+                        said = lines_in_shot(ci["lines"], sh, k_sh, i)
+                        rel = [dict(ln, frames=[ln["frames"][0] - sh[0], ln["frames"][1] - sh[0]]) if "frames" in ln
+                               else ln for ln in said]
+                        pr = PRONOUNS[pronoun]
+                        q = LARGE_SHOT_INSTRUCTION.format(
+                            secs=(sh[1] - sh[0] + 1) / float(fps), who=who or "the person most in focus",
+                            subj=pr["subj"], Subj=pr["Subj"], poss=pr["poss"], cast=large_cast(labels, people),
+                            objects=large_objects(objs["objects"]), lines=large_lines(rel, fps), dialogue_rule=_dialogue_rule(bool(rel), "this shot's"),
+                            extra=_extra(extra_instructions))
+                        ask = [q]
+                        for f, pic in zip(mf, pics):
+                            ask += [f"\n{(f - sh[0]) / float(fps):.1f} s:", pic]
+                        sraw = qwen.ask_parts(ask, max_tokens=600, think=LARGE_THINK, max_side=LARGE_FRAME_SIDE)
+                        sj = parse_large_shot(sraw)
+                        log += [f"==== shot {i + 1}: large (frames {[r0 + f for f in mf]}) ====", sraw, ""]
+                        # who is in the shot: its list, and anyone it puts beside him or names in the description
+                        # (c5's shot 2: both kept people in every picture, an empty list, "beside" naming one)
+                        seen_here = json.dumps([sj.get("others_visible"), sj.get("beside"), sj.get("description")])
+                        vis = [lab for lab in labels if lab in seen_here]
+                        for lab in vis:
+                            large_seen[lab].append(i + 1)
+                        if vis:
+                            seen_in.append(i + 1)
+                        speaker_ids(ci["lines"])
+                        desc = " ".join(str(sj.get("description") or "").split())
+                        if not large_visible(sj.get("main_visible", True)) or not desc:
+                            body = empty_shot([(0.0, {"frame": " ".join(str(sj.get("frame") or "").split())})])
+                            for ln in said:
+                                ln.setdefault("speaker_label", labels[0] if len(labels) == 1 else "another person's voice")
+                            speaker_ids(ci["lines"])
+                            body += "".join(" " + say_line(ln, ci["language"]) for ln in said)
+                            ci.setdefault("empty_shots", []).append(i)
+                        else:
+                            body = desc
+                        # each other person at their first shot (ref guide §5.3), only where the model sees them
+                        intro = [lab for lab in vis if lab not in introduced]
+                        if intro:
+                            body = " ".join(f"{lab}, {people[labels.index(lab)]}, stays exactly as in <Video 1>."
+                                            for lab in intro) + " " + body
+                            introduced += intro
+                        blocks.append(f"[Shot {i + 1}] {body}")
+                        continue
                     mf = moment_frames(sh, fps)
                     pics = decode_sampled(path, fps, r0, mf, max_side=1280)
                     moments = []
@@ -3404,12 +4468,26 @@ def run_draft(plan_file, *, sheet=None, mode=CHUNK_MODES[0], named=(), qwen_mode
                     blocks.append(f"[Shot {i + 1}] {body}")
                 ci["others"] = bool(named or others)
                 ci["people"] = [(lab, desc, seen_in or list(range(1, k_sh + 1))) for lab, desc in zip(labels, people)]
+                if large:
+                    # each person where the shot calls saw them (a person no call saw: kept everywhere, as before)
+                    ci["people"] = [(lab, desc, large_seen[lab] or list(range(1, k_sh + 1)))
+                                    for lab, desc in zip(labels, people)]
                 parts = parse_qwen(craw + "\nshots:\n" + "\n".join(blocks), len(ci["shots"]), ci["language"], cap=24)
                 if behind:
                     parts["video_1"] = with_background(parts.get("video_1") or "", behind)
             t_draft = round(time.time() - t, 2)
             stages["qwen_s"][c["id"]] = {"objects": t_obj, "draft": t_draft}
             _write(os.path.join(ci["dir"], "qwen.txt"), "\n".join(log))
+            if qwen.echoed > echoed_before:
+                # Qwen handed an instruction back twice for this chunk: no prompt from it (Q4 fault 5)
+                ci["warnings"].append("Qwen answered with its own instruction twice: nothing was drafted for this chunk; "
+                                      "redraft it, or write its prompt by hand")
+                report["chunks"][c["id"]] = {"into": "nothing", "render": ci["render"], "shots": len(ci["shots"]),
+                                             "lines": len(ci["lines"]), "warnings": ci["warnings"],
+                                             "dialogue_coverage": None, "unseen": [], "carried_over": [],
+                                             "plan_rev": None, "chars": 0}
+                _say(f"[SeamStitch] Swap Draft: {c['id']} {r0}-{r1}: Qwen echoed its instruction twice, nothing drafted")
+                continue
             parts["shots"] = tidy_shots(parts["shots"], [a / float(clock) for a, _ in ci["shots_rel"]])
             # each shot carries exactly its own lines, in the transcription's words
             k_sh, added = len(ci["shots_rel"]), 0
@@ -3443,17 +4521,23 @@ def run_draft(plan_file, *, sheet=None, mode=CHUNK_MODES[0], named=(), qwen_mode
             ci["warnings"] += parts["warnings"]
             if objs["person"] is False:
                 ci["warnings"].append("Qwen saw no person in this chunk")
-            text = (fill_bg_ref2va_lean if bg_lean else fill_bg_ref2va)(
-                                  subject=subject, who=ci["who"], video_1=parts["video_1"], shots=parts["shots"],
-                                  sounds=parts["sounds"], n_shots=len(ci["shots"]), dialogue=bool(ci["lines"]),
-                                  audio=audio_ok, pronoun=ci["pronoun"]) if bg else \
-                (fill_ref2va_lean if lean else fill_ref2va)(
-                               subject=subject, video_1=parts["video_1"], shots=parts["shots"], sounds=parts["sounds"],
-                               n_shots=len(ci["shots"]), dialogue=bool(ci["lines"]), audio=audio_ok, pronoun=pronoun,
-                               who=ci.get("who"), others=ci.get("others", False), people=ci.get("people", ()),
-                               speaking=any(ln.get("speaker_label") for ln in ci["lines"]),
-                               placed=bool(ci.get("placed")), exits=bool(ci.get("exits")),
-                               **({"behind": ci.get("behind", ())} if lean else {}))
+            if bg and two_chars:
+                text = fill_bg2_ref2va_lean(subject=subject, whos=ci["whos"], pronouns=ci["pronouns"],
+                                            video_1=parts["video_1"], shots=parts["shots"], sounds=parts["sounds"],
+                                            n_shots=len(ci["shots"]), dialogue=bool(ci["lines"]), audio=audio_ok)
+            else:
+                text = (fill_bg_ref2va_lean if bg_lean else fill_bg_ref2va)(
+                                      subject=subject, who=ci["who"], video_1=parts["video_1"], shots=parts["shots"],
+                                      sounds=parts["sounds"], n_shots=len(ci["shots"]), dialogue=bool(ci["lines"]),
+                                      audio=audio_ok, pronoun=ci["pronoun"]) if bg else \
+                    (fill_ref2va_lean if lean else fill_ref2va)(
+                                   subject=subject, video_1=parts["video_1"], shots=parts["shots"], sounds=parts["sounds"],
+                                   n_shots=len(ci["shots"]), dialogue=bool(ci["lines"]), audio=audio_ok, pronoun=pronoun,
+                                   who=ci.get("who"), others=ci.get("others", False), people=ci.get("people", ()),
+                                   speaking=any(ln.get("speaker_label") for ln in ci["lines"]),
+                                   placed=bool(ci.get("placed")), exits=bool(ci.get("exits")),
+                                   **({"behind": ci.get("behind", ())} if lean else {}),
+                                   **({"full_look": True} if large else {}))
             parse_sections(text)            # the template must parse into the six sections
             drafted_shots[c["id"]] = parts["shots"]
             props = prop_check(parts["shots"], objs["objects"], prev_shots)
@@ -3510,6 +4594,459 @@ def run_draft(plan_file, *, sheet=None, mode=CHUNK_MODES[0], named=(), qwen_mode
     return report
 
 
+def clean_bfs_details(raw):
+    """The model's attribute list as one clause for "<Subject 1> is the ... shown in <Picture 1>"."""
+    t = re.sub(r"<think>.*?</think>", "", raw or "", flags=re.S | re.I).strip()
+    m = re.search(r"is the (.+?) shown in <Picture 1>", t, flags=re.S)   # it wrote the whole sentence anyway
+    if m:
+        t = m.group(1)
+    t = t.strip().strip("`").strip()
+    t = re.sub(r"^(?:\*\*)?(?:description|attributes?|answer)\s*:?\s*(?:\*\*)?\s*", "", t, flags=re.I)
+    lines = [ln.strip(" -*\t").rstrip(" .;") for ln in t.splitlines() if ln.strip(" -*\t")]
+    t = ", ".join(lines)
+    t = re.sub(r"\s+", " ", t).strip(" .,;")
+    t = re.sub(r"^(?:a|an|the)\s+", "", t, flags=re.I)
+    return t
+
+
+def fill_bfs_body_swap(details, target=""):
+    """BFS's body_swap template: the {target} form (Civitai trainedWords[1]) when the job names who to replace, the
+    'main subject of the guide video' form (trainedWords[0]) otherwise."""
+    target = (target or "").strip()
+    if target and target.lower() not in ("person", "the person", "a person"):
+        who = target if re.match(r"(?i)^(the|a|an)\s", target) else "the " + target
+        return BFS_BODY_SWAP.format(details=details, who=who, their="their", who_short=f"{who} in the guide video",
+                                    who_place=who)
+    return BFS_BODY_SWAP.format(details=details, who="the main subject of the guide video", their="its",
+                                who_short="the guide subject", who_place="the guide subject")
+
+
+def run_bfs_draft(plan_file, plan, chunks, qwen, sheet, report, warnings, *, free_models=True, t_run=None, jd=None):
+    """The BFS template's draft: one question to the model about the sheet, then the same body_swap prompt into every
+    chunk (into the prompt when it's empty, else into the draft field, as the other templates)."""
+    t_run = time.time() if t_run is None else t_run
+    stages = report["stages"]
+    if sheet is None:
+        raise DraftError("the BFS template describes the character from the sheet: wire the sheet into the Draft node")
+    try:
+        t = time.time()
+        if free_models:
+            free_comfy_models()
+        stages["free_s"] = round(time.time() - t, 2)
+        t = time.time()
+        qwen.load()                     # the GGUF runner's ask_parts needs the model in memory (as run_object_draft)
+        stages["qwen_load_s"] = round(time.time() - t, 2)
+        t = time.time()
+        img = sheet[0]
+        if hasattr(qwen, "ask_parts"):
+            raw = qwen.ask_parts([BFS_DETAILS_INSTRUCTION, img], max_tokens=768, think=LARGE_THINK)
+        else:
+            raw = qwen.ask(BFS_DETAILS_INSTRUCTION, image=sheet, max_tokens=768)
+        stages["bfs_details_s"] = round(time.time() - t, 2)
+        details = clean_bfs_details(raw)
+        if len(details.split(",")) < 6:
+            warnings.append(f"the model's description is short ({details[:120]!r}): check it, or re-draft")
+        text = fill_bfs_body_swap(details, plan.get("target") or "")
+        os.makedirs(os.path.join(jd, "drafts"), exist_ok=True)
+        _write(os.path.join(jd, "drafts", "bfs_details_raw.txt"), raw or "")
+        _say(f"[SeamStitch] Swap Draft: BFS description ({stages['bfs_details_s']} s): {details[:200]}")
+        report["bfs_details"] = details
+        for c in chunks:
+            into, rev = write_chunk_draft(plan_file, c["id"], text,
+                                          {"warnings": [], "files": "drafts/bfs_details_raw.txt", "template": BFS_TEMPLATE})
+            report["chunks"][c["id"]] = {"into": into, "render": list(c["render"]), "shots": 0, "lines": 0,
+                                         "warnings": [], "dialogue_coverage": None, "unseen": [], "carried_over": [],
+                                         "plan_rev": rev, "chars": len(text)}
+    finally:
+        try:
+            qwen.close()
+        except Exception:
+            pass
+    report["total_s"] = round(time.time() - t_run, 2)
+    lines = [f"job {plan['job']}: BFS body_swap prompt into {len(report['chunks'])} chunk(s) in {report['total_s']} s",
+             f"description: {report.get('bfs_details', '')}"]
+    lines += [f" {cid} {r['render'][0]}-{r['render'][1]}: -> {r['into']}" for cid, r in report["chunks"].items()]
+    lines += [f" \u26a0 {w}" for w in warnings]
+    report["text"] = "\n".join(lines)
+    _write_json(os.path.join(jd, "drafts", f"report_{time.strftime('%Y%m%d_%H%M%S')}.json"), report)
+    return report
+
+
+def object_details_question(target, action):
+    """The sheet question for a thing (not a flat picture). On a replace it says what the thing stands in for, so a
+    dark, cropped photo of a white boot is described as footwear and not as "the bandaged limb" (2026-10-21, the c10
+    shoe job: Picture 1 was a low-resolution crop of a white boot with a frilled sock cuff)."""
+    if action == sp.OBJECT_ADD or not (target or "").strip():
+        return OBJECT_DETAILS_INSTRUCTION
+    return (OBJECT_DETAILS_INSTRUCTION.replace(
+        "describe how it looks as ONE comma-separated attribute list: what it is,",
+        f"describe how it looks as ONE comma-separated attribute list. This picture shows what will take the place of "
+        f"{the_target(target)} in a video, so name what it is as that kind of thing (even if the picture is dark, small "
+        f"or only part of it is visible) and describe it as such, not as something else it resembles. Start with what it is,"))
+
+
+def the_target(target):
+    t = (target or "").strip() or "the marked object"
+    return t if re.match(r"(?i)^(the|a|an|his|her|their|its)\s", t) else "the " + t
+
+
+def parse_object_addition(raw):
+    """The `addition:` line of the scene answer ("" when the model didn't write one)."""
+    t = re.sub(r"<think>.*?</think>", "", raw or "", flags=re.S | re.I).strip()
+    m = re.search(r"(?im)^[ \t*#>-]*addition[ \t*]*:[ \t*]*(.+)$", t)
+    return re.sub(r"\s+", " ", m.group(1)).strip(" *") if m else ""
+
+
+def parse_object_scene(raw, with_people=False):
+    """The model's lines -> (video_1, placement) or, with_people, (video_1, placement, [people]); "" / [] when it
+    didn't write one."""
+    t = re.sub(r"<think>.*?</think>", "", raw or "", flags=re.S | re.I).strip()
+    if with_people:
+        m = re.search(r"(?im)^[ \t*#>-]*people[ \t*]*:[ \t*]*(.+)$", t)
+        people = [] if not m else [x.strip(" .*") for x in m.group(1).split(";")
+                                   if x.strip(" .*") and x.strip(" .*").lower() not in ("none", "no one", "nobody")]
+        return parse_object_scene(raw) + (people,)
+    out = {}
+    for key in ("video_1", "placement"):
+        m = re.search(rf"(?im)^[ \t*#>-]*{key}[ \t*]*:[ \t*]*(.+)$", t)
+        out[key] = re.sub(r"\s+", " ", m.group(1)).strip(" *") if m else ""
+    lines = [re.sub(r"\s+", " ", ln).strip(" *-") for ln in t.splitlines() if ln.strip(" *-")]
+    if not out["video_1"] and not out["placement"] and len(lines) == 2:    # the two lines, unlabelled (the 27B, c2)
+        out["video_1"], out["placement"] = lines
+    return out["video_1"], out["placement"]
+
+
+_BODY_PART_FIRST = re.compile(r"(?i)^\s*(?:(?:a|an|the|one|two|his|her|their)\s+)?(?:(?:bare|human|left|right|lower|upper)\s+)*"
+                              r"(?:legs?|foot|feet|ankles?|knees?|hands?|arms?|fingers?|toes?)\b")
+_TARGET_STOP = {"the", "and", "with", "from", "that", "this", "black", "white", "red", "blue", "green", "grey", "gray",
+                "brown", "pink", "yellow", "orange", "purple", "dark", "light", "old", "new", "small", "large", "big"}
+
+
+def object_people(people, target, replace=True):
+    """The scene answer's people without the thing being replaced, as (kept, dropped): a person line that is only a
+    body part ("a bare leg ending in a black shoe") or, on a replace, that names the target ("black shoes" -> shoe)
+    is dropped, so the prompt never declares as kept exactly what the edit replaces (2026-10-21, the c10 shoe job:
+    Subject 2 was "a bare leg ending in a black shoe", fully_preserved, beside "Subject 3 replaces the black shoes").
+    On an add the target is a place on a person ("his shoulder"), so naming it never drops that person."""
+    words = [w[:-1] if w.endswith("s") and len(w) > 4 else w
+             for w in re.findall(r"[a-z]{4,}", (target or "").lower()) if w not in _TARGET_STOP] if replace else []
+    kept, dropped = [], []
+    for p in people or []:
+        low = p.lower()
+        (dropped if _BODY_PART_FIRST.match(p) or any(w in low for w in words) else kept).append(p)
+    return kept, dropped
+
+
+def fill_object(details, video_1, placement, target, action, people=None, picture=True, addition=""):
+    """The object prompt. people None: the first form (the object the only subject). people given (2026-10-21, after
+    H3 cast the added jay as THE man): every person the model saw is declared first as kept exactly as filmed
+    (fully_preserved), as the character prompts declare the others, and the object is the next subject. picture
+    False: the object is defined by the text alone (no <Picture 1>, no retention line for it)."""
+    v1, pl = (video_1 or "").strip(), (placement or "").strip()
+    pl = pl[0].upper() + pl[1:] if pl else ""
+    dot = lambda x: x if not x or x.endswith(".") else x + "."     # noqa: E731
+    addition = (addition or "").strip()
+    if addition and action == sp.OBJECT_ADD and people is None:
+        people = []
+    if people is None:
+        form = OBJECT_FORMS["add" if action == sp.OBJECT_ADD else "replace"]
+        return form.format(details=details, video_1=dot(v1), placement=dot(pl), the_target=the_target(target)).replace("  ", " ")
+    tt = the_target(target)
+    add = action == sp.OBJECT_ADD
+    k = len(people) + 1
+    obj = f"<Subject {k}>"
+    subj = [f"<Subject {i + 1}> is {p if re.match(r'(?i)^(a|an|the)\s', p) else 'the ' + p} in <Video 1>, kept exactly as filmed."
+            for i, p in enumerate(people)]
+    subj.append(f"{obj} is the {details} shown in <Picture 1>." if picture else f"{obj} is {details}.")
+    tag = "[video editing + reference generation + audio reuse]" if picture else "[video editing + audio reuse]"
+    mine = bool(addition) and add                       # the user's own brief: a new subject in the scene, not a thing resting on the target
+    what = (f"{obj} is added to the scene" if mine else f"{obj} is added on {tt}") if add else f"{obj} replaces {tt}"
+    labels = [f"<Subject {i + 1}>" for i in range(len(people))]
+    ret = [f"<Subject {i + 1}> (appears throughout): fully_preserved - {p} keeps their own face, hair, clothes, body, "
+           f"position and movements from the source in every frame." for i, p in enumerate(people)]
+    if picture:
+        ret.append(f"{obj} (appears {'from when it enters the scene' if mine else 'wherever ' + tt + ' is in frame'}): attribute_transfer - {obj} keeps the look of <Picture 1>"
+                   + (", at a natural size for the scene, as described below." if mine else f", at a natural size for the scene, resting on {tt} and moving with it." if add
+                      else f", in the place, size and perspective of {tt}."))
+    ret.append(f"<Video 1> (whole-video temporal structure, camera, background, lighting): partially_preserved - "
+               f"everything in <Video 1> stays as filmed except the {'added' if add else 'replaced'} {obj}: every cut, "
+               f"the camera, the framing, the background and the lighting.")
+    ret.append("<Audio 1>: fully_copy - the original sound of <Video 1> is kept as it is.")
+    body = (f"The target video is <Video 1> as filmed, with one change: {what}. {dot(pl)} "
+            + ((f"{dot(addition.replace('the new subject', obj).replace('The new subject', obj))} {obj} is at a natural size for the room, lit by "
+                f"the scene's own light, and moves naturally. " if mine else
+                f"{obj} rests on {tt} and moves with it in every frame, at a natural size, lit by the scene's own light, "
+                f"and it moves a little on its own as a living thing would. ") if add else
+               f"{obj} keeps the place, size and movement of {tt} in every frame, lit by the scene's own light. ")
+            + (f"{_and_list(labels)} {'stays' if len(people) == 1 else 'stay'} exactly as in <Video 1>: the "
+               f"same face, hair, clothes, expressions and movements." if people else ""))
+    return ("subject_definitions:\n" + "\n".join(subj) + "\n"
+            + f"<Video 1> is the source video for the target video edit: {dot(v1)}\n"
+            + "<Audio 1> is the synchronized audio track of <Video 1>, and is reused in the target video.\n\n"
+            + f"summary:\n{tag} The target video is an edited version of <Video 1>. {what}{'' if mine else ' in every frame'}, while "
+            + _and_list(labels + ["the background", "the camera", "the action"]) + " remain as recorded.\n\n"
+            + "retention_analysis:\n" + "\n".join(ret) + "\n\n"
+            + "detailed_description:\n" + body.strip() + "\n\n"
+            + "overall_soundscape:\nThe original sound of <Video 1>.\n\nnon_diegetic_music:\nN/A").replace("  ", " ")
+
+
+def _planner():
+    try:
+        from . import swap_planner as m
+    except ImportError:
+        import swap_planner as m
+    return m
+
+
+def _shrink(frames, max_side):
+    """A float IMAGE batch with its longer side at most max_side."""
+    h, w = int(frames.shape[1]), int(frames.shape[2])
+    if max(h, w) <= max_side:
+        return frames.contiguous()
+    import torch.nn.functional as F
+    s = max_side / float(max(h, w))
+    out = F.interpolate(frames.permute(0, 3, 1, 2), size=(max(1, int(round(h * s))), max(1, int(round(w * s)))),
+                        mode="area")
+    return out.permute(0, 2, 3, 1).contiguous()
+
+
+def person_light_crop(plan, jd, c, frame, full):
+    """The person already in the frame, alone: a close crop of the target's mask on source frame `frame` from `full` (a float
+    IMAGE [1, H, W, 3] of that whole frame), everything outside the mask greyed, so the model reads the light's colour from skin,
+    hair and clothes and not from the furniture. None when the target has no mask on that frame."""
+    import numpy as np
+    import torch
+    try:
+        from . import swap_keep as sk
+    except ImportError:
+        import swap_keep as sk
+    import cv2
+    src = plan["source"]
+    fr, (w, h) = int(round(float(src["fps"]))), (int(src["width"]), int(src["height"]))
+    target = (sp.chunk_target(plan, c) or "").strip()
+    g = sk.ZoneGuide(plan, jd, fr, (w, h), int(frame), int(frame), target)
+    m = g.masks.get(int(frame))
+    if m is None:
+        return None
+    m = (m[..., 0] if m.ndim == 3 else m) > 127
+    H, W = int(full.shape[1]), int(full.shape[2])
+    m = cv2.resize(m.astype(np.uint8), (W, H), interpolation=cv2.INTER_NEAREST)
+    if not m.any():
+        return None
+    ys, xs = np.nonzero(m)
+    pad = int(0.06 * max(xs.max() - xs.min(), ys.max() - ys.min())) + 4
+    x0, x1, y0, y1 = max(0, xs.min() - pad), min(W, xs.max() + pad + 1), max(0, ys.min() - pad), min(H, ys.max() + pad + 1)
+    k = cv2.dilate(m, np.ones((5, 5), np.uint8))[y0:y1, x0:x1].astype(np.float32)[None, :, :, None]
+    img = full[:, y0:y1, x0:x1, :].cpu().numpy()
+    out = img * k + 0.5 * (1.0 - k)
+    return torch.from_numpy(out.astype(np.float32)).contiguous()
+
+
+def qwen_anchor_question(plan, c, with_crop=False):
+    """The large model's question for one chunk's Qwen instruction: where the new thing goes and how it touches, from the zone settings."""
+    o = sp.object_settings(plan)
+    target = (sp.chunk_target(plan, c) or "the person").strip()
+    tgt = target if target.lower().startswith(("the ", "a ", "an ", "his ", "her ")) else f"the {target}"
+    brief = (o.get("brief") or "").strip().rstrip(".")
+    # where the new thing goes is the person's own request, seen against the frame; the zone only says where H3 redraws and is not told to the model
+    where = (f"exactly as the person making the edit asks: \"{brief}\" (follow its placement and action, and make it fit what is visible in <image1>)"
+             if brief else "at a natural place in the room, all of it inside the picture")
+    lightsrc = (f" A third picture, <image3>, shows only {tgt} as lit in the scene (everything else greyed out): name the colour of the "
+                f"light from <image3> alone, but never mention <image3> in the paragraph you write (the editing model is not given it): state the "
+                f"colours of the light directly." if with_crop else "")
+    return QWEN_ANCHOR_INSTRUCTION.format(where=where, contact="", size="", target=tgt, lightsrc=lightsrc)
+
+
+def clean_anchor_text(raw):
+    """The model's answer as the one-paragraph instruction, or None when it is not usable: a JSON {"rewritten_prompt": ...} or a code
+    fence is unwrapped, lines are joined, and it must name both <image1> and <image2> (Qwen's own tags)."""
+    t = (raw or "").strip()
+    if t.startswith("```"):
+        t = t.strip("`").strip()
+        t = t[4:].strip() if t.lower().startswith("json") else t
+    if t.startswith("{"):
+        try:
+            t = str(json.loads(t).get("rewritten_prompt") or "")
+        except ValueError:
+            m = re.search(r'"rewritten_prompt"\s*:\s*"(.*?)"\s*[,}]', t, flags=re.S)
+            t = m.group(1) if m else t
+    t = " ".join(t.split()).strip('" ')
+    return t if "<image1>" in t and "<image2>" in t and "<image3>" not in t and len(t) > 120 else None
+
+
+def write_anchor_text(plan_file, chunk_id, text):
+    """Into the chunk's Qwen instruction box when it is empty; a typed one is never replaced. Returns where it went."""
+    box = {}
+
+    def upd(p):
+        c = sp.find_chunk(p, chunk_id)
+        if (c.get("anchor_text") or "").strip():
+            box["into"] = "nothing (the chunk already has its own Qwen instruction)"
+            return
+        c["anchor_text"] = text
+        box["into"] = "the chunk's Qwen instruction box"
+    sp.update_plan(plan_file, upd)
+    return box["into"]
+
+
+def run_object_draft(plan_file, plan, chunks, qwen, sheet, report, warnings, *, free_models=True, t_run=None, jd=None):
+    """An object job's draft: the sheet described once, each chunk's scene and the target's placement from a few of
+    its frames, into OBJECT_FORMS (into the prompt when it's empty, else into the draft field)."""
+    t_run = time.time() if t_run is None else t_run
+    stages = report["stages"]
+    o = sp.object_settings(plan)
+    text_only = bool((o.get("text") or "").strip()) and not o.get("use_picture", True)
+    if sheet is None and not text_only:
+        raise DraftError("an object job describes the new object from the sheet: wire the sheet into the Draft node, "
+                         "or give the object as text (object settings: text, use_picture false)")
+    action = o["action"]
+    brief = (o.get("brief") or "").strip()
+    keep_people = bool(o.get("keep_people", True))
+    src = plan["source"]
+    path, fps = src["path"], int(round(float(src["fps"])))
+    large = hasattr(qwen, "ask_parts")
+    try:
+        t = time.time()
+        if free_models:
+            free_comfy_models()
+        stages["free_s"] = round(time.time() - t, 2)
+        t = time.time()
+        qwen.load()
+        stages["qwen_load_s"] = round(time.time() - t, 2)
+        t = time.time()
+        if text_only:                           # the object as you wrote it ("a blue jay"), no picture
+            raw = details = o["text"].strip()
+            report["object_question"] = "text"
+        else:
+            dq = OBJECT_PICTURE_INSTRUCTION if OBJECT_PICTURE_TARGET.search(plan.get("target") or "") else OBJECT_DETAILS_INSTRUCTION
+            report["object_question"] = "picture" if dq is OBJECT_PICTURE_INSTRUCTION else "object"
+            if dq is OBJECT_DETAILS_INSTRUCTION:
+                dq = object_details_question(plan.get("target"), action)
+            if brief:
+                dq += OBJECT_BRIEF_NOTE.format(brief=brief)
+            raw = (qwen.ask_parts([dq, sheet[0]], max_tokens=512, think=LARGE_THINK) if large
+                   else qwen.ask(dq, image=sheet, max_tokens=512))
+            details = clean_bfs_details(raw)
+        stages["object_details_s"] = round(time.time() - t, 2)
+        if not text_only and len(details.split(",")) < 3:
+            warnings.append(f"the model's object description is short ({details[:120]!r}): check it, or re-draft")
+        os.makedirs(os.path.join(jd, "drafts"), exist_ok=True)
+        _write(os.path.join(jd, "drafts", "object_details_raw.txt"), raw or "")
+        report["object_details"] = details
+        _say(f"[SeamStitch] Swap Draft: object ({stages['object_details_s']} s): {details[:200]}")
+        for c in chunks:
+            r0, r1 = c["render"]
+            n = r1 - r0 + 1
+            idx = sorted({int(round(i * (n - 1) / max(1, OBJECT_FRAMES - 1))) for i in range(OBJECT_FRAMES)})
+            target = sp.chunk_target(plan, c)
+            # the model sees what H3 will: the render's crop around the target (2026-10-20, test clip c2: shown the
+            # whole frame, with the painting a strip along the top, it called the skull-faced figure the painting)
+            crop = None
+            if sp.object_settings(plan).get("crop", True):
+                try:
+                    crop = _planner().object_crop(plan, jd, r0, r1, target, int(src["width"]), int(src["height"]))
+                except Exception as e:
+                    warnings.append(f"{c['id']}: the crop couldn't be read ({e}); the model saw the whole frame")
+            frames = decode_sampled(path, fps, r0, idx, max_side=100000)
+            if crop:
+                x0, y0, x1, y1 = crop
+                frames = frames[:, y0:y1, x0:x1, :]
+            frames = _shrink(frames, LARGE_FRAME_SIDE if large else QWEN_FRAME_MAX_SIDE)
+            q = OBJECT_SCENE_INSTRUCTION.format(n=len(idx), secs=n / float(fps), the_target=the_target(target))
+            if brief and action == sp.OBJECT_ADD:
+                q = q.replace("Answer in exactly three lines:", "Answer in exactly four lines:", 1)
+                q = q.replace("\nWrite about what you see, not about an edit.", OBJECT_ADDITION_LINE.format(brief=brief.replace('"', "'"))
+                              + "\nWrite about what you see, not about an edit (except the addition line).", 1)
+            t = time.time()
+            sraw = (qwen.ask_parts([q] + list(frames), max_tokens=400, think=LARGE_THINK) if large
+                    else qwen.ask(q, video=frames, max_tokens=400, frame_count=len(idx)))
+            video_1, placement, people = parse_object_scene(sraw, with_people=True)
+            addition = parse_object_addition(sraw) if brief and action == sp.OBJECT_ADD else ""
+            people, dropped = object_people(people, target, replace=action != sp.OBJECT_ADD)
+            cw = [] if video_1 and placement else ["the model's scene answer lacked a line: check the prompt"]
+            if addition and re.search(r"(?i)(does not|doesn't|do not|is not|isn't|not)[^.]{0,40}(appear|visible|seen|present|shown|in the (frames|pictures|clip))", addition):
+                cw.append(f"the model described the new subject as absent ({addition[:100]!r}): dropped; your own words stand in for it. Redraft, or write the line by hand")
+                addition = f"As requested: {brief.rstrip('.')}."
+            if brief and action == sp.OBJECT_ADD and not addition:
+                cw.append("the model wrote no addition line: the prompt says the new subject is added on the target; check it")
+            if not brief and action == sp.OBJECT_ADD:
+                cw.append("no brief: write what to add in the zone row (e.g. 'a man with green hair sitting next to her'), then redraft")
+            if dropped:
+                cw.append(f"left out of the kept people (a body part, or the target itself): {'; '.join(dropped)}")
+            p_target, p_action = target, action
+            if o.get("guide") == "placeholder":     # H3 replaces the marked grey placeholder drawn on the target
+                p_target = "marked grey placeholder shape on " + the_target(target)
+                p_action = sp.OBJECT_REPLACE
+            text = fill_object(details, video_1, placement, p_target, p_action, people=people if keep_people else None,
+                               picture=not text_only, addition=addition)
+            _write(os.path.join(jd, "drafts", f"{c['id']}_object_scene_raw.txt"), sraw or "")
+            into, rev = write_chunk_draft(plan_file, c["id"], text, {"warnings": cw, "template": OBJECT_TEMPLATE,
+                                                                     "files": f"drafts/{c['id']}_object_scene_raw.txt"})
+            if sp.object_zone(plan) and (o.get("anchor") or "qwen") == "qwen" and sheet is not None and not text_only:
+                try:
+                    a_i = max(0, min(n - 1, int(round(float(o.get("anchor_at", 0.0)) * fps))))
+                    af = decode_sampled(path, fps, r0, [a_i], max_side=100000)
+                    pcrop = None
+                    try:
+                        pcrop = person_light_crop(plan, jd, c, r0 + a_i, af)
+                    except Exception as e:
+                        cw.append(f"the person's light crop couldn't be made ({e}): the model reads the light from the whole frame")
+                    if pcrop is not None:
+                        pcrop = _shrink(pcrop, LARGE_FRAME_SIDE if large else QWEN_FRAME_MAX_SIDE)
+                        try:                     # what the model was shown to read the light from, to look at
+                            import numpy as _np
+                            import cv2 as _cv2
+                            _cv2.imwrite(os.path.join(jd, "drafts", f"{c['id']}_light_crop.png"),
+                                         (_np.clip(pcrop[0].cpu().numpy(), 0, 1)[:, :, ::-1] * 255).astype(_np.uint8))
+                        except Exception:
+                            pass
+                    if crop:
+                        x0, y0, x1, y1 = crop
+                        af = af[:, y0:y1, x0:x1, :]
+                    af = _shrink(af, LARGE_FRAME_SIDE if large else QWEN_FRAME_MAX_SIDE)
+                    qq = qwen_anchor_question(plan, c, with_crop=pcrop is not None and large)
+                    t_a = time.time()
+                    parts = [qq, "<image1> (the frame):", af[0], "<image2> (the reference):", sheet[0]]
+                    if pcrop is not None and large:
+                        parts += ["<image3> (the person already in the frame, alone, as lit by the scene):", pcrop[0]]
+                    araw = (qwen.ask_parts(parts, max_tokens=700,
+                                           think=LARGE_THINK) if large
+                            else qwen.ask(qq, image=sheet, max_tokens=700))
+                    atext = clean_anchor_text(araw)
+                    _write(os.path.join(jd, "drafts", f"{c['id']}_qwen_anchor_raw.txt"), araw or "")
+                    if atext:
+                        where_to = write_anchor_text(plan_file, c["id"], atext)
+                        cw.append(f"Qwen instruction written ({round(time.time() - t_a, 1)} s) into {where_to}")
+                    else:
+                        cw.append("the model's Qwen instruction was unusable (no <image1>/<image2>, or too short): the default sentence "
+                                  "stays; see drafts/" + c["id"] + "_qwen_anchor_raw.txt")
+                except Exception as e:                    # the H3 prompt is already written: never lose it over the anchor text
+                    cw.append(f"the Qwen instruction could not be written: {e}")
+            def _keep_notes(p, cid=c["id"], notes=list(cw)):         # what the draft said about this chunk, for the strip to show beside "redraft"
+                ch = sp.find_chunk(p, cid)
+                ch["drafted"] = dict(ch.get("drafted") or {}, warnings=notes)
+            try:
+                sp.update_plan(plan_file, _keep_notes)
+            except Exception:
+                pass
+            report["chunks"][c["id"]] = {"into": into, "render": [r0, r1], "shots": 1, "lines": 0, "warnings": cw,
+                                         "dialogue_coverage": None, "unseen": [], "carried_over": [], "plan_rev": rev,
+                                         "chars": len(text), "seconds": round(time.time() - t, 2)}
+    finally:
+        try:
+            qwen.close()
+        except Exception:
+            pass
+    report["total_s"] = round(time.time() - t_run, 2)
+    lines = [f"job {plan['job']}: object {action} prompt into {len(report['chunks'])} chunk(s) in {report['total_s']} s",
+             f"object: {report.get('object_details', '')}"]
+    lines += [f" {cid} {r['render'][0]}-{r['render'][1]}: -> {r['into']}" for cid, r in report["chunks"].items()]
+    lines += [f" \u26a0 {w}" for w in warnings]
+    report["text"] = "\n".join(lines)
+    _write_json(os.path.join(jd, "drafts", f"report_{time.strftime('%Y%m%d_%H%M%S')}.json"), report)
+    return report
+
+
 class SeamStitchSwapDraft:
     @classmethod
     def INPUT_TYPES(cls):
@@ -3521,7 +5058,9 @@ class SeamStitchSwapDraft:
                     "empty only: chunks with no prompt. all: every rendered chunk (a chunk with a prompt gets the "
                     "draft in its draft field, never over the prompt). selected: the chunk a redraft names (a "
                     "redraft always drafts its chunk, whatever this says)."}),
-                "qwen_model": (qwen_models(), {"default": DEFAULT_QWEN, "tooltip": "A QwenVL model on disk."}),
+                "qwen_model": (qwen_models(), {"default": DEFAULT_QWEN, "tooltip":
+                    "A QwenVL model on disk. GGUF: entries are QwenVL's GGUF vision models (llama.cpp, with their "
+                    "mmproj); quantization doesn't apply to them."}),
                 "quantization": (QUANTIZATIONS, {"default": QUANTIZATIONS[0]}),
                 "frames_per_chunk": ("INT", {"default": DEFAULT_FRAMES, "min": 2, "max": 48, "tooltip":
                     "Frames Qwen sees, spread over the chunk's render range (per shot: shared out by shot length, "
@@ -3530,7 +5069,7 @@ class SeamStitchSwapDraft:
                     "Omni Captioner Transcribe on each chunk's audio: the words and the audio events."}),
                 "word_timings": ("BOOLEAN", {"default": True, "tooltip":
                     "faster-whisper large-v3-turbo: word timings, so each line lands in its shot and moment."}),
-                "template": (TEMPLATES, {"default": DEFAULT_TEMPLATE, "tooltip":
+                "template": (template_choices(), {"default": DEFAULT_TEMPLATE, "tooltip":
                     "timeline: one full-size picture every half second, a caption each, merged into "
                     "each shot with its lines at their times; with the chunk marked, timed lines from its mask say "
                     "where the person is, how framed, and when they leave and come back, and with someone else in "
@@ -3562,6 +5101,18 @@ class SeamStitchSwapDraft:
                     "What the draft asks Qwen, one ### section per question, pre-filled with the built-in text. Edit "
                     "a section to change that question; delete it, or clear the box, for the built-in one. The "
                     "questions actually sent are in each chunk's drafts/<chunk>/qwen.txt."}),
+                "template_form": ("STRING", {"default": USER_FORM_SKELETON, "multiline": True, "tooltip":
+                    "Your own template, for any job: how the prompt is laid out. Write {summary}, {subject_definitions}, {retention_analysis}, "
+                    "{detailed_description}, {overall_soundscape}, {non_diegetic_music} where the drafter's piece should go ({prompt} = the whole draft), "
+                    "and add your own words anywhere. Give it a name below and press 'save template': it joins the template list as 'my: <name>'. "
+                    "Pick a saved one to load it here."}),
+                "template_name": ("STRING", {"default": "", "tooltip": "The name to save the template box under (the same name replaces that template)."}),
+                "template_example": ("STRING", {"default": "", "multiline": True, "tooltip":
+                    "Read-only: an example of what your layout gives for the 'template_base' picked, with stand-in answers. It updates when you change the base, "
+                    "the layout or the template. Nothing you type here is used."}),
+                "template_base": (base_choices(), {"default": AUTO_BASE, "tooltip":
+                    "Which built-in template your layout is built on: it decides the questions the model is asked and how the prompt is worked out; your layout then "
+                    "only places the pieces. 'automatic' uses the job's own (character, background or object)."}),
                 "sheet_2": ("IMAGE", {"tooltip":
                     "A second reference picture (the render group's second Load Image, the one in the H3 node's "
                     "ref_image_1). Qwen describes it once per job and the subject defines it as <Picture 2>: a second "
@@ -3587,7 +5138,8 @@ class SeamStitchSwapDraft:
     def draft(self, draft_plan, chunks=CHUNK_MODES[0], qwen_model=DEFAULT_QWEN, quantization=QUANTIZATIONS[0],
               frames_per_chunk=DEFAULT_FRAMES, transcribe=True, word_timings=True, template=DEFAULT_TEMPLATE,
               extra_instructions="",
-              max_tokens=2048, sheet=None, qwen_questions="", free_memory_after=True, sheet_2=None):
+              max_tokens=2048, sheet=None, qwen_questions="", free_memory_after=True, sheet_2=None,
+              template_form="", template_name="", template_base="", template_example=""):
         plan_file, named = parse_draft_plan(draft_plan)
         if not plan_file:
             raise DraftError("draft_plan is empty: queue a draft run from the Planner")
@@ -3620,3 +5172,42 @@ class SeamStitchSwapDraft:
         except Exception:
             pass
         return {"ui": {"text": [rep["text"]]}, "result": (rep["text"],)}
+
+
+# the node's save / delete template buttons (js/draft_templates.js)
+try:
+    from aiohttp import web
+    from server import PromptServer
+
+    @PromptServer.instance.routes.get("/seamstitch/draft_template/list")
+    async def _draft_templates_list(request):
+        return web.json_response({"templates": load_user_templates(), "choices": template_choices()})
+
+    @PromptServer.instance.routes.post("/seamstitch/draft_template/preview")
+    async def _draft_template_preview(request):
+        try:
+            body = await request.json()
+            ex, res, note = preview_layout(body.get("text", ""), body.get("base", ""))
+            return web.json_response({"ok": True, "example": ex, "text": res, "note": note})
+        except Exception as e:
+            return web.json_response({"error": str(e)}, status=400)
+
+    @PromptServer.instance.routes.post("/seamstitch/draft_template/save")
+    async def _draft_template_save(request):
+        try:
+            body = await request.json()
+            entry = save_user_template(body.get("name", ""), body.get("text", ""), body.get("base", ""))
+            return web.json_response({"ok": True, "entry": entry, "choices": template_choices()})
+        except Exception as e:
+            return web.json_response({"error": str(e)}, status=400)
+
+    @PromptServer.instance.routes.post("/seamstitch/draft_template/delete")
+    async def _draft_template_delete(request):
+        try:
+            body = await request.json()
+            name = delete_user_template(body.get("entry", ""))
+            return web.json_response({"ok": True, "deleted": name, "choices": template_choices()})
+        except Exception as e:
+            return web.json_response({"error": str(e)}, status=400)
+except Exception:                                    # no server (tests): the routes are only for the node's buttons
+    pass

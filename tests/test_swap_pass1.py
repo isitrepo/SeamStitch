@@ -47,7 +47,8 @@ def test_the_two_pass_size_is_unchanged():
 
 def test_the_widget_is_appended_last_and_off_by_default():
     it = spl.SeamStitchSwapPlanner.INPUT_TYPES()
-    assert list(it["optional"]) == ["first_pass_megapixels", "forward_chain"]      # appended in that order
+    assert list(it["optional"]) == ["first_pass_megapixels", "forward_chain", "object_cutout",
+                                    "object_cutout_mask"]      # appended in that order
     assert it["optional"]["first_pass_megapixels"][1]["default"] == 0.0
     assert list(it["required"])[-2:] == ["run", "ui_state"]            # nothing before it moved
     assert spl.WIDGET_SETTINGS["first_pass_megapixels"] == "first_pass_mp"

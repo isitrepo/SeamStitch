@@ -123,6 +123,8 @@ def save_mask(mark, mask, preview=None, save_preview=True, fill_holes_frames=FIL
              "empty": [a + i for i in still_empty], "filled": [a + i for i in filled],
              "chunk": mark.get("chunk"), "target": mark.get("target", ""), "created": sp.now(), "nonce": mark.get("nonce"),
              "seconds": round(time.time() - float(mark.get("started") or time.time()))}
+    if mark.get("kind"):                                # an object keep's mask (swap_plan.object_keeps)
+        entry.update(kind=mark["kind"], keep=mark.get("keep"))
 
     def add(p):
         p.setdefault("masks", []).append(entry)

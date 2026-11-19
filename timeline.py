@@ -117,6 +117,7 @@ def probe(path, frame_rate):
             "native_fps": native,
             "native_frames": len(pts),
             "base_time": base,
+            "time_base": tb,
             "has_audio": a is not None,
             "sample_rate": int(a.rate) if a is not None else 0,
             "deep_rgb": _deep_rgb(vs.codec_context.format),
@@ -163,10 +164,26 @@ def _rgb8_from_16(frame):
     return ((x + 128) // 257).astype(np.uint8)
 
 
+def frame_tol(frame_rate, time_base):
+    """How early a source frame's timestamp may sit and still fill a target time (see _iter_frames)."""
+    return max(1e-3 / float(frame_rate), float(time_base or 0))
+
+
+def first_index_after(prev_time, base, frame_rate, time_base):
+    """The first index on _iter_frames' timeline that no longer shows the source frame stamped
+    `prev_time` (seconds): the first i whose target base + i/fr lies past prev_time + tol. With
+    prev_time the last frame of a shot, that's the index the next shot starts on. Not round(t * fr)
+    of the new shot's own time: at a non-integer source rate (29.97 read at 30) that lands one late
+    once the drift passes half a frame (test clip: its cut at 523 read as 524)."""
+    fr = float(frame_rate)
+    return int(np.floor((float(prev_time) - float(base) + frame_tol(fr, time_base)) * fr + 1e-9)) + 1
+
+
 def _iter_frames(path, frame_rate, start_idx, end_idx):
     """Yield uint8 HxWx3 frames start_idx..end_idx-1 at frame_rate, decode order from
     the stream's own first frame. Same selection rule as recombine._decode_range:
-    frame i is the last source frame whose time is <= base + i/fr (+ 1e-3 frame)."""
+    frame i is the first source frame whose time is >= base + i/fr (- tol, see frame_tol);
+    a source frame fills every target from just past its predecessor's time up to its own."""
     if end_idx is not None and end_idx <= start_idx:
         return
     fr = float(frame_rate)
@@ -182,7 +199,7 @@ def _iter_frames(path, frame_rate, start_idx, end_idx):
         # whole milliseconds, so a 48 fps frame due at 83.333 ms is stored at 83 ms. With only
         # a thousandth-of-a-frame tolerance that frame was skipped and every later index was
         # off by one (FFV1 masters read back one frame late). Tolerate one tick.
-        tol = max(interval * 1e-3, float(vs.time_base or 0))
+        tol = frame_tol(fr, vs.time_base)
         vs.thread_type = "AUTO"
         c.seek(int(t_start / float(vs.time_base)), stream=vs, backward=True)
         idx, target = start_idx, t_start

@@ -1,6 +1,6 @@
-<svg width="620" height="351" viewBox="0 0 620 351" xmlns="http://www.w3.org/2000/svg" font-family="Segoe UI, Helvetica, Arial, sans-serif">
-<rect x="0" y="0" width="620" height="351" fill="#1a1a1a"/>
-<rect x="24" y="10" width="572" height="331" rx="10" fill="#2a2a2a" stroke="#454545" stroke-width="1.5"/>
+<svg width="620" height="471" viewBox="0 0 620 471" xmlns="http://www.w3.org/2000/svg" font-family="Segoe UI, Helvetica, Arial, sans-serif">
+<rect x="0" y="0" width="620" height="471" fill="#1a1a1a"/>
+<rect x="24" y="10" width="572" height="451" rx="10" fill="#2a2a2a" stroke="#454545" stroke-width="1.5"/>
 <path d="M 24 40 Q 24 10 34 10 L 586 10 Q 596 10 596 40 Z" fill="#2f8f8f"/>
 <text x="38" y="30" fill="#ffffff" font-size="14" font-weight="600">SeamStitch Swap Take</text>
 <rect x="25" y="39" width="570" height="24" fill="#242424" opacity="0.4"/>
@@ -40,5 +40,23 @@
 <rect x="34" y="267" width="552" height="19" rx="4" fill="#3a3a3a" stroke="#555" stroke-width="1"/>
 <text x="42" y="280" fill="#9a9a9a" font-size="11">review_clip</text>
 <text x="578" y="280" fill="#e8e8e8" font-size="11" text-anchor="end">True</text>
-<text x="310.0" y="309" fill="#9a9a9a" font-size="10.5" text-anchor="middle" font-style="italic">The take's review clip, its flag dots and join pills render below the widgets shown here.</text>
+<rect x="25" y="288" width="570" height="24" fill="#242424" opacity="0.4"/>
+<rect x="34" y="291" width="552" height="19" rx="4" fill="#3a3a3a" stroke="#555" stroke-width="1"/>
+<text x="42" y="304" fill="#9a9a9a" font-size="11">free_memory_after</text>
+<text x="578" y="304" fill="#e8e8e8" font-size="11" text-anchor="end">True</text>
+<rect x="34" y="315" width="552" height="19" rx="4" fill="#3a3a3a" stroke="#555" stroke-width="1"/>
+<text x="42" y="328" fill="#9a9a9a" font-size="11">level_match</text>
+<text x="578" y="328" fill="#e8e8e8" font-size="11" text-anchor="end">True</text>
+<rect x="25" y="336" width="570" height="24" fill="#242424" opacity="0.4"/>
+<rect x="34" y="339" width="552" height="19" rx="4" fill="#3a3a3a" stroke="#555" stroke-width="1"/>
+<text x="42" y="352" fill="#9a9a9a" font-size="11">detail_match</text>
+<text x="578" y="352" fill="#e8e8e8" font-size="11" text-anchor="end">True</text>
+<rect x="34" y="363" width="552" height="19" rx="4" fill="#3a3a3a" stroke="#555" stroke-width="1"/>
+<text x="42" y="376" fill="#9a9a9a" font-size="11">detail_anchor</text>
+<text x="578" y="376" fill="#e8e8e8" font-size="11" text-anchor="end">True</text>
+<rect x="25" y="384" width="570" height="24" fill="#242424" opacity="0.4"/>
+<rect x="34" y="387" width="552" height="19" rx="4" fill="#3a3a3a" stroke="#555" stroke-width="1"/>
+<text x="42" y="400" fill="#9a9a9a" font-size="11">person_anchor</text>
+<text x="578" y="400" fill="#e8e8e8" font-size="11" text-anchor="end">True</text>
+<text x="310.0" y="429" fill="#9a9a9a" font-size="10.5" text-anchor="middle" font-style="italic">The take's review clip, its flag dots and join pills render below the widgets shown here.</text>
 </svg>

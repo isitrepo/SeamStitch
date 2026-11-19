@@ -107,7 +107,7 @@ def match_format(waveform, sample_rate, channels, target_rate):
 
 def splice_audio(source, sample_rate, frame_rate, start_frame, end_frame,
                  lead_dropped, kept, av_offset_s=0.0, bridge=None, crossfade_ms=20.0,
-                 combined_weight=None, insert=False):
+                 combined_weight=None, insert=False, source_lead=None):
     """Cut `source` ([C, N]) to match the spliced picture.
 
     Picture: source frames `[0, start_frame)`, then `kept` regenerated frames (the
@@ -141,8 +141,16 @@ def splice_audio(source, sample_rate, frame_rate, start_frame, end_frame,
     crossfade, and neither side of the join moves, so the picture stays locked to
     the sound either side of the insertion.
 
+    `lead_dropped` counts every frame dropped from the front of the *bridge* (motion
+    guide context frames plus dedup), which is what bridge audio is offset by. The
+    source's own gap audio starts later than the gap only by the dedup part, because
+    context frames are generated around the replaced range, not inside it: pass that
+    as `source_lead` (defaults to `lead_dropped`).
+
     Returns `(waveform [C, M], notes)`.
     """
+    if source_lead is None:
+        source_lead = lead_dropped
     q = lambda f: frame_sample(f, frame_rate, sample_rate)
     offset = int(round(av_offset_s * sample_rate))
     fade = max(0, int(round(crossfade_ms * sample_rate / 1000.0)))
@@ -190,8 +198,8 @@ def splice_audio(source, sample_rate, frame_rate, start_frame, end_frame,
                      f"the gap is silence"
                      + (" with bridge audio mixed over it" if is_combined else ""))
     else:
-        first = start_frame + lead_dropped
-        if first + kept == end_frame + 1 and lead_dropped > 0:
+        first = start_frame + source_lead
+        if first + kept == end_frame + 1 and source_lead > 0:
             # Only the leading edge was cut: anchor on the end so the trailing
             # join stays sample-continuous instead of a 1-sample rounding skip.
             gap_start = after_start - gap_len

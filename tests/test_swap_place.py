@@ -181,7 +181,7 @@ def test_pass1_size_follows_the_source_shape():
     assert spl.pass1_size(720, 1280) == (416, 736)
     assert spl.pass1_size(1080, 1080) == (544, 544)
     assert spl.RETURN_NAMES[spl.OUT_RENDER_W] == "render_width" and spl.RETURN_NAMES[spl.OUT_RENDER_H] == "render_height"
-    assert len(spl.RETURN_TYPES) == len(spl.RETURN_NAMES) == 21
+    assert len(spl.RETURN_TYPES) == len(spl.RETURN_NAMES) == 29
 
 
 def test_others_split_into_people_and_background():

@@ -1,5 +1,135 @@
 # Changelog
 
+## 0.6.0 - 2026-11-19: a large GGUF drafter, marking in pieces, "nobody in this shot", cut detection, Object jobs, fix all, Frame Grab, VOSR Polish
+
+### Highlights added at release (each is described in the README)
+
+- **SeamStitch Batch Splice** and the Timeline's **fix all** (several joins bridged in one go, then spliced into the cut); Result Preview writes a `.seam.json` beside each result.
+- **SeamStitch Timeline Prompt (27B)**: a large vision model writes the Timeline's bridge prompt from both pictures and a few frames either side; its answer opens with a blank line.
+- **SeamStitch Frame Grab**: a first and a last frame of a video as lossless images.
+- **SeamStitch VOSR Polish**: optional VOSR 2.0 sharpen step (same size, or enlarge x2).
+- **Swap Take** `detail_match`, `detail_anchor`, `person_anchor`; per-chunk **edit this** / **back to the original**; Swap Draft's 27B and BFS-text templates.
+- The BFS template is text only: the BFS swap LoRA is third-party, under the H3 Community License, and is not part of or distributed with this pack.
+
+### Verified live and not (read this before relying on it)
+
+- Run end to end on a copy of a real job (about 60 s) (one seed each): Timeline fix all + Batch Splice, per-chunk edit this / back to the original, the VOSR Polish group, the detail / person anchors on a pin-free take.
+  Fix all smooths a small bump at a join but does not hide a framing cut. Deeper context smooths the entry into a gap, does not recover the real motion and costs 44 more frames of generation.
+- **Experimental, not verified live in this release:** the object-add paths (zone add, H3-render replace / add, cut-out composite: unit tests and earlier clip tests only), and Frame Grab (unit tests only).
+  The README leaves the object-add paths out.
+
+### New
+
+- **Object add by redrawing a zone (Swap), guide "zone":** no cut-out is pasted. The Planner works out a ZONE per frame from the
+  target's cached masks (where the thing goes, in target widths: size, zone_aspect, zone_dx / zone_dy, zone_grow, shape; zone_spare keeps
+  the target as filmed; zone_touch_* puts a circle back where the new thing touches it). One anchor frame (the thing drawn into the scene)
+  pins who it is; before enter_at the zone is held empty. H3 redraws only the zone in the scene's own light, the rest of the crop and the
+  source audio held, so a person added to the scene is lip-synced to the original sound. Swap Assemble keeps the SOURCE everywhere except
+  inside the zone (paste through the zone, `level: ring` matches its grade). Tested on a locked-off clip (a person appears in smoke, a hand on
+  a shoulder, a spoken line): the cut-out + img2img refine it replaces made an added object look stuck on.
+  - New nodes: SeamStitch Swap Zone Latent (the zone latent; the mask maths is adapted from ComfyUI-Fantastic-MiniMaxH3-PromptBuilder,
+    MIT, Copyright (c) 2026 Adudeguyman), Swap Zone First Frame, Swap Zone Guides (empty scene until it enters, one anchor).
+  - New Planner outputs (appended): object_zone, zone_on, anchor_frame, enter_frame, anchor_prompt, anchor_image, anchor_qwen.
+  - Anchor: **Qwen** draws the thing into the plate frame from the chunk's anchor instruction (strip, selection panel; empty = a plain
+    sentence from the target and the zone) and Picture 1; **cut-out** places Picture 1's cut-out on that frame (no model); **picture** is
+    your own finished frame (strip: "anchor picture…"). One anchor only: more of them freeze the thing's pose.
+  - Strip: a row under the object row (guide, shape, size, w/h, dx, dy, pad, spare target, touch, anchor s, enters s, anchor, level).
+  - Workflow: group "OBJECT ADD v2 · ZONE" (Qwen anchor chain, zone latent, guides, sampler) behind a "ZONE ADD?" switch driven by
+    the Planner's zone_on; the cut-out path stays for guide "composite".
+
+- **Object jobs (Swap), a third mode beside Character and Background:** the job's source is a finished swap's
+  assembly, its target a thing ("painting") or a place ("shoulder of the man in the red jacket"), Picture 1 the new
+  object. Swap Assemble keeps the source everywhere and fills only the target's mask. Strip controls beside the mode
+  switch: replace / add onto it, grow, feather, fill.
+  - **fill "picture (flat)"** for paintings, posters and screens: the picture is fitted over the target per shot,
+    matched to its light and pasted through its mask (people in front stay in front). No render. Tested on the
+    test-clip painting with a car photo.
+  - **"add onto it" with fill "H3 render"**: BiRefNet cuts the object out of Picture 1 (Planner inputs
+    object_cutout / object_cutout_mask), the Planner places it on the target in every frame (feet on the target's
+    mask, following it, toned to the room), and the workflow's OBJECT ADD group re-draws that composite with H3
+    img2img (fl2va, denoise 0.5; new Planner output object_refine switches it on). Only the object's own area is
+    pasted back. Tested: a blue jay on the test subject's shoulder.
+  - Plain "H3 render" replace / add (H3 Ref2VA with the target marked) is kept but unproven: on the painting and the
+    bird it cast the reference as the main person.
+  - Swap Draft template "object replace / add (Ref2VA)", picked by the job's mode; it looks at the render's crop.
+  - An object render is cropped around its target (and an added object), and Swap Take pastes it back.
+- **Object keep (Swap):** keep something exactly as filmed when the swap redraws it (H3 drew the test subject's white shoes
+  black in one chunk and as a pink sock in the next).
+  - On a chunk's panel, under "keep from source": type what to keep ("white shoe") and add it for the chunk or the
+    whole video, then press its "mark". SAM3 tracks it shot by shot under its own name (kept off the person's mask
+    row; "view" plays its mask).
+  - Swap Assemble (and each take's review clip) pastes the source's own pixels through that mask, grown (6 px) and
+    feathered (4 px), over the joined frames. Nothing is re-rendered. Frames where SAM3 found nothing are left alone.
+  - Level: "as filmed" (default) or "match the take" (scaled to the take's grade on a ring around the mask; it
+    misreads when the take drew something else right beside the object).
+  - Several keeps can overlap (shoe + sock: the sock's mask carried the ankle the take drew bare).
+
+- **Draft template for the BFS H3 Character Swap LoRA:** `character replace (BFS body_swap, large model)`.
+  - The model (the 27B GGUF drafter) looks at the sheet once and writes a head-to-toe description, using BFS's own
+    instruction.
+  - The node fills BFS's `body_swap:` template with it (the `{target}` form when the job names who to replace) and
+    writes the same prompt into every chunk drafted.
+  - No dialogue, no per-shot lines: the LoRA's aligned guide carries the motion.
+  - For a render graph with the BFS LoRA and an aligned guide of the plain source.
+  - It swaps when the person looks unlike the character; on look-alike swaps the LoRA passes the source through.
+- **Draft node: GGUF vision models.** `qwen_model` also lists ComfyUI-QwenVL's GGUF vision models that are on disk
+  with their mmproj (`GGUF: <file>`), run in-process through llama.cpp. A `qwen35`-architecture model (Qwen3.5 / 3.6
+  / 3.8) gets the matching chat template with thinking off; the QwenVL GGUF node's own (Qwen3-VL) one let it think
+  first and spend the answer's tokens on it. `quantization` doesn't apply to them.
+- **Two templates for a large model** (a 27B, with thinking): `character replace (Ref2VA, lean, large model)` and
+  `background replace (Ref2VA, lean, large model)`. The lean sections, place lines and retention lines stay; each
+  shot is drafted in one call (its pictures in order, each after its time; the other people by `<Subject N>` label;
+  the chunk's object names; its spoken lines) and written by the model as JSON, where the lean template captions one
+  picture at a time and merges in code. The sheet, who, scene and object questions go through the same calls. The
+  model card's sampling. On a test-clip chunk, three drafts each against the frames: the 8B lean draft lost one of
+  the two kept people, invented a cigarette and a pill bottle, and named the character; the 27B got both people,
+  the shots they're in, the crossed legs and each head turn. Needs a `GGUF:` model, else the lean template is used
+  with a warning. About 3.5 minutes a chunk.
+- **Strip: Mark menu, "nobody in shot a-b"**, per shot of the selected chunk: an empty mark (`empty_mask` op), so a
+  shot the target isn't in is left as filmed. SAM3 run on such a shot marks something anyway (a dark background
+  behind a held ticket, a shadow on a wall), and the render repaints it as the character.
+- **Strip: long shots are marked in pieces** of 50 frames, each shot's first two frames on their own. Three dark
+  shots (126 to 442 frames) lost SAM3's track after their first frame or two and came back empty; in pieces they held.
+
+### Fixed
+
+- **match_to_source is about 3.6 times faster, with the same result:** Recombine's detail and colour match took about 2.9 s per bridge frame
+  (7 minutes for a 148-frame bridge). Each frame's sharpening solve now reuses one buffer instead of allocating several full-size arrays per
+  trial, and frames are matched on several threads (`bridge_match.WORKERS`, up to 8). Measured on 12 real 1920x1080 frames: 25.9 s to 7.1 s,
+  with the output bytes and the per-frame report rows identical to the old code.
+- **Cut detection lands on the new shot's first frame** at 29.97 fps (the pts-to-frame rounding drifted one frame
+  late after ~500 frames, so each chunk opened on the last frame of the shot before). Existing plans keep their cuts.
+- **The sheet question names make-up as make-up** ("white face paint", "black eye make-up"). A cosplay sheet's
+  face paint came back as "pale skin with dark circles around the eyes", which fits the source actor too, and H3 kept
+  him on every seed and model; the same chunk swapped once the line said "make-up". The large templates' subject
+  line also keeps the sheet's make-up and accessories, and leaves the lips' colour to the picture ("red lips" came
+  out as lipstick red).
+- **Invented dialogue over music:** Whisper's words with Omni hearing no speech are dropped below a mean confidence
+  of 0.5, and so are Omni's when the two share no word and Whisper is unsure ("go.", "The reference-to-video
+  generation process is now complete." were drafted as lines he says).
+- **The lean subject line splits the sheet's list at semicolons too** (a 27B list collapsed to "a young, thin man").
+- **A draft that finishes after a mode switch files under the mode it started in** (it wrote its prompts into the new mode).
+- **An Object job whose target text matches no cached mask says so at Assemble** ("black shoe" vs a mask marked "black shoes"
+  returned the source with no word); matching is still exact.
+- **The re-roll button's tooltip** no longer reads "Seed: fixed function fixed()" when the seed is "new".
+- **A model answer that is its instruction handed back is asked once more**, then the chunk is left without a prompt and a warning.
+- **The BFS draft loads the GGUF model before its first question** (it never did; the Object draft already did).
+- **Timeline: a "deeper" button on the strip toolbar** switches the real frames pinned each side of a bridge between the usual 5 and 22 (about 0.9 s). On a measured test it made the join into the gap as smooth as ordinary motion; it does not make the new frames match what was there. It sets the Timeline's own context_frames, so the bridge sizes and the node stay in step (the clip anchors accept 1, 5, 22 or 39).
+- **Verified on a real job (2026-11-18):** Timeline fix all + Batch Splice (3 seams), per-chunk edit this / back to the original, the VOSR Polish group, and the detail / person anchors on a pin-free take all ran end to end in ComfyUI. Back to the original now also restores the chunk's drafted record.
+
+### Notes from a full character job (a test clip, 71 s, 17 chunks)
+
+- **Chunk length decides the swap more than the prompt.** At 294 frames H3 rebuilt the source actor from the marked
+  guide and lost 3 of 5 cuts; split to 124-175 frames, the same sheet and prompt swapped and kept the cuts. Aim for
+  ~158 (the workflow's target) and stay at or under 175.
+- **A tight close-up that starts cold on a straight cut zoomed out** (no pin, no lead-in; every seed and both sheets).
+  Anchored on the cut (the split's overlap reaches into the shot before, pinned to its take), it framed correctly.
+  A wide shot started cold on a cut held.
+- **H3 drifts later cuts in a chunk early** (2-5 frames; one chunk 16-27 frames on every seed); the prompt's times
+  are right. Check cut timing per take.
+- **What H3 won't keep without being told:** the film's shrunken-head gag regrew to a normal head on two of three
+  seeds; neither model mentioned it.
+
 ## 0.5.0 — Swap: background replace mode, single pass, level and contrast match, forward chain
 
 ### New

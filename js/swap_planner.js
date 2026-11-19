@@ -328,7 +328,8 @@ function buildPlanner(node) {
         alignItems: "center", justifyContent: "center", color: C.dim, fontSize: "1.1em", textAlign: "center", padding: "10px" });
     const emptyText = el("div", { whiteSpace: "pre-line" });
     emptyHint.append(emptyText, button("load video ▾", "From the input folder, or upload one (or drop a video here)", (ev) => openSourceMenu(ev)));
-    videoBox.append(video, cover, emptyHint, overlay, dropHint);
+    const zoneCv = el("canvas", { position: "absolute", left: "0", top: "0", width: "100%", height: "100%", pointerEvents: "none" });
+    videoBox.append(video, cover, emptyHint, zoneCv, overlay, dropHint);
 
     const bar1 = el("div", { display: "flex", gap: "4px", alignItems: "center", flexWrap: "wrap", flexShrink: "0" });
     const bPlay = button("▶", "Play / pause (space)", () => togglePlay());
@@ -339,13 +340,14 @@ function buildPlanner(node) {
     const bDetect = button("detect + plan", "Find the cuts (ffmpeg scene > 0.15) and place the splits from them in one step: the cuts come in confirmed, the auto splits (209-frame renders, every 197, nudged off the cuts) follow. Then review: delete a wrong cut, drag or re-mode a split. Runs by itself when a video is loaded.", () => detectPlan());
     const bCuts = button("cuts ▾", "Cut detection only, confirm suggestions, re-place the auto splits", (ev) => openCutsMenu(ev));
     const bClear = button("clear all", "Start fresh: remove every cut, split, kept stretch and prompt (one chunk over the whole video). Takes stay on disk (listed under removed chunks) and the cached masks stay. Then 'detect + plan' starts over.", () => clearAll());
+    const bUndo = button("↶ undo", "Undo the last edit made in this panel (a split or cut moved, a mode or take changed, a prompt edited...). Renders made since stay. Keeps the last 50 edits.", () => undoLast());
     const bDraft = button("draft prompts", "Queue a draft run: SeamStitch Swap Draft Prompts fills every empty prompt (others into their draft field)", () => queueDraft());
     const bMark = button("mark ▾", "Track and cache the source person mask (SAM3) up front, so it can be checked on the mask row before any render", (ev) => openMarkMenu(ev));
     const bPending = button("render pending", "Queue every chunk without a usable take, left to right (pins chain at execution)", () => renderPending());
     const bAssemble = button("assemble ▾", "Join the effective takes over the original audio", (ev) => openAssembleMenu(ev));
     const status = el("span", { marginLeft: "auto", color: C.dim, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "40%" });
     const gap = () => el("span", { width: "6px" });
-    bar1.append(bPlay, bMode, gap(), bZoomOut, bZoomIn, bFit, gap(), bDetect, bCuts, bClear, gap(),
+    bar1.append(bPlay, bMode, gap(), bZoomOut, bZoomIn, bFit, gap(), bDetect, bCuts, bClear, bUndo, gap(),
         bDraft, bMark, bPending, bAssemble, status);
 
     // The job and its video, picked rather than typed (the job / source widgets stay, hidden, so a
@@ -375,10 +377,13 @@ function buildPlanner(node) {
         character: "Character replace: the person is replaced by the character on the sheet (Load Character Sheet).",
         background: "Background replace: the person is kept and everything around them becomes the place on the sheet "
             + "(Load Character Sheet: a picture of the place). A chunk with nobody in it still needs its prompt written by hand.",
+        object: "Object replace / add: the target is a thing (\"the painting on the wall\") or where a new thing goes (\"his left shoulder\"), "
+            + "and the sheet is the new object. Usually on a finished swap's assembly. Assemble keeps the source everywhere and pastes the "
+            + "render only inside the target's mask, grown and feathered (the settings beside this switch).",
     };
     const modeBox = el("div", { display: "flex", border: "1px solid #3b4252", borderRadius: "4px", overflow: "hidden", flexShrink: "0" });
     const modeBtns = {};
-    for (const [m, t] of [["character", "Character replace"], ["background", "Background replace"]]) {
+    for (const [m, t] of [["character", "Character replace"], ["background", "Background replace"], ["object", "Object"]]) {
         const b = el("button", { border: "none", padding: "0.2em 0.7em", cursor: "pointer", font: "inherit" }, t);
         b.title = MODE_TIPS[m] + " Switching keeps everything: each mode has its own subject, prompts and takes, and flipping back brings them back.";
         b.onpointerdown = (e) => e.stopPropagation();
@@ -401,8 +406,99 @@ function buildPlanner(node) {
         guideInner.append(b);
     }
     guideBox.append(el("span", { color: C.dim }, "mark"), guideInner);
+    // object jobs only: replace the target or add onto it, and how the render is pasted back (swap_plan.object_settings)
+    const objBox = el("div", { display: "none", alignItems: "center", gap: "4px", flexShrink: "0" });
+    const objSel = el("select", { background: "#111", color: C.text, border: "1px solid #3b4252", borderRadius: "4px" });
+    [["replace", "replace it"], ["add", "add onto it"]].forEach(([v, t]) => { const o = el("option", null, t); o.value = v; objSel.append(o); });
+    objSel.title = "replace it: the sheet's object takes the target's place. add onto it: the sheet's object is added on the target (a bird on a shoulder); the paste mask is grown wider (60 px).";
+    const objNum = (key, tip) => { const i = el("input", { width: "3.5em", background: "#111", color: C.text, border: "1px solid #3b4252", borderRadius: "4px" }); i.type = "number"; i.min = 0; i.title = tip;
+        i.onpointerdown = (e) => e.stopPropagation(); i.onkeydown = (e) => { e.stopPropagation(); if (e.key === "Enter") i.blur(); };
+        i.onchange = () => op({ op: "set_object", [key]: parseInt(i.value, 10) || 0 }); return i; };
+    const objGrow = objNum("grow", "px the target's mask is grown by before the render is pasted in");
+    const objFeather = objNum("feather", "px of soft edge on the paste");
+    objSel.onpointerdown = (e) => e.stopPropagation();
+    objSel.onchange = () => op(objSel.value === "add" ? { op: "set_object", action: "add", guide: "zone" } : { op: "set_object", action: objSel.value });   // an add redraws a zone
+    // what fills the target: the H3 render (a 3D thing: a bird, a prop), or a picture (a flat thing: a painting,
+    // a poster, a screen), fitted over the target and toned to its light, with no render at all
+    const objFill = el("select", { background: "#111", color: C.text, border: "1px solid #3b4252", borderRadius: "4px" });
+    [["render", "fill: H3 render"], ["picture", "fill: picture (flat)"]].forEach(([v, t]) => { const o = el("option", null, t); o.value = v; objFill.append(o); });
+    objFill.title = "H3 render: the chunk's take, pasted in through the target's mask. picture: for a flat target (a painting, poster or screen): the picture below fitted over it and matched to its light, no render needed.";
+    objFill.onpointerdown = (e) => e.stopPropagation();
+    objFill.onchange = () => op({ op: "set_object", fill: objFill.value });
+    const objPicIn = el("input"); objPicIn.type = "file"; objPicIn.accept = "image/*"; objPicIn.style.display = "none";
+    objPicIn.onchange = async () => {
+        const f = objPicIn.files?.[0];
+        if (!f) return;
+        try { const name = await uploadFile(f); await op({ op: "set_object", picture: name, fill: "picture" }); toast(`picture: ${name}`, "green"); }
+        catch (e) { toast(`picture upload: ${e}`, "red"); }
+        objPicIn.value = "";
+    };
+    const objPic = button("picture…", "Pick the picture for fill: picture (it is copied into ComfyUI's input folder)", () => objPicIn.click());
+    objBox.append(objSel, el("span", { color: C.dim }, "grow"), objGrow, el("span", { color: C.dim }, "feather"), objFeather, objFill, objPic, objPicIn);
+    // an add that REDRAWS A ZONE (guide "zone", swap_plan.object_zone) instead of pasting a cut-out: its own row, shown for an
+    // add with fill H3 render. The numbers are in target widths (the target's own width on the first frame), like size.
+    const zoneRow = el("div", { display: "none", alignItems: "center", gap: "4px", flexWrap: "wrap", flexShrink: "0", padding: "0 6px 2px" });
+    const zStyle = { background: "#111", color: C.text, border: "1px solid #3b4252", borderRadius: "4px" };
+    const zLab = (t, tip) => { const l = el("span", { color: C.dim }, t); if (tip) l.title = tip; return l; };
+    const zNum = (key, tip, step, int) => { const i = el("input", Object.assign({ width: "4em" }, zStyle)); i.type = "number"; i.step = step; i.title = tip;
+        i.onpointerdown = (e) => e.stopPropagation(); i.onkeydown = (e) => { e.stopPropagation(); if (e.key === "Enter") i.blur(); };
+        i.onchange = () => op({ op: "set_object", [key]: int ? (parseInt(i.value, 10) || 0) : (parseFloat(i.value) || 0) }); return i; };
+    const zSel = (key, opts, tip) => { const sl = el("select", zStyle); opts.forEach(([v, t]) => { const o = el("option", null, t); o.value = v; sl.append(o); });
+        sl.title = tip; sl.onpointerdown = (e) => e.stopPropagation(); sl.onchange = () => op({ op: "set_object", [key]: sl.value }); return sl; };
+    const zGuide = zSel("guide", [["composite", "guide: pasted cut-out (its render group was removed)"], ["zone", "guide: redraw a zone"]],
+        "pasted cut-out: the old way (the cut-out of Picture 1 pasted on the target, refined img2img; it looked stuck on). Its render group is no longer in the workflow: use redraw a zone. redraw a zone: no cut-out; Qwen draws the thing into one frame (the anchor) and H3 redraws only a zone around where it goes, in the scene's own light, the rest of the crop and the audio held.");
+    const zShape = zSel("zone_shape", [["ellipse", "ellipse"], ["box", "box"], ["mask", "the target's own mask"]], "The zone's shape. An ellipse leaves the corners as filmed; a box covers smoke or a body that fills it. A box with a soft feather hides its edge best. The target's own mask is for taking something OUT: H3 redraws exactly where it was (grown by the zone grow).");
+    const zSize = zNum("size", "The zone's height, in target widths (the target's width on its first frame).", 0.1);
+    const zAspect = zNum("zone_aspect", "The zone's width over its height.", 0.05);
+    const zDx = zNum("zone_dx", "Move the zone sideways from the target's top-centre, in target widths (negative = to the left). 0 = on the target, as a bird on a shoulder.", 0.05);
+    const zDy = zNum("zone_dy", "Move the zone down from where a thing standing on the target's top would sit, in target widths. A person beside the target needs it positive.", 0.05);
+    const zGrow = zNum("zone_grow", "px the zone is padded by.", 5, true);
+    const zSpare = el("input"); zSpare.type = "checkbox"; zSpare.title = "Keep the target's own pixels out of the zone (a person added beside someone: she stays exactly as filmed).";
+    zSpare.onpointerdown = (e) => e.stopPropagation(); zSpare.onchange = () => op({ op: "set_object", zone_spare: zSpare.checked });
+    const zTx = zNum("zone_touch_dx", "Where the new thing touches the target: the circle's centre sideways from the target's top-centre, in target widths.", 0.05);
+    const zTy = zNum("zone_touch_dy", "Where the new thing touches the target: the circle's centre down from the target's top-centre, in target widths.", 0.05);
+    const zTr = zNum("zone_touch_r", "The touch circle's radius, in target widths (0 = no touch). It puts a part of the spared target back in the zone: a hand on her shoulder.", 0.05);
+    const zAnchor = zNum("anchor_at", "Seconds from the chunk's start: the frame Qwen draws the thing into (the anchor). Pick a moment it is fully in the scene and the target is not hidden.", 0.1);
+    const zEnter = zNum("enter_at", "Seconds from the chunk's start: when the thing enters. The zone is held empty before it (0 = it is there from the start).", 0.1);
+    const zAnch = zSel("anchor", [["qwen", "anchor: Qwen draws it"], ["composite", "anchor: the cut-out placed (no model)"], ["picture", "anchor: my picture"]],
+        "Who makes the anchor frame (the thing in place, in one frame, that H3 follows). Qwen draws it from the chunk's instruction below and Picture 1. The cut-out composite places Picture 1's cut-out on the target (no model; it can look stuck on, H3 repaints it). My picture: a finished frame of your own, the crop's size.");
+    const zPicIn = el("input"); zPicIn.type = "file"; zPicIn.accept = "image/*"; zPicIn.style.display = "none";
+    zPicIn.onchange = async () => {
+        const f = zPicIn.files?.[0];
+        if (!f) return;
+        try { const name = await uploadFile(f); await op({ op: "set_object", anchor_picture: name, anchor: "picture" }); toast(`anchor picture: ${name}`, "green"); }
+        catch (e) { toast(`anchor picture upload: ${e}`, "red"); }
+        zPicIn.value = "";
+    };
+    const zPic = button("anchor picture…", "Pick your own anchor frame (copied into ComfyUI's input folder): the thing already in place, cropped like the render", () => zPicIn.click());
+    const zLevel = zSel("level", [["ring", "level: match the scene"], ["none", "level: as drawn"]], "match the scene: the zone is scaled to the grade of the picture just outside it, so a thing the model drew a little bright blends in. as drawn: no correction.");
+    // the zone locked to a spot from a frame on (plan.object.zone_keys): it holds there until the next lock; before the first lock the numbers here hold
+    const ZONE_KEY_FIELDS = ["size", "zone_aspect", "zone_dx", "zone_dy", "zone_touch_dx", "zone_touch_dy", "zone_touch_r"];
+    const zKeys = () => (((P() || {}).object || {}).zone_keys || []);
+    const zKeyLbl = el("span", { color: C.dim, fontSize: "0.9em" }, "");
+    const zLock = button("🔒 lock here", "Lock the zone where it is now, from this frame on: it stays in that spot until the next lock. Move it first (drag, or the numbers), then lock; lock again later in the clip to move it again.", async () => {
+        if (!zoneGeo?.found) { toast("the zone isn't shown on this frame (mark the target first)", "red"); return; }
+        const fr = Math.round(S.playhead), key = { frame: fr };
+        for (const f of ZONE_KEY_FIELDS) key[f] = zoneGeo.settings[f];
+        await op({ op: "set_object", zone_keys: zKeys().filter(k => k.frame !== fr).concat(key) }, true);
+        loadZone();
+    });
+    const zUnlock = button("unlock", "Remove the lock that holds on this frame: the zone goes back to the one before it (or to the numbers here).", async () => {
+        if (zoneGeo?.key == null) { toast("no lock holds on this frame", "red"); return; }
+        await op({ op: "set_object", zone_keys: zKeys().filter(k => k.frame !== zoneGeo.key) }, true);
+        loadZone();
+    });
+    // what to add, in your own words: the drafter's vision model reads it with the frames and the sheet and writes both the H3 prompt and the Qwen instruction from it (the zone below is only where H3 redraws)
+    const zBrief = el("input", Object.assign({ width: "26em", maxWidth: "100%" }, zStyle)); zBrief.type = "text";
+    zBrief.placeholder = "what to add, e.g. a man with green hair sitting next to her";
+    zBrief.title = "What to add and where, in plain words. 'draft prompts' / 'redraft' use it with what the model sees in the frames and the sheet to write the H3 prompt and the Qwen instruction. The circles below only mark where H3 redraws: they are not told to the drafter.";
+    zBrief.onpointerdown = (e) => e.stopPropagation(); zBrief.onkeydown = (e) => { e.stopPropagation(); if (e.key === "Enter") zBrief.blur(); };
+    zBrief.onchange = () => op({ op: "set_object", brief: zBrief.value });
+    const zoneBits = [zLab("add", "what to add, in your words"), zBrief, zLock, zUnlock, zKeyLbl, zLab("shape"), zShape, zLab("size", "height, in target widths"), zSize, zLab("w/h"), zAspect, zLab("dx"), zDx, zLab("dy"), zDy, zLab("pad px"), zGrow,
+        zLab("spare target", "keep the target as filmed"), zSpare, zLab("touch dx"), zTx, zLab("dy"), zTy, zLab("r"), zTr, zLab("anchor s"), zAnchor, zLab("enters s"), zEnter, zAnch, zPic, zPicIn, zLevel];
+    zoneRow.append(zGuide, ...zoneBits);
     const targetLbl = el("span", { color: C.dim }, "replace");
-    targetRow.append(modeBox, guideBox, targetLbl, targetIn);
+    targetRow.append(modeBox, guideBox, objBox, targetLbl, targetIn);
 
     const canvas = el("canvas", { width: "100%", height: `${CANVAS_H}px`, display: "block", cursor: "default",
         borderRadius: "4px", touchAction: "none", flex: "0 0 auto" });
@@ -454,11 +550,13 @@ function buildPlanner(node) {
     fileInput.accept = "video/*";
     fileInput.onchange = async () => { if (fileInput.files[0]) await setSourceFile(fileInput.files[0]); fileInput.value = ""; };
 
-    root.append(head, targetRow, videoBox, bar1, canvas, nextBar, selBox, selGrip, warnBox, warnGrip, fileInput);
+    root.append(head, targetRow, zoneRow, videoBox, bar1, canvas, nextBar, selBox, selGrip, warnBox, warnGrip, fileInput);
 
     const widget = node.addDOMWidget("swap_planner_ui", "div", root, { serialize: false, hideOnZoom: false });
     // Keep the panel out of widgets_values (a saved blank shifted onto later widgets: timeline.js).
     widget.serialize = false;
+    const fcw = W("forward_chain");
+    if (fcw) { const prev = fcw.callback; fcw.callback = function () { const r = prev ? prev.apply(this, arguments) : undefined; try { refresh(); } catch { } return r; }; }
     widget.computeSize = (width) => [Math.max(500, (width || node.size[0]) - 20), 640];
     if (node.size[0] < 980) node.size[0] = 980;
     if (node.size[1] < 1080) node.size[1] = 1080;
@@ -486,9 +584,9 @@ function buildPlanner(node) {
     const P = () => S.plan;
     // the job's mode: "character" or "background" (a plan from before the switch carries invert instead)
     // the mask that renders: the backdrop marked for a background replace, or a character replace guided by the backdrop
-    const maskView = () => (jobMode() === "background" || jobGuide() === "backdrop") ? "mask_bg" : "mask";
+    const maskView = () => jobMode() === "object" ? "mask_obj" : (jobMode() === "background" || jobGuide() === "backdrop") ? "mask_bg" : "mask";
     const jobGuide = () => (P()?.guide === "backdrop" ? "backdrop" : "person");
-    const jobMode = () => { const p = P(); return !p ? "character" : (p.mode === "background" || p.mode === "character")
+    const jobMode = () => { const p = P(); return !p ? "character" : (p.mode === "background" || p.mode === "character" || p.mode === "object")
         ? p.mode : (p.invert ? "background" : "character"); };
     const chunks = () => P()?.chunks || [];
     const splits = () => P()?.splits || [];
@@ -674,6 +772,11 @@ function buildPlanner(node) {
             `the cached masks stay. Then press 'detect + plan' to start over.`)) return;
         const r = await op({ op: "clear_all" }, true);
         if (r) { S.sel = null; toast(`cleared: ${r.result.cleared.cuts} cuts, ${r.result.cleared.splits} splits, ${r.result.cleared.kept} kept, ${r.result.cleared.prompts} prompts; masks kept (${r.result.cleared.masks_kept})`, "green"); refresh(); }
+    }
+    async function undoLast() {
+        if (S.promptDirty) savePrompt();
+        const r = await op({ op: "undo" }, true);
+        if (r) toast(`undid: ${r.result?.undid || "the last edit"}`, "green");
     }
     async function autoSplits() {
         const has = chunks().some(c => (c.takes || []).length || (c.prompt || "").trim());
@@ -864,12 +967,101 @@ function buildPlanner(node) {
         await queueRun(chunk ? { action: "draft", chunk } : { action: "draft" }, "draft");
     }
     // A chunk is marked shot by shot: SAM3 keeps one track and doesn't find the target again after a cut (B7).
+    // A long shot goes in pieces, its first two frames on their own (test clip, 2026-10-17: three dark shots of 126,
+    // 442 and 346 frames lost the track after their first frame or two and came back empty; the same shots marked in
+    // 50-frame pieces held, except each shot's opening piece, which held once its first two frames went alone).
+    const MARK_PIECE = 50, MARK_HEAD = 2;
+    function markPieces(a, b) {
+        if (b - a + 1 <= MARK_PIECE + 10) return [[a, b]];
+        const out = [[a, a + MARK_HEAD - 1]];
+        for (let s = a + MARK_HEAD; s <= b;) {
+            let e = Math.min(b, s + MARK_PIECE - 1);
+            if (b - e < MARK_PIECE / 3) e = b;          // no short last piece
+            out.push([s, e]);
+            s = e + 1;
+        }
+        return out;
+    }
     async function markChunk(c, quiet) {
-        const shots = shotsOf(c);
+        const pieces = shotsOf(c).flatMap(s => markPieces(s.a, s.b));
         let n = 0;
-        for (const s of shots) if (await queueRun({ action: "mark", chunk: c.id, range: [s.a, s.b] }, "mark", true)) n++; else break;
-        if (!quiet && n) toast(`queued ${n} mark run${n === 1 ? "" : "s"} for chunk ${label(c.id)} (${n === 1 ? "one shot" : "one per shot"})`, "green");
-        return n === shots.length;
+        for (const [a, b] of pieces) if (await queueRun({ action: "mark", chunk: c.id, range: [a, b] }, "mark", true)) n++; else break;
+        if (!quiet && n) toast(`queued ${n} mark run${n === 1 ? "" : "s"} for chunk ${label(c.id)} (shot by shot, long shots in pieces)`, "green");
+        return n === pieces.length;
+    }
+    // A shot the target isn't in gets an empty mark (nobody to replace): SAM3 run there marks something else anyway
+    // (a dark background behind a held object, a shadow on a wall) and the render repaints it as the character.
+    async function markNobody(c, s) {
+        if (await op({ op: "empty_mask", chunk: c.id, range: [s.a, s.b] }, true))
+            toast(`shot ${s.a}-${s.b}: marked as nobody (left as filmed)`, "green");
+    }
+    // Object keep (swap_keep): something the swap must leave as filmed (test clip c10, 2026-10-20: H3 drew his white
+    // shoes black). Its SAM3 mask is marked like the person's, under its own target, and Swap Assemble pastes the source
+    // through it, grown and feathered. Its masks stay off the person's mask row.
+    const objectKeeps = () => P()?.object_keeps || [];
+    const personMasks = () => (P()?.masks || []).filter(m => m.kind !== "keep");
+    // an Object job's masks: the cached masks of its target (all of them while the target is empty)
+    const objectMasks = () => { const t = (P()?.target || "").trim(); return personMasks().filter(m => !t || m.target === t); };
+    const keepMasksOf = (k) => (P()?.masks || []).filter(m => m.target === k.target);
+    function keepCoverage(k, a, b) {
+        const lo = Math.max(a, k.range[0]), hi = Math.min(b, k.range[1]);
+        if (hi < lo) return null;
+        const hit = new Set();
+        for (const m of keepMasksOf(k)) for (let f = Math.max(lo, m.range[0]); f <= Math.min(hi, m.range[1]); f++) hit.add(f);
+        return hit.size / (hi - lo + 1);
+    }
+    async function markKeep(k, a, b) {
+        const lo = Math.max(a, k.range[0]), hi = Math.min(b, k.range[1]);
+        if (hi < lo) return;
+        const edges = [lo, ...confirmed().filter(f => f > lo && f <= hi), hi + 1];
+        const pieces = edges.slice(0, -1).flatMap((s, i) => markPieces(s, edges[i + 1] - 1));
+        let n = 0;
+        for (const [x, y] of pieces) if (await queueRun({ action: "mark", keep: k.id, range: [x, y] }, "mark", true)) n++; else break;
+        if (n) toast(`queued ${n} mark run${n === 1 ? "" : "s"} for "${k.target}" (${lo}-${hi}, shot by shot)`, "green");
+    }
+    function keepSection(c) {
+        const row = () => el("div", { display: "flex", gap: "4px", alignItems: "center", flexWrap: "wrap" });
+        const box = el("div", { display: "flex", flexDirection: "column", gap: "2px", padding: "2px 0" });
+        const stop = (e) => e.stopPropagation();
+        const inp = (style) => { const i = el("input", Object.assign({ background: "#111", color: C.text, border: "1px solid #3b4252", borderRadius: "4px" }, style)); i.onpointerdown = stop; i.onkeydown = (e) => { stop(e); if (e.key === "Enter") i.blur(); }; return i; };
+        const here = objectKeeps().filter(k => k.range[1] >= c.deliver[0] && k.range[0] <= c.deliver[1]);
+        box.append(el("span", { color: C.dim }, "keep from source (pasted over the take at assembly through its own SAM3 mask; mark it, then assemble)"));
+        for (const k of here) {
+            const r = row();
+            const on = el("input"); on.type = "checkbox"; on.checked = k.on !== false; on.onpointerdown = stop;
+            on.onchange = () => op({ op: "set_object_keep", id: k.id, on: on.checked });
+            const cov = keepCoverage(k, c.render[0], c.render[1]);
+            const pct = cov == null ? 0 : Math.round(cov * 100);
+            const num = (key, def, tip) => { const i = inp({ width: "3.5em" }); i.type = "number"; i.min = 0; i.value = k[key] ?? def; i.title = tip; i.onchange = () => op({ op: "set_object_keep", id: k.id, [key]: parseInt(i.value, 10) || 0 }); return i; };
+            const lvl = el("select", { background: "#111", color: C.text, border: "1px solid #3b4252", borderRadius: "4px" });
+            [["none", "level: as filmed"], ["ring", "level: match the take"]].forEach(([v, t]) => { const o = el("option", null, t); o.value = v; lvl.append(o); });
+            lvl.value = k.level || "none"; lvl.onpointerdown = stop;
+            lvl.title = "match the take: the source pixels are scaled to the take's grade, measured on a ring just outside the mask";
+            lvl.onchange = () => op({ op: "set_object_keep", id: k.id, level: lvl.value });
+            r.append(on, el("span", { fontWeight: "bold" }, k.target), el("span", { color: C.dim }, `${k.range[0]}-${k.range[1]}`),
+                el("span", { color: pct >= 100 ? "#d1fae5" : pct ? C.amber : C.red }, pct >= 100 ? "mask ✓" : pct ? `mask ${pct}%` : "not marked"),
+                button("mark", `Queue the mark runs of "${k.target}" over this chunk's part of the keep, shot by shot`, () => markKeep(k, c.render[0], c.render[1])),
+                button("view", "Play this keep's mask previews (the object inverted) in the player", () => setMode(`keep:${k.id}`)),
+                el("span", { color: C.dim }, "grow"), num("grow", 6, "px the mask is grown by (covers where the take drew the object a little off)"),
+                el("span", { color: C.dim }, "feather"), num("feather", 4, "px of soft edge"), lvl,
+                button("remove", "Remove this keep (its masks stay cached)", () => op({ op: "remove_object_keep", id: k.id })));
+            box.append(r);
+        }
+        const add = row();
+        const t = inp({ flex: "0 1 16em" });
+        t.placeholder = "what to keep, e.g. white shoe";
+        const known = [...new Set(objectKeeps().map(k => k.target))];
+        if (known.length) { const dl = el("datalist"); dl.id = `ss-keep-${node.id}`; known.forEach(v => { const o = el("option"); o.value = v; dl.append(o); }); add.append(dl); t.setAttribute("list", dl.id); }
+        const addFor = async (range, chunk) => {
+            const v = t.value.trim();
+            if (!v) { toast("type what to keep first (SAM3's text, e.g. white shoe)", "amber"); return; }
+            const res = await op(Object.assign({ op: "add_object_keep", target: v }, chunk ? { chunk } : { range }), true);
+            if (res) toast(`keep "${v}" added: mark it, then assemble`, "green");
+        };
+        add.append(t, button("add for this chunk", "Keep it over this chunk's frames", () => addFor(null, c.id)),
+            button("add for the whole video", "Keep it over every frame (mark the chunks it's in)", () => addFor([0, S.N - 1])));
+        box.append(add);
+        return box;
     }
     function openMarkMenu(ev) {
         if (!P()) return;
@@ -879,6 +1071,7 @@ function buildPlanner(node) {
         popup(ev, [
             { label: "the source person mask (SAM3), cached per chunk's render range" },
             ...(sel ? [{ text: `mark chunk ${label(sel.id)} (${sel.render[0]}-${sel.render[1]}, ${shotsOf(sel).length} shot${shotsOf(sel).length === 1 ? "" : "s"})`, run: () => markChunk(sel) }] : []),
+            ...(sel ? shotsOf(sel).map(s => ({ text: `nobody in shot ${s.a}-${s.b} (the target isn't in it: an empty mark, left as filmed)`, run: () => markNobody(sel, s) })) : []),
             { text: `mark every unmarked chunk (${unmarked.length})`, run: async () => { let k = 0; for (const c of unmarked) { if (!await markChunk(c, true)) break; k++; } toast(`queued the mark runs of ${k} chunk${k === 1 ? "" : "s"}, one per shot`, "green"); } },
             { text: "view the mask row in the player", run: () => setMode(maskView()) },
         ]);
@@ -889,7 +1082,22 @@ function buildPlanner(node) {
             { text: "assemble now (CPU, off the queue)", title: "POST /seamstitch/swap/assemble: the Assemble node's code, with its defaults", run: () => assembleNow() },
             { text: "queue an assemble run (Swap Assemble node, its widgets)", run: () => queueRun({ action: "assemble" }, "assemble") },
             ...(P().assembled?.length ? [{ sep: true }, { text: `play the latest assembly (${P().assembled.at(-1).file.split("/").pop()})`, run: () => setMode("full") }] : []),
+            { sep: true },
+            { text: "edit every chunk from its own take (chunk by chunk, no assembly)", title: "Each chunk with a take renders from that take next time. Same as 'edit this' on each one; chunks without a take are skipped.", run: () => chunkSource("all", {}) },
+            ...(Object.keys(P().overrides || {}).length ? [{ text: `every chunk back to the original (${Object.keys(P().overrides).length} edited)`, run: () => chunkSource("all", null) }] : []),
         ]);
+    }
+    async function chunkSource(c, t) {              // t = null: back to the original; c = "all": every chunk
+        const all = c === "all", nm = all ? "every chunk" : `chunk ${label(c.id)}`;
+        toast(t || (all && t !== null) ? `making ${all ? "each chunk's take" : t.id} the source of ${nm} (builds the patched source, under a minute)…` : `${nm} back to the original…`);
+        const body = all ? { op: t === null ? "chunk_source_revert" : "chunk_source", chunk: "all" }
+            : t ? { op: "chunk_source", chunk: c.id, take: t.id } : { op: "chunk_source_revert", chunk: c.id };
+        const r = await op(body, true);
+        if (!r) return;
+        video.dataset.src = "";                      // the same view, re-pointed at the rebuilt source (a view button is never changed)
+        const sk = Object.keys(r.result.skipped || {}).length;
+        toast(body.op === "chunk_source" ? `${nm} now renders from ${all ? "its take" : t.id}${sk ? ` (${sk} skipped: ${Object.entries(r.result.skipped).map(([k, v]) => `${label(k)} ${v}`).join("; ")})` : ""}: the other chunks keep their takes` : `${nm} renders from the original again`, "green");
+        seek(S.playhead);
     }
     async function assembleNow() {
         toast("assembling (CPU)…");
@@ -962,6 +1170,9 @@ function buildPlanner(node) {
             : `job ${job()} has no plan here${S.err ? ` (${S.err.split(":")[0]})` : ""}.\nLoad a video to start a job, or pick another from the list above.`;
         emptyHint.style.display = has ? "none" : "flex";
         for (const b of [bDetect, bCuts, bClear, bDraft, bMark, bPending, bAssemble]) b.disabled = !has;
+        const u = S.view?.undo;
+        bUndo.disabled = !has || !u?.n;
+        bUndo.title = u?.n ? `Undo: ${u.last} (${u.n} edit${u.n === 1 ? "" : "s"} kept). Renders made since stay.` : "Nothing to undo yet: it undoes edits made from this panel (the last 50 are kept).";
         if (!S.jobs || S.jobsFor !== job()) { S.jobsFor = job(); refreshJobs(); }
         else jobSel.value = S.jobs.some(j => j.job === job()) ? job() : "";
         const src = P()?.source;
@@ -972,11 +1183,36 @@ function buildPlanner(node) {
         const jm = jobMode();
         for (const [m, b] of Object.entries(modeBtns)) {
             const on = has && m === jm;
-            Object.assign(b.style, { background: on ? (m === "background" ? "#2f6f8f" : "#3f7f4f") : "#1b1f27",
+            Object.assign(b.style, { background: on ? (m === "background" ? "#2f6f8f" : m === "object" ? "#7a5a2f" : "#3f7f4f") : "#1b1f27",
                 color: on ? "#fff" : C.dim, fontWeight: on ? "600" : "400" });
             b.disabled = !has;
         }
-        targetLbl.textContent = jm === "background" ? "keep" : "replace";
+        targetLbl.textContent = jm === "background" ? "keep" : jm === "object" ? "target" : "replace";
+        objBox.style.display = has && jm === "object" ? "flex" : "none";
+        if (jm === "object") {
+            const o = Object.assign({ action: "replace", feather: 6 }, P().object || {});
+            const grow = (P().object || {}).grow ?? (o.action === "add" ? 60 : 12);
+            if (document.activeElement !== objSel) objSel.value = o.action;
+            if (document.activeElement !== objGrow) objGrow.value = grow;
+            if (document.activeElement !== objFeather) objFeather.value = o.feather;
+            if (document.activeElement !== objFill) objFill.value = o.fill || "render";
+            objPic.textContent = o.picture ? `picture: ${String(o.picture).split(/[\\/]/).pop()}` : "picture…";
+            objPic.style.display = (o.fill || "render") === "picture" ? "" : "none";
+            // the zone row: an add by H3 render; the zone's own controls only when its guide is the zone
+            const isAdd = o.action === "add" && (o.fill || "render") === "render";
+            zoneRow.style.display = has && isAdd ? "flex" : "none";
+            const zv = Object.assign({ guide: "composite", size: 1.3, zone_shape: "ellipse", zone_aspect: 1, zone_dx: 0, zone_dy: 0, zone_grow: 40, zone_spare: false,
+                zone_touch_dx: 0, zone_touch_dy: 0, zone_touch_r: 0, anchor_at: 0, enter_at: 0, level: "ring" }, P().object || {});
+            const zoneOn = zv.guide === "zone";
+            for (const c of zoneBits) c.style.display = zoneOn ? "" : "none";
+            if (document.activeElement !== zBrief) zBrief.value = zv.brief || "";
+            for (const [c, v] of [[zGuide, zv.guide === "zone" ? "zone" : "composite"], [zShape, zv.zone_shape], [zLevel, zv.level], [zAnch, zv.anchor || "qwen"]]) if (document.activeElement !== c) c.value = v;
+            zPic.style.display = zoneOn && (zv.anchor || "qwen") === "picture" ? "" : "none";
+            zPic.textContent = zv.anchor_picture ? `anchor: ${String(zv.anchor_picture).split(/[\/]/).pop()}` : "anchor picture…";
+            for (const [c, v] of [[zSize, zv.size], [zAspect, zv.zone_aspect], [zDx, zv.zone_dx], [zDy, zv.zone_dy], [zGrow, zv.zone_grow], [zTx, zv.zone_touch_dx],
+                [zTy, zv.zone_touch_dy], [zTr, zv.zone_touch_r], [zAnchor, zv.anchor_at], [zEnter, zv.enter_at]]) if (document.activeElement !== c) c.value = v;
+            zSpare.checked = !!zv.zone_spare;
+        }
         guideBox.style.display = has && jm === "character" ? "flex" : "none";
         for (const [g, b] of Object.entries(guideBtns)) {
             const on = g === jobGuide();
@@ -986,12 +1222,14 @@ function buildPlanner(node) {
             ? "Who to keep, as a short noun phrase (\"man in a black t-shirt\"): what SAM3 marks in the source (everything else is replaced), and who the drafter writes about. Empty: SAM3 marks \"person\" and the drafter picks. Changing it needs a re-mark and a redraft."
             : "Who to replace, as a short noun phrase (\"woman in a purple top\"): what SAM3 marks in the source, and who the drafter writes about. Empty: SAM3 marks \"person\" and the drafter picks. Changing it needs a re-mark and a redraft.";
         targetIn.disabled = !has;
-        bMode.textContent = { source: "source", quick: "quick", full: "full ●", mask: "mask: character", mask_bg: "mask: background" }[S.mode];
+        bMode.textContent = { source: "source", quick: "quick", full: "full ●", mask: "mask: character", mask_bg: "mask: background", mask_obj: "mask: object" }[S.mode]
+            || `keep: ${objectKeeps().find(k => `keep:${k.id}` === S.mode)?.target || "?"}`;
         // the background mask is the character one with every pixel inverted (the person back to the original,
         // everything else marked): the same preview video, inverted in the player
         video.style.filter = S.mode === "mask_bg" ? "invert(1)" : "";
         bMode.title = "View: source (the original) · quick (each chunk's effective take, chained) · full (the latest assembly) · mask (the cached person mask)";
         updateOverlay();
+        zoneSoon();
         saveUiSoon();
     }
 
@@ -1104,7 +1342,7 @@ function buildPlanner(node) {
         });
 
         // mask row: cached segments (newest drawn last), then the uncovered part of each chunk hatched
-        const masks = (P().masks || []).slice().sort((a, b) => String(a.created).localeCompare(String(b.created)));
+        const masks = personMasks().slice().sort((a, b) => String(a.created).localeCompare(String(b.created)));
         masks.forEach((m, i) => {
             g.fillStyle = i === masks.length - 1 ? C.mask : C.maskOld;
             g.fillRect(f2x(m.range[0]), MASK_Y + 2, f2x(m.range[1] + 1) - f2x(m.range[0]), MASK_H - 4);
@@ -1365,7 +1603,7 @@ function buildPlanner(node) {
         const pins = forecastPins(k, new Set([k]));
         const sideTxt = pins.start || pins.end ? `${pins.start ? `pins ${pins.start}` : "free start"} | ${pins.end ? `pins ${pins.end}` : "free end"}` : "free (no pins)";
         const hasTake = (c.takes || []).length > 0;
-        acts.append(button(hasTake ? "re-roll" : "render", `Queue a render of this chunk (${sideTxt}). Seed: ${c.seed_mode?.fixed != null ? `fixed ${c.seed_mode.fixed}` : "new"}`, () => reroll(c.id, 1)));
+        acts.append(button(hasTake ? "re-roll" : "render", `Queue a render of this chunk (${sideTxt}). Seed: ${c.seed_mode && typeof c.seed_mode === "object" && Number.isInteger(c.seed_mode.fixed) ? `fixed ${c.seed_mode.fixed}` : "new"}`, () => reroll(c.id, 1)));
         const nSel = el("select", { background: "#111", color: C.text, border: "1px solid #3b4252", borderRadius: "4px" });
         [2, 3, 4].forEach(v => { const o = el("option", null, `× ${v}`); o.value = v; nSel.append(o); });
         nSel.onpointerdown = (e) => e.stopPropagation();
@@ -1401,6 +1639,7 @@ function buildPlanner(node) {
         ownT.onchange = () => op({ op: "set_options", chunk: c.id, options: { target: ownT.value.trim() } });
         tgt.append(el("span", { color: C.dim }, jobMode() === "background" ? "keep" : "replace"), ownT);
         selBox.append(tgt);
+        selBox.append(keepSection(c));
 
         // the prompt editor (adopt draft, redraft)
         const pr = row();
@@ -1435,6 +1674,28 @@ function buildPlanner(node) {
         side.append(button("redraft", "Queue a draft run of this chunk: SeamStitch Swap Draft Prompts drafts it into the prompt if that's empty, otherwise into the draft field (never over your prompt)", () => queueDraft(c.id)));
         pr.append(box.wrap, side);
         selBox.append(pr);
+        // what the last draft said about this chunk (the draft report, per chunk): when it ran, where it went, and every note or warning
+        if (c.drafted) {
+            const nts = c.drafted.warnings || [];
+            const rep = el("div", { fontSize: "0.9em", color: nts.some(w => /could not|unusable|absent|no brief|wrote no|lacked/i.test(w)) ? C.red : C.dim, whiteSpace: "pre-wrap", padding: "0 6px 2px" },
+                `last draft ${String(c.drafted.at || "").replace("T", " ")} → ${c.drafted.into || "?"}` + (nts.length ? "\n" + nts.map(w => "• " + w).join("\n") : " · no warnings"));
+            selBox.append(rep);
+        }
+
+        // a zone add whose anchor Qwen draws: this chunk's instruction (empty: a plain sentence is written from the target and the zone)
+        const ob = P().object || {};
+        if (jobMode() === "object" && ob.action === "add" && (ob.fill || "render") === "render" && ob.guide === "zone" && (ob.anchor || "qwen") === "qwen") {
+            const qr = el("div", { display: "flex", flexDirection: "column", gap: "2px", padding: "2px 0" });
+            qr.append(el("span", { color: C.dim }, "Qwen anchor instruction (this chunk): what Qwen draws into the anchor frame, from Picture 1 (image 2)"));
+            const qa = el("textarea", { width: "100%", minHeight: "4.5em", background: "#111", color: C.text, border: "1px solid #3b4252", borderRadius: "4px", font: "inherit", boxSizing: "border-box" });
+            qa.value = c.anchor_text || "";
+            qa.placeholder = "Empty: a plain sentence is used (\"Add the person or thing from image 2 into image 1, to the left of the target ...\"). Say what goes where: \"Add the man from image 2 standing left of the woman, his hand on her shoulder. Keep her, the room and the light unchanged.\"";
+            qa.onpointerdown = (e) => e.stopPropagation(); qa.onwheel = (e) => e.stopPropagation();
+            qa.onkeydown = (e) => { e.stopPropagation(); if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) qa.blur(); };
+            qa.onchange = () => op({ op: "set_anchor_text", chunk: c.id, text: qa.value });
+            qr.append(qa);
+            selBox.append(qr);
+        }
 
         // who says each line: the drafter reads whose mouth moves; where it couldn't see a face, pick here
         const lines = promptLines(c.prompt);
@@ -1482,11 +1743,17 @@ ${P().subject_draft}`;
 
         // the takes list: chosen radio, ▶ in context, use this prompt and seed, delete to trash
         // only the job's mode's takes: the other mode's are kept, and come back with the switch
-        const takeMode = (t) => { const v = t.settings?.options?.invert; return (v === true || String(v).toLowerCase() === "true") ? "background" : "character"; };
+        // the same rule as swap_plan.take_mode: the take's own render options carry its mode; an older take is told by invert
+        const takeMode = (t) => {
+            const o = t.settings?.options || {};
+            if (["character", "background", "object"].includes(o.mode)) return o.mode;
+            return (o.invert === true || String(o.invert).toLowerCase() === "true") ? "background" : "character";
+        };
         const takes = (c.takes || []).filter(t => takeMode(t) === jobMode());
         const otherTakes = (c.takes || []).length - takes.length;
+        const otherModes = [...new Set((c.takes || []).map(takeMode).filter(m => m !== jobMode()))].join(" / ");
         if (otherTakes) selBox.append(el("div", { color: C.dim, fontSize: "0.9em", padding: "0 6px" },
-            `${otherTakes} ${jobMode() === "background" ? "character" : "background"} replace take${otherTakes === 1 ? "" : "s"} kept (switch to see ${otherTakes === 1 ? "it" : "them"})`));
+            `${otherTakes} ${otherModes} take${otherTakes === 1 ? "" : "s"} kept (switch the job's mode to see ${otherTakes === 1 ? "it" : "them"})`));
         if (takes.length) {
             // display-only rank (the backend's swap_scores.rank_key): following first, then lost cuts; mouth shown,
             // never ranked. Nothing picks a take.
@@ -1501,7 +1768,8 @@ ${P().subject_draft}`;
                 const sc = t.scores || {};
                 const rank = ranked.indexOf(t) + 1;
                 const eff = st.take === t.id;
-                const lineage = [t.pins?.start ? `← ${t.pins.start.take}` : "", t.pins?.end ? `→ ${t.pins.end.take}` : ""].filter(Boolean).join(" ") || "free";
+                const pinName = (p) => p.source ? "source" : p.take;       // a pin on the original has no take
+                const lineage = [t.pins?.start ? `← ${pinName(t.pins.start)}` : "", t.pins?.end ? `→ ${pinName(t.pins.end)}` : ""].filter(Boolean).join(" ") || "free";
                 const tf = (st.take_flags || {})[t.id] || {};
                 const tips = flagTips(sc);
                 const dots = el("span", { display: "inline-flex", gap: "2px" });
@@ -1517,12 +1785,20 @@ ${P().subject_draft}`;
                 tr.append(radio, dots, info,
                     button("▶", "Play its review clip (the chunk ± 2 s with both joins as if chosen) in the player", () => playReview(c, t)),
                     button("use prompt + seed", "Load this take's prompt into the chunk and fix the seed to its seed", () => op({ op: "use_take", take: t.id })),
+                    button("edit this", "Make this take the picture THIS chunk renders from, so the next change builds on it (no assembly: the job's source gets this chunk's frames swapped in). The chunk's takes, prompt and masks are put aside, 'back to the original' brings them back.", () => chunkSource(c, t)),
                     button("🗑", "Move this take into the job's trash/ (nothing is erased)", () => { if (confirm(`Move ${t.id} to the trash?`)) op({ op: "delete_take", take: t.id }); }));
                 (t.flags || []).forEach(f => tr.append(el("span", { color: C.amber }, `⚠ ${f.code}`)));
                 tbl.append(tr);
             }
             if (c.chosen) { const tr = row(); tr.append(button("unchoose", "Back to unreviewed: the first take is used until one is chosen", () => op({ op: "choose_take", chunk: c.id, take: null }))); tbl.append(tr); }
             selBox.append(tbl);
+        }
+        const ov = (P().overrides || {})[c.id];
+        if (ov) {
+            const r = row();
+            r.append(el("span", { color: C.amber }, `renders from take ${ov.take.split("-").pop()} (an edit of it), not the original`),
+                button("back to the original", "This chunk renders from the original footage again; its earlier takes, prompt and masks come back, takes made on the edited picture stay listed", () => chunkSource(c, null)));
+            selBox.append(r);
         }
         const tr = (P().trash || []).filter(e => e.kind === "take" && e.chunk === c.id);
         if (tr.length) {
@@ -1541,6 +1817,8 @@ ${P().subject_draft}`;
     // ------------------------------------------------------------ the next-run bar
     // Mirrors swap_planner.resolve_pins: a start pin from the left neighbour's effective take (or one
     // rendered earlier in the same batch), an end pin from the right neighbour's effective take.
+    // The node's own toggle decides (it writes the plan's setting when a render is queued), so the label follows it at once.
+    const forwardChainOn = () => { const w = W("forward_chain"); return w ? !!w.value : !!settings().forward_chain; };
     function forecastPins(k, batch, earlier = new Set()) {
         const cs = chunks(), c = cs[k], K = settings().anchors, out = { start: null, end: null };
         if (!c || K <= 0) return out;
@@ -1555,7 +1833,8 @@ ${P().subject_draft}`;
         if (k + 1 < cs.length) {
             const R = cs[k + 1].left && splitById(cs[k + 1].left);
             if (R && R.mode === "anchored" && !c.held && kept(cs[k + 1])) out.end = `${k + 1}→source`;
-            else if (R && R.mode === "anchored" && !c.held && !batch.has(k + 1) && covers(cs[k + 1].id, c.render[1] - K + 1, c.render[1])) out.end = `${k + 1}→${k + 2}`;
+            else if (R && R.mode === "anchored" && !c.held && !batch.has(k + 1) && !forwardChainOn()
+                && (covers(cs[k + 1].id, c.render[1] - K + 1, c.render[1]) || covers(cs[k + 1].id, c.render[1] + 1, c.render[1] + K))) out.end = `${k + 1}→${k + 2}`;
         }
         return out;
     }
@@ -1632,10 +1911,12 @@ ${P().subject_draft}`;
             if (!a) return [{ a: 0, b: N - 1, url: null, what: "no assembly yet: assemble first" }];
             return [{ a: 0, b: N - 1, url: fileURL(joinPath(S.jobDir, a.file)), t0: 0, what: `assembly ${a.file.split("/").pop()}` }];
         }
-        if (S.mode === "mask" || S.mode === "mask_bg") {
+        const keepView = String(S.mode).startsWith("keep:") ? objectKeeps().find(k => `keep:${k.id}` === S.mode) : null;
+        if (String(S.mode).startsWith("keep:") && !keepView) return [{ a: 0, b: N - 1, url: null, what: "that object keep is gone" }];
+        if (S.mode === "mask" || S.mode === "mask_bg" || S.mode === "mask_obj" || keepView) {
             const out = [];
             let f = 0;
-            const segs = (P().masks || []).slice().sort((x, y) => String(y.created).localeCompare(String(x.created)));
+            const segs = (keepView ? keepMasksOf(keepView) : S.mode === "mask_obj" ? objectMasks() : personMasks()).slice().sort((x, y) => String(y.created).localeCompare(String(x.created)));
             while (f < N) {
                 const m = segs.find(s => s.range[0] <= f && f <= s.range[1]);
                 if (m) {
@@ -1657,7 +1938,8 @@ ${P().subject_draft}`;
             const st = statusOf(c.id);
             if (st.proxy && ["unreviewed", "chosen"].includes(st.state))
                 return { a: c.deliver[0], b: c.deliver[1], url: fileURL(joinPath(S.jobDir, st.proxy)), t0: (c.deliver[0] - st.render[0]) / fr, what: `${st.take}${st.state === "unreviewed" ? " (unreviewed)" : ""}` };
-            return { a: c.deliver[0], b: c.deliver[1], url: srcURL, t0: S.base + c.deliver[0] / fr, what: "source (no take)" };
+            const ov = (P().overrides || {})[c.id];
+            return { a: c.deliver[0], b: c.deliver[1], url: srcURL, t0: S.base + c.deliver[0] / fr, what: ov ? `edit of ${ov.take.split("-").pop()} (no new take yet)` : "source (no take)" };
         });
     }
     const segAt = (f) => segments().find(s => f >= s.a && f <= s.b);
@@ -1696,6 +1978,8 @@ ${P().subject_draft}`;
             { text: `${S.mode === "full" ? "●" : "○"} full: the latest assembly`, run: () => setMode("full") },
             { text: `${S.mode === "mask" ? "●" : "○"} mask: character (the person marked, as a character replace renders it)`, run: () => setMode("mask") },
             { text: `${S.mode === "mask_bg" ? "●" : "○"} mask: background (everything but the person marked, as a background replace renders it)`, run: () => setMode("mask_bg") },
+            { text: `${S.mode === "mask_obj" ? "●" : "○"} mask: object (the target marked, as an Object job pastes it)`, run: () => setMode("mask_obj") },
+            ...objectKeeps().map(k => ({ text: `${S.mode === `keep:${k.id}` ? "●" : "○"} keep: ${k.target} (its mask, the object inverted)`, run: () => setMode(`keep:${k.id}`) })),
         ]);
     }
     function playReview(c, t) {
@@ -1710,6 +1994,7 @@ ${P().subject_draft}`;
         updateOverlay();
     }
     function updateOverlay() {
+        zoneSoon();
         if (!P()) { overlay.textContent = ""; return; }
         if (S.reviewing && video.dataset.src === "") {
             const f = S.reviewing.window[0] + Math.floor(video.currentTime * S.fr);
@@ -2022,12 +2307,132 @@ ${P().subject_draft}`;
     const onRemoved = node.onRemoved;
     node.onRemoved = function () { window.removeEventListener("keydown", onKey, true); closePopup(); video.pause(); video.removeAttribute("src"); return onRemoved?.apply(this, arguments); };
 
+    // ------------------------------------------------------------ zone editor
+    // An object add that redraws a zone: the zone, the touch circle and the target's anchor drawn over the video on the playhead's frame
+    // (the same geometry the render uses: GET /seamstitch/swap/zone_preview), and dragged to set the numbers. Every number in the zone
+    // row is in target widths (`fw` px), so a drag is converted back with the same formulas as swap_keep.zone_geometry.
+    let zoneGeo = null, zoneDrag = null, zoneNote = "", zoneTimer = 0, zoneSeq = 0, zoneHandles = [];
+    function zoneWanted() {
+        const o = P()?.object || {};
+        return !!P() && jobMode() === "object" && o.action === "add" && (o.fill || "render") === "render" && o.guide === "zone";
+    }
+    function zoneSoon() {
+        clearTimeout(zoneTimer);
+        if (!zoneWanted()) { zoneGeo = null; zoneNote = ""; drawZone(); return; }
+        zoneTimer = setTimeout(loadZone, 140);
+    }
+    async function loadZone() {
+        const seq = ++zoneSeq;
+        try {
+            const r = await api.fetchApi(`/seamstitch/swap/zone_preview?job=${encodeURIComponent(job())}&frame=${Math.round(S.playhead)}`);
+            const d = await r.json();
+            if (seq !== zoneSeq) return;
+            if (d.error) { zoneGeo = null; zoneNote = d.error; } else { zoneGeo = d; zoneNote = d.found ? "" : (d.why || "the target is not found on this frame"); }
+        } catch (e) { if (seq !== zoneSeq) return; zoneGeo = null; zoneNote = String(e); }
+        drawZone();
+    }
+    const zs = () => Object.assign({}, zoneGeo?.settings || {}, zoneDrag?.over || {});
+    function zoneView() {
+        const W = videoBox.clientWidth, H = videoBox.clientHeight, vw = zoneGeo?.w || P()?.source?.width || 1280, vh = zoneGeo?.h || P()?.source?.height || 720;
+        const k = Math.min(W / vw, H / vh);
+        return { W, H, k, x0: (W - vw * k) / 2, y0: (H - vh * k) / 2 };
+    }
+    function zoneShapeOf(s) {            // swap_keep.zone_geometry
+        const fw = zoneGeo.fw, [ax, ay] = zoneGeo.anchor, hgt = s.size * fw, wid = hgt * s.zone_aspect, gr = s.zone_grow || 0;
+        return { cx: ax + s.zone_dx * fw, cy: ay - hgt * (0.5 - (s.sink ?? 0.12)) + s.zone_dy * fw, rx: wid / 2 + gr, ry: hgt / 2 + gr, hgt, wid, gr };
+    }
+    function drawZone() {
+        zKeyLbl.textContent = zoneGeo?.found ? (zoneGeo.key != null ? `🔒 locked from frame ${zoneGeo.key} (${zoneGeo.keys.length} lock${zoneGeo.keys.length === 1 ? "" : "s"})`
+            : zoneGeo.keys?.length ? `before the first lock (frame ${zoneGeo.keys[0]})` : "no locks: one spot for the whole clip") : "";
+        const b = zoneView();
+        zoneCv.width = Math.max(1, b.W); zoneCv.height = Math.max(1, b.H);
+        const ctx = zoneCv.getContext("2d");
+        ctx.clearRect(0, 0, b.W, b.H);
+        zoneHandles = [];
+        if (!zoneWanted()) return;
+        const note = (t) => { ctx.font = "12px sans-serif"; ctx.fillStyle = "rgba(0,0,0,0.6)"; ctx.fillRect(6, b.H - 24, ctx.measureText(t).width + 12, 20); ctx.fillStyle = "#ffd27a"; ctx.fillText(t, 12, b.H - 9); };
+        if (!zoneGeo || !zoneGeo.found) { if (zoneNote) note("zone: " + zoneNote); return; }
+        const s = zs(), px = (x) => b.x0 + x * b.k, py = (y) => b.y0 + y * b.k, fw = zoneGeo.fw, [ax, ay] = zoneGeo.anchor;
+        // the target's anchor (the zone's numbers are measured from here, in target widths)
+        ctx.strokeStyle = "#ffffff"; ctx.lineWidth = 1.5; ctx.beginPath();
+        ctx.moveTo(px(ax) - 8, py(ay)); ctx.lineTo(px(ax) + 8, py(ay)); ctx.moveTo(px(ax), py(ay) - 8); ctx.lineTo(px(ax), py(ay) + 8); ctx.stroke();
+        ctx.font = "11px sans-serif"; ctx.fillStyle = "#fff"; ctx.fillText("target (1 = its width)", px(ax) + 10, py(ay) - 6);
+        ctx.strokeStyle = "rgba(255,255,255,0.45)"; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(px(ax - fw / 2), py(ay) + 14); ctx.lineTo(px(ax + fw / 2), py(ay) + 14); ctx.stroke();   // one target-width: the unit of every zone number
+        if (s.zone_shape === "mask") { note("zone = the target's own mask (nothing to drag; the zone grow is the only setting)"); return; }
+        const z = zoneShapeOf(s);
+        ctx.fillStyle = "rgba(0,200,255,0.16)"; ctx.strokeStyle = "#00c8ff"; ctx.lineWidth = 2;
+        if (s.zone_shape === "box") { ctx.fillRect(px(z.cx - z.rx), py(z.cy - z.ry), 2 * z.rx * b.k, 2 * z.ry * b.k); ctx.strokeRect(px(z.cx - z.rx), py(z.cy - z.ry), 2 * z.rx * b.k, 2 * z.ry * b.k); }
+        else { ctx.beginPath(); ctx.ellipse(px(z.cx), py(z.cy), z.rx * b.k, z.ry * b.k, 0, 0, Math.PI * 2); ctx.fill(); ctx.stroke(); }
+        const hs = [{ k: "move", x: px(z.cx), y: py(z.cy), c: "#00c8ff", r: 6 }, { k: "w", x: px(z.cx + z.rx), y: py(z.cy), c: "#fff", r: 5 }, { k: "h", x: px(z.cx), y: py(z.cy + z.ry), c: "#fff", r: 5 }];
+        if ((s.zone_touch_r || 0) > 0) {
+            const tx = ax + (s.zone_touch_dx || 0) * fw, ty = ay + (s.zone_touch_dy || 0) * fw, tr = s.zone_touch_r * fw;
+            ctx.strokeStyle = "#ffb454"; ctx.fillStyle = "rgba(255,180,84,0.2)"; ctx.beginPath(); ctx.arc(px(tx), py(ty), tr * b.k, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+            hs.push({ k: "touch", x: px(tx), y: py(ty), c: "#ffb454", r: 6 }, { k: "touchr", x: px(tx + tr), y: py(ty), c: "#fff", r: 5 });
+        }
+        for (const h of hs) { ctx.fillStyle = h.c; ctx.strokeStyle = "#000"; ctx.lineWidth = 1; ctx.fillRect(h.x - h.r, h.y - h.r, 2 * h.r, 2 * h.r); ctx.strokeRect(h.x - h.r, h.y - h.r, 2 * h.r, 2 * h.r); }
+        zoneHandles = hs;
+        note((zoneDrag ? "" : "zone: drag the cyan square to move it, the white squares to resize it") + ((s.zone_touch_r || 0) > 0 ? " · amber = where he touches her (drag it)" : " · double-click to place where he touches her"));
+    }
+    const zonePoint = (e) => { const r = videoBox.getBoundingClientRect(); return { x: (e.clientX - r.left) * (videoBox.clientWidth / (r.width || 1)), y: (e.clientY - r.top) * (videoBox.clientHeight / (r.height || 1)) }; };   // the graph canvas may be zoomed: the box is drawn scaled
+    const zoneHit = (p) => zoneHandles.find(h => Math.abs(h.x - p.x) <= h.r + 5 && Math.abs(h.y - p.y) <= h.r + 5);
+    videoBox.addEventListener("pointerdown", (e) => {
+        if (!zoneWanted() || !zoneGeo?.found || e.button !== 0) return;
+        const h = zoneHit(zonePoint(e));
+        if (!h) return;
+        e.preventDefault(); e.stopPropagation();
+        try { videoBox.setPointerCapture(e.pointerId); } catch { }
+        const s0 = zs();
+        zoneDrag = { h: h.k, over: {}, s0, z0: s0.zone_shape === "mask" ? null : zoneShapeOf(s0) };
+    }, true);
+    videoBox.addEventListener("pointermove", (e) => {
+        if (!zoneWanted() || !zoneGeo?.found) { videoBox.style.cursor = ""; return; }
+        const p = zonePoint(e);
+        if (!zoneDrag) { videoBox.style.cursor = zoneHit(p) ? "grab" : ""; return; }
+        const b = zoneView(), sx = (p.x - b.x0) / b.k, sy = (p.y - b.y0) / b.k, fw = zoneGeo.fw, [ax, ay] = zoneGeo.anchor, d = zoneDrag, s0 = d.s0, z0 = d.z0;
+        const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v)), o = {}, sink = s0.sink ?? 0.12;
+        if (d.h === "move") { o.zone_dx = clamp((sx - ax) / fw, -5, 5); o.zone_dy = clamp((sy - ay + z0.hgt * (0.5 - sink)) / fw, -5, 5); }
+        else if (d.h === "w") { const wid = Math.max(0.1 * z0.hgt, 2 * (Math.abs(sx - z0.cx) - z0.gr)); o.zone_aspect = clamp(wid / z0.hgt, 0.1, 10); }
+        else if (d.h === "h") {
+            const hgt = Math.max(0.1 * fw, 2 * (Math.abs(sy - z0.cy) - z0.gr));
+            o.size = clamp(hgt / fw, 0.1, 5); o.zone_aspect = clamp(z0.wid / (o.size * fw), 0.1, 10); o.zone_dy = clamp((z0.cy - ay + o.size * fw * (0.5 - sink)) / fw, -5, 5);   // the centre stays put
+        }
+        else if (d.h === "touch") { o.zone_touch_dx = clamp((sx - ax) / fw, -5, 5); o.zone_touch_dy = clamp((sy - ay) / fw, -5, 5); }
+        else if (d.h === "touchr") { const tx = ax + (s0.zone_touch_dx || 0) * fw, ty = ay + (s0.zone_touch_dy || 0) * fw; o.zone_touch_r = clamp(Math.hypot(sx - tx, sy - ty) / fw, 0.02, 3); }
+        d.over = o;
+        drawZone();
+    });
+    async function zoneSave(vals) {       // into the lock that holds on this frame, or the job's own numbers when there is none
+        if (zoneGeo) Object.assign(zoneGeo.settings, vals);
+        if (zoneGeo?.key != null) return op({ op: "set_object", zone_keys: zKeys().map(k => k.frame === zoneGeo.key ? Object.assign({}, k, vals) : k) }, true);
+        return op(Object.assign({ op: "set_object" }, vals), true);
+    }
+    async function zoneRelease(e) {
+        if (!zoneDrag) return;
+        const d = zoneDrag; zoneDrag = null;
+        try { videoBox.releasePointerCapture(e.pointerId); } catch { }
+        const vals = {};
+        for (const [k, v] of Object.entries(d.over)) vals[k] = Math.round(v * 1000) / 1000;
+        if (Object.keys(vals).length) await zoneSave(vals);
+        loadZone();
+    }
+    videoBox.addEventListener("pointerup", zoneRelease);
+    videoBox.addEventListener("pointercancel", zoneRelease);
+    videoBox.addEventListener("dblclick", (e) => {                      // place the touch circle where he touches her
+        if (!zoneWanted() || !zoneGeo?.found) return;
+        const p = zonePoint(e), b = zoneView(), fw = zoneGeo.fw, [ax, ay] = zoneGeo.anchor;
+        e.preventDefault(); e.stopPropagation();
+        zoneSave({ zone_touch_dx: Math.round((((p.x - b.x0) / b.k - ax) / fw) * 1000) / 1000, zone_touch_dy: Math.round((((p.y - b.y0) / b.k - ay) / fw) * 1000) / 1000,
+            zone_touch_r: (zoneGeo.settings?.zone_touch_r || 0) > 0 ? zoneGeo.settings.zone_touch_r : 0.25 }).then(loadZone);
+    }, true);
+    new ResizeObserver(() => drawZone()).observe(videoBox);
+
     // ------------------------------------------------------------ public
     node.ssPlanner = {
         job, reload, onQueueEvent, reroll,
         restore() { S.restored = false; S.plan = null; reload(); },
         select(cid) { S.sel = { kind: "chunk", id: cid }; const c = chunks().find(x => x.id === cid); if (c) seek(c.deliver[0]); refresh(); },
         state: S,
+        zone: () => ({ wanted: zoneWanted(), geo: zoneGeo, note: zoneNote, handles: zoneHandles, drag: zoneDrag, view: zoneView() }),     // for tests and debugging
     };
     setTimeout(() => reload(), 0);
 }

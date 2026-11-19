@@ -85,8 +85,10 @@ def test_the_picture_2_line_is_folded_into_the_subjects_own_line():
 
 
 def test_the_two_reference_templates_are_registered_and_the_default_is_unchanged():
-    assert sd.TEMPLATES[4] == sd.LEAN_2REF and tuple(sd.TEMPLATES[5:]) == sd.BACKGROUND_TEMPLATES
-    assert sd.BACKGROUND_TEMPLATES == (sd.BACKGROUND, sd.BACKGROUND_2REF, sd.BACKGROUND_LEAN, sd.BACKGROUND_LEAN_2REF)
+    assert sd.TEMPLATES[4] == sd.LEAN_2REF and tuple(sd.TEMPLATES[6:11]) == sd.BACKGROUND_TEMPLATES
+    assert sd.TEMPLATES[11] == sd.BFS_TEMPLATE                      # the BFS body_swap template comes after them
+    assert sd.BACKGROUND_TEMPLATES == (sd.BACKGROUND, sd.BACKGROUND_2REF, sd.BACKGROUND_LEAN, sd.BACKGROUND_LEAN_2REF,
+                                       sd.LARGE_BG_TEMPLATE)
     assert sd.DEFAULT_TEMPLATE == sd.LEAN_TEMPLATE
     assert ("bg_place_2" in [n for n, _, _ in sd.QUESTIONS]) and ("subject_2" in [n for n, _, _ in sd.QUESTIONS])
     assert list(sd.SeamStitchSwapDraft.INPUT_TYPES()["optional"])[-1] == "sheet_2"

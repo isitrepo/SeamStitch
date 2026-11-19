@@ -542,6 +542,50 @@ def test_qwen_loads_once_then_asks_through_generate(monkeypatch):
     assert calls == ["load", "generate", "generate"]
 
 
+def test_gguf_runner_swaps_in_the_qwen35_handler_and_sends_the_frames(monkeypatch):
+    import torch
+    import llama_cpp.llama_chat_format as fmt
+    seen = {}
+    old = fmt.Qwen3VLChatHandler
+
+    class Node:
+        chat_handler = None
+
+        def _load_model(self, **k):
+            seen["handler"] = fmt.Qwen3VLChatHandler          # what the node's loader would build
+            seen["ctx"] = k["ctx"]
+            self.chat_handler = object()
+
+        def _invoke(self, **k):
+            seen["pics"] = len(k["images_b64"])
+            return "answer"
+
+        def clear(self):
+            pass
+
+    class Mod:
+        QwenVLGGUFBase = Node
+        tensor_to_base64_png = staticmethod(lambda f, max_side=None: "png")
+        sample_video_frames = staticmethod(lambda v, n: [v[i] for i in range(min(int(n), v.shape[0]))])
+        resolve_safe_video_max_side = staticmethod(lambda v, **k: 512)
+
+    monkeypatch.setattr(sd, "gguf_model_file", lambda mod, name: ("m.gguf", "mmproj.gguf"))
+    monkeypatch.setattr(sd, "_gguf_arch", lambda p: "qwen35")
+    r = sd.GgufQwenRunner(Mod, sd.GGUF_PREFIX + "RVN-Q5_K_M-vision.gguf")
+    assert r.name == "RVN-Q5_K_M-vision.gguf"
+    r.load()
+    assert issubclass(seen["handler"], fmt.Qwen35ChatHandler) and fmt.Qwen3VLChatHandler is old
+    assert seen["ctx"] == sd.GGUF_CTX
+    assert r.ask("q", image=torch.zeros(1, 8, 8, 3), video=torch.zeros(6, 8, 8, 3), frame_count=6) == "answer"
+    assert seen["pics"] == 7
+
+
+def test_gguf_runner_refuses_a_model_not_on_disk(monkeypatch):
+    monkeypatch.setattr(sd, "gguf_model_file", lambda mod, name: (None, None))
+    with pytest.raises(sd.DraftError, match="isn't on disk"):
+        sd.GgufQwenRunner(object, sd.GGUF_PREFIX + "missing.gguf")
+
+
 
 # ---------------------------------------------------------------- other content (B4 content tests: phone, dance, cartoon)
 
@@ -551,8 +595,8 @@ def test_omni_loops_songs_speakers_and_wrappers():
     song = sd.parse_omni('transcript: [English] "and I will let go of the world" (sung) audio_events: A male voice sings, '
                          'with a piano.')
     assert song["sung"] and song["words"] == "and I will let go of the world"
-    cartoon = sd.parse_omni("**Transcript:** [English] Adventure time! **Audio Events:** - A male voice sings the phrase.")
-    assert cartoon["words"] == "Adventure time!" and cartoon["sung"] and cartoon["structured"]
+    cartoon = sd.parse_omni("**Transcript:** [English] Time to go! **Audio Events:** - A male voice sings the phrase.")
+    assert cartoon["words"] == "Time to go!" and cartoon["sung"] and cartoon["structured"]
     talk = sd.parse_omni('transcript: [English] - [00:00-00:02] Man: "Oh." - [00:02-00:03] Man: "What?" - [00:04-00:05] '
                          'Woman: "What\'s the date today?" audio_events: - a hum')
     assert talk["words"] == "Oh. What? What's the date today?" and not talk["sung"]
@@ -1000,3 +1044,345 @@ def test_the_job_mode_picks_the_template_not_the_widget(job):
     # an old workflow's "background replace" value on a character job: the default character template
     rep = _draft(job, sheet=_sheet(), template=sd.BACKGROUND)
     assert rep["template"] == sd.DEFAULT_TEMPLATE and rep["text"].startswith("nothing to draft")
+
+
+# ---------------------------------------------------------------- the large-model template (2026-10-16, Qwen3.8-27B)
+
+class LargeQwen(TimelineQwen):
+    """The timeline fake with the GGUF runner's ask_parts: one JSON answer per shot."""
+
+    def __init__(self, shots=None):
+        super().__init__()
+        self.shots = shots or []
+
+    def ask_parts(self, parts, max_tokens=1024, think=False, max_side=1280):
+        prompt = parts[0]
+        self.calls.append({"prompt": prompt, "parts": parts, "think": think})
+        if prompt.startswith("This is one continuous shot"):
+            k = sum(1 for c in self.calls if c["prompt"].startswith("This is one continuous shot")) - 1
+            return self.shots[k] if k < len(self.shots) else (
+                '{"main_visible": true, "others_visible": ["<Subject 2>"], "description": "She sits in the booth."}')
+        return self.ask(prompt)
+
+
+def test_the_large_template_writes_each_shot_from_one_call(job, monkeypatch):
+    import torch
+    monkeypatch.setattr(sd.spl, "cached_mask", lambda plan, jd, a, b, held=0, target="": (None, "no mask"))
+    q = LargeQwen()
+    _draft(job, sheet=_sheet(), qwen_cls=q, template=sd.LARGE_TEMPLATE)
+    p = sp.load_plan(job["plan"])
+    sec = sd.parse_sections(p["chunks"][0]["prompt"])
+    shot_calls = [c for c in q.calls if c["prompt"].startswith("This is one continuous shot")]
+    assert shot_calls and all(isinstance(x, torch.Tensor) for c in shot_calls for x in c["parts"][2::2])
+    assert "- <Subject 2>: a man in a plaid jacket on the right" in shot_calls[0]["prompt"]
+    assert not any(c["prompt"].startswith("This is one frame") for c in q.calls)       # no per-picture captions
+    assert "She sits in the booth." in sec["detailed_description"]
+    assert "<Subject 2>, a man in a plaid jacket on the right, stays exactly as in <Video 1>." in sec["detailed_description"]
+
+
+def test_the_large_template_needs_a_gguf_model(job):
+    rep = _draft(job, sheet=_sheet(), qwen_cls=TimelineQwen(), template=sd.LARGE_TEMPLATE)
+    assert rep["template"] == sd.LEAN_TEMPLATE and any("needs a GGUF" in w for w in rep["warnings"])
+
+
+def test_a_large_shot_answer_parses_with_or_without_json():
+    assert sd.parse_large_shot('```json\n{"main_visible": false, "frame": "a sign"}\n```') == {
+        "main_visible": False, "frame": "a sign"}
+    assert sd.parse_large_shot("He sits.") == {"main_visible": True, "description": "He sits."}
+    assert not sd.large_visible(False) and not sd.large_visible("no") and sd.large_visible(True)
+
+
+def test_the_lean_subject_splits_a_semicolon_list():
+    s = sd.subject_sentence("goth clown man", "a young, thin man with pale skin; long, messy green hair; nothing on "
+                                              "the head; a maroon suit jacket; no visible trousers or footwear")
+    assert sd.lean_subject(s) == ("<Subject 1> is the goth clown man in <Picture 1>: a young, thin man, long, messy "
+                                  "green hair, a maroon suit jacket.")
+
+
+class InventingWhisper(FakeWhisper):
+    """Whisper over an instrumental (test clip c5): low-confidence words."""
+
+    def __init__(self, words):
+        super().__init__()
+        self._w = words
+
+    def words(self, audio16k, language=None):
+        return [{"word": w, "start": 0.2 + k * 0.3, "end": 0.4 + k * 0.3, "p": p}
+                for k, (w, p) in enumerate(self._w)], "en"
+
+
+@pytest.mark.parametrize("heard", [[(".", 0.9), (".", 0.9)], [("go.", 0.9)],
+                                   [("I", 0.03), ("will", 0.02), ("do", 0.02), ("it", 0.27), ("I'm", 0.46),
+                                    ("going", 0.79), ("to", 0.97), ("get", 0.03), ("it.", 0.26)]])
+def test_whisper_alone_over_music_is_not_dialogue(job, heard):
+    omni = FakeOmni("transcript: [English] None audio_events: a cello plays")
+    rep = _draft(job, sheet=_sheet(), omni_cls=omni, whisper=InventingWhisper(heard))
+    p = sp.load_plan(job["plan"])
+    assert "says <d>" not in (p["chunks"][0]["prompt"] or "")
+
+
+def test_whisper_alone_keeps_words_it_is_sure_of(job):
+    omni = FakeOmni("transcript: [English] None audio_events: a cello plays")
+    _draft(job, sheet=_sheet(), omni_cls=omni,
+           whisper=InventingWhisper([("Where", 0.9), ("is", 0.95), ("my", 0.9), ("ticket?", 0.85)]))
+    assert "Where is my ticket?" in sp.load_plan(job["plan"])["chunks"][0]["prompt"]
+
+
+def test_the_large_templates_subject_keeps_the_details_that_tell_a_lookalike_apart():
+    # test clip c5 t001: the lean line ("pale skin, greenish hair, a dark red suit") fit the source man too
+    s = sd.subject_sentence("pale horror man", "a middle-aged man, pale white skin with heavy dark smudged eye make-up, "
+                                               "open mouth with visible teeth and orange lips, nothing on the head, "
+                                               "dark red bow tie, black boots")
+    assert sd.full_look_subject(s) == ("<Subject 1> is the pale horror man in <Picture 1>: a middle-aged man, pale white "
+                                       "skin with heavy dark smudged eye make-up, dark red bow tie.")
+
+
+def test_omni_and_whisper_inventing_different_words_is_not_dialogue(job):
+    omni = FakeOmni("transcript: [English] The reference-to-video generation process is now complete. "
+                    "audio_events: a chime, a hum")
+    _draft(job, sheet=_sheet(), omni_cls=omni,
+           whisper=InventingWhisper([("I'm", 0.1), ("going", 0.22), ("to", 0.96), ("take", 0.03), ("a", 0.37),
+                                     ("look", 0.12), ("at", 0.61), ("it.", 0.09)]))
+    assert "says <d>" not in (sp.load_plan(job["plan"])["chunks"][0]["prompt"] or "")
+
+
+def test_the_large_templates_subject_leaves_the_lip_colour_to_the_picture():
+    s = sd.subject_sentence("green-haired man", "pale skin, a prominent nose and red lips, dark lipstick, a maroon bow tie")
+    assert sd.full_look_subject(s) == ("<Subject 1> is the green-haired man in <Picture 1>: pale skin, a prominent nose, "
+                                       "a maroon bow tie.")
+
+
+def test_a_box_holding_the_subject_question_before_the_make_up_rule_is_not_an_edit():
+    box = sd.questions_text().replace(sd.SUBJECT_INSTRUCTION, sd._SUBJECT_BEFORE_MAKEUP)
+    assert "white face paint" in sd.SUBJECT_INSTRUCTION and "white face paint" not in box
+    assert "SUBJECT_INSTRUCTION" not in sd.question_overrides(box)[0]
+
+
+class LargeBgQwen(BgQwen):
+    """BgQwen with the GGUF runner's ask_parts: the clip call, then one JSON answer per shot."""
+
+    def ask_parts(self, parts, max_tokens=1024, think=False, max_side=1280):
+        prompt = parts[0]
+        self.calls.append({"prompt": prompt, "parts": parts, "think": think})
+        if prompt.startswith("This is one continuous shot"):
+            assert "<Subject 2>" in prompt and "backdrop" in prompt
+            return ('{"main_visible": true, "frame": "a man walking", "description": "<Subject 2> walks in from the '
+                    'left and crosses the frame. He looks down."}')
+        if "one from each shot" in prompt:
+            return ("pronoun: he\nvideo_1: a camera at chest height follows the man in a black t-shirt as he crosses "
+                    "the frame\nsounds: footsteps")
+        if prompt.startswith("This is one continuous shot") is False and "Write exactly three labelled parts" in prompt:
+            raise AssertionError("the large background template never asks the one-call draft")
+        return self.ask(prompt)
+
+
+def test_the_large_background_template_writes_each_shot_from_one_call(job, monkeypatch):
+    import torch
+    monkeypatch.setattr(sd.spl, "cached_mask", lambda plan, jd, a, b, held=0, target="": (None, "no mask"))
+    sp.update_plan(job["plan"], lambda p: p.update(subject=SUBJECT, invert=True))
+    q = LargeBgQwen()
+    rep = _draft(job, sheet=_sheet(), qwen_cls=q, template=sd.LARGE_BG_TEMPLATE)
+    assert rep["template"] == sd.LARGE_BG_TEMPLATE
+    p = sp.load_plan(job["plan"])
+    assert p["subject"].startswith("<Subject 1> is the ship-themed diner environment in <Picture 1>")
+    s = sd.parse_sections(p["chunks"][0]["prompt"])
+    shots = [c for c in q.calls if c["prompt"].startswith("This is one continuous shot")]
+    assert shots and all(isinstance(x, torch.Tensor) for c in shots for x in c["parts"][2::2])
+    assert not any("The clip has " in c["prompt"] for c in q.calls)          # no one-call draft
+    assert "<Subject 2> walks in from the left and crosses the frame. <Subject 2> looks down." in s["detailed_description"]
+    assert "a camera at chest height follows" in s["subject_definitions"]
+    assert "backdrop behind <Subject 2> is replaced by <Subject 1>" in s["summary"]
+
+
+def test_the_large_background_template_needs_a_gguf_model(job):
+    sp.update_plan(job["plan"], lambda p: p.update(subject=SUBJECT, invert=True))
+    rep = _draft(job, sheet=_sheet(), qwen_cls=BgQwen(), template=sd.LARGE_BG_TEMPLATE)
+    assert rep["template"] == sd.BACKGROUND_LEAN and any("needs a GGUF" in w for w in rep["warnings"])
+
+
+# ---------------------------------------------------------------- the BFS body_swap template (2026-10-18)
+
+class BfsQwen:
+    """The GGUF runner's ask_parts, answering the BFS description question."""
+
+    def __init__(self, answer):
+        self.answer, self.calls, self.closed = answer, [], 0
+
+    def ask_parts(self, parts, max_tokens=1024, think=False, max_side=1280):
+        self.calls.append({"parts": parts, "think": think})
+        return self.answer
+
+    def ask(self, prompt, image=None, video=None, max_tokens=2048, frame_count=16):
+        raise AssertionError("the BFS template asks through ask_parts on a GGUF model")
+
+    def load(self):
+        self.loaded = getattr(self, "loaded", 0) + 1
+
+    def close(self):
+        self.closed += 1
+
+
+class BfsQwenNeedsLoad(BfsQwen):
+    """Like GgufQwenRunner: ask_parts works only after load() (the model is not in memory before)."""
+
+    def ask_parts(self, parts, max_tokens=1024, think=False, max_side=1280):
+        if not getattr(self, "loaded", 0):
+            raise AttributeError("'NoneType' object has no attribute 'create_chat_completion'")
+        return super().ask_parts(parts, max_tokens, think)
+
+
+def test_the_bfs_draft_loads_the_model_before_its_question(job):
+    """Q4 fault 6 (2026-11-17): run_bfs_draft never called qwen.load(); GgufQwenRunner.ask_parts needs it."""
+    q = BfsQwenNeedsLoad(CLOWN_SHEET)
+    _draft(job, sheet=_sheet(), qwen_cls=q, template=sd.BFS_TEMPLATE, omni_cls=False, whisper=False)
+    assert q.loaded == 1 and q.closed == 1
+
+
+CLOWN_SHEET = ("<think>pink hair, wings...</think>Female, average height, curvy build, round face, fair skin, red clown nose, "
+         "bright pink shoulder-length wavy hair, pink corset dress with white ruffles, rainbow gloves, rainbow socks, "
+         "white angel wings, white halo")
+
+
+def test_the_bfs_template_writes_one_body_swap_prompt_into_every_chunk(job):
+    q = BfsQwen(CLOWN_SHEET)
+    rep = _draft(job, sheet=_sheet(), qwen_cls=q, template=sd.BFS_TEMPLATE, omni_cls=False, whisper=False)
+    p = sp.load_plan(job["plan"])
+    prompts = {c["prompt"] for c in p["chunks"] if not sp.is_kept(c)}
+    assert len(prompts) == 1                                   # the same prompt in every chunk
+    text = prompts.pop()
+    assert text.startswith("body_swap: subject_definitions: <Subject 1> is the Female, average height")
+    assert "complete identity from <Picture 1>: facial structure" in text and "photographic" not in text   # v1.1
+    assert "white halo shown in <Picture 1>" in text and "<think>" not in text
+    assert "only the main subject of the guide video is replaced" in text     # no target on this job
+    assert len(q.calls) == 1 and q.calls[0]["think"] == sd.LARGE_THINK      # one question, about the sheet
+    assert q.closed == 1 and rep["bfs_details"].startswith("Female")
+    assert "Video 1" not in text                                # the BFS route has no <Video 1>
+
+
+def test_the_bfs_template_names_the_jobs_target():
+    t = sd.fill_bfs_body_swap("Male, slim build", "man in a maroon suit")
+    assert "only the man in a maroon suit is replaced: their face" in t
+    assert "Replace the man in a maroon suit in the guide video with <Subject 1>" in t
+    assert "only the main subject" in sd.fill_bfs_body_swap("Male", "person")
+
+
+def test_bfs_details_are_cleaned_to_one_clause():
+    assert sd.clean_bfs_details("Description: Female, pink hair.\n- white wings") == "Female, pink hair, white wings"
+    assert sd.clean_bfs_details("<Subject 1> is the Male, bald, black tee shown in <Picture 1>, whose") == \
+        "Male, bald, black tee"
+
+
+def test_the_bfs_template_needs_the_sheet(job):
+    with pytest.raises(sd.DraftError):
+        _draft(job, sheet=None, qwen_cls=BfsQwen(CLOWN_SHEET), template=sd.BFS_TEMPLATE, omni_cls=False, whisper=False)
+
+
+# ---------------------------------------------------------------- the user's own templates (layouts)
+
+def test_user_template_storage_check_and_preview(tmp_path, monkeypatch):
+    monkeypatch.setattr(sd, "user_templates_path", lambda: str(tmp_path / "draft_templates.json"))
+    assert sd.template_choices() == list(sd.TEMPLATES) and sd.base_choices()[0] == sd.AUTO_BASE
+    with pytest.raises(sd.DraftError):
+        sd.save_user_template("", "{summary}")
+    with pytest.raises(sd.DraftError, match="no blanks"):
+        sd.save_user_template("x", "just my own words")
+    with pytest.raises(sd.DraftError, match=r"\{sumary\}"):
+        sd.save_user_template("x", "{sumary}")                      # a typo is an error, not a hole in every prompt
+    entry = sd.save_user_template("  My   look  ", "STYLE: dark\n\n{summary}\n\n{detailed_description}", base=sd.TEMPLATES[3])
+    assert entry == "my: My look" and sd.template_choices()[-1] == entry and sd.is_user_template(entry)
+    assert sd.load_user_templates()["My look"]["base"] == sd.TEMPLATES[3]
+    sd.save_user_template("my: My look", "{prompt}", base="not a template")                  # same name replaces; a bad base is dropped
+    assert len(sd.load_user_templates()) == 1 and sd.load_user_templates()["My look"]["base"] == ""
+    lay = "STYLE: dark\n{summary}\n\n\n\n{detailed_description}"
+    ex_c, pv_c, _ = sd.preview_layout(lay, sd.TEMPLATES[3])
+    ex_b, pv_b, _ = sd.preview_layout(lay, sd.TEMPLATES[8])
+    ex_o, pv_o, _ = sd.preview_layout("{summary}", sd.TEMPLATES[12])
+    assert pv_c.startswith("STYLE: dark\n[video editing") and "<Picture 1>" in ex_c and ex_c.startswith("subject_definitions:")
+    assert "environment in <Picture 1>" in ex_b and ex_b != ex_c and pv_b != pv_c and "is added to the scene" in pv_o   # each base gives its own example
+    assert "automatic" in sd.preview_layout("{prompt}", "")[2]
+    assert sd.delete_user_template(entry) == "My look" and sd.template_choices() == list(sd.TEMPLATES)
+    with pytest.raises(sd.DraftError):
+        sd.delete_user_template(entry)
+
+
+def test_a_user_layout_places_the_drafted_sections_for_any_job(job, tmp_path, monkeypatch):
+    monkeypatch.setattr(sd, "user_templates_path", lambda: str(tmp_path / "draft_templates.json"))
+    entry = sd.save_user_template("mine", "HEADER LINE\n\nsummary:\n{summary}\n\nextra:\nmy own words {not_a_blank_is_kept_out}"[:-len("{not_a_blank_is_kept_out}")]
+                                  + "\n\ndetailed_description:\n{detailed_description}\n", base=sd.TEMPLATES[0])
+    plain = _draft(job, sheet=_sheet())
+    first = sp.load_plan(job["plan"])["chunks"][0]["prompt"]
+    sp.update_plan(job["plan"], lambda p: [c.update(prompt="", prompt_state="empty", draft=None) for c in p["chunks"]])
+    rep = _draft(job, sheet=_sheet(), template=entry)
+    c0 = sp.load_plan(job["plan"])["chunks"][0]["prompt"]
+    assert c0.startswith("HEADER LINE\n\nsummary:\n") and "my own words" in c0
+    assert sd.split_sections(c0)["summary"] and sd.split_sections(first)["summary"] in c0
+    assert "subject_definitions:" not in c0 and "overall_soundscape:" not in c0               # sections the layout leaves out are left out
+    assert "your template's layout was applied." in rep["template_info"] and sd._LAYOUT["text"] is None
+    # a deleted template falls back to the default draft instead of failing
+    sd.delete_user_template(entry)
+    monkeypatch.setattr(sd, "DEFAULT_TEMPLATE", sd.TEMPLATES[0])         # the fakes answer the one-call form
+    sp.update_plan(job["plan"], lambda p: [c.update(prompt="", prompt_state="empty", draft=None) for c in p["chunks"]])
+    _draft(job, sheet=_sheet(), template=entry)
+    assert sp.load_plan(job["plan"])["chunks"][0]["prompt"].startswith("subject_definitions:")
+
+
+def test_a_draft_that_finishes_after_a_mode_switch_files_under_the_mode_it_started_in(job):
+    """Q4 fault 1 (2026-11-17): the draft wrote its prompts into whatever mode the job was in when it finished."""
+    import swap_planner as spl_
+
+    def switch_after_first(n):
+        if n == 1:
+            sp.update_plan(job["plan"], lambda p: spl_.switch_mode(p, "background"))
+    q = FakeQwen(on_draft=switch_after_first)
+    _draft(job, qwen_cls=q, sheet=_sheet())
+    p = sp.load_plan(job["plan"])
+    assert sp.job_mode(p) == "background"
+    assert all(not (c.get("prompt") or "").strip() for c in p["chunks"])            # the new mode got nothing
+    assert all(not c.get("drafted") for c in p["chunks"])
+    saved = p["by_mode"]["character"]["chunks"]
+    assert len(saved) == 3 and all((s["prompt"] or "").startswith("subject_definitions:") and s["prompt_state"] == "draft"
+                                   for s in saved.values())                          # the draft's own mode got all three
+    spl_.switch_mode(p, "character")                                                  # and it is there when switched back
+    assert all(c["prompt"].startswith("subject_definitions:") for c in p["chunks"])
+
+class EchoQwen(FakeQwen):
+    """Hands the chunk-draft instruction back as its answer for the first `echo_times` draft questions."""
+
+    def __init__(self, echo_times):
+        super().__init__()
+        self.echo_times, self.draft_calls = echo_times, 0
+
+    def ask(self, prompt, image=None, video=None, max_tokens=2048, frame_count=16):
+        if "The clip has" in prompt:
+            self.draft_calls += 1
+            if self.draft_calls <= self.echo_times:
+                return prompt
+        return super().ask(prompt, image=image, video=video, max_tokens=max_tokens, frame_count=frame_count)
+
+
+def test_echo_detection_needs_the_instructions_own_opening_words():
+    ins = "You are looking at frames from a video clip. Describe the people and the objects shot by shot."
+    assert sd.echoes_instruction(ins, ins) and sd.echoes_instruction(ins, "Sure. you are LOOKING at frames from a video clip.")
+    assert not sd.echoes_instruction(ins, "A man sits behind an open box.") and not sd.echoes_instruction("Who?", "Who?")
+
+
+def test_a_chunk_whose_answer_echoes_the_instruction_is_redrafted_once(job):
+    """Q4 fault 5 (2026-11-17): the first answer is the question handed back; the second is a real one."""
+    q = EchoQwen(1)
+    rep = _draft(job, qwen_cls=q)
+    p = sp.load_plan(job["plan"])
+    assert q.draft_calls == 4                                                   # 3 chunks + the one redraft
+    assert all(c["prompt"].startswith("subject_definitions:") for c in p["chunks"])
+    assert not [w for w in rep["warnings"] if "own instruction" in w]
+
+
+def test_a_chunk_that_echoes_twice_is_left_empty_with_a_warning(job):
+    q = EchoQwen(2)
+    rep = _draft(job, qwen_cls=q)
+    p = sp.load_plan(job["plan"])
+    c0, c1, c2 = p["chunks"]
+    assert not (c0.get("prompt") or "").strip() and not c0.get("drafted")      # nothing written for the chunk
+    assert c1["prompt"].startswith("subject_definitions:") and c2["prompt"].startswith("subject_definitions:")
+    r0 = rep["chunks"][c0["id"]]
+    assert r0["into"] == "nothing" and any("own instruction" in w for w in r0["warnings"])
+    assert any("own instruction" in w for w in rep["warnings"])

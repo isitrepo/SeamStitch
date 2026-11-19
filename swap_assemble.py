@@ -32,11 +32,13 @@ try:
     from . import swap_plan as sp
     from . import swap_join as sj
     from . import result_preview as rp
+    from . import swap_keep as sk
 except ImportError:  # imported as a top-level module (tests, tools)
     import timeline as tl
     import swap_plan as sp
     import swap_join as sj
     import result_preview as rp
+    import swap_keep as sk
 
 try:
     import folder_paths
@@ -324,7 +326,8 @@ def _mask_frames(path, offset, a, b):
 
 def assemble(plan_file, hand_back=12, fmt="video/h264-mp4", crf=12, pix_fmt="yuv420p", filename_prefix=DEFAULT_PREFIX,
              pending_chunks=PENDING_PREVIEW, require_reviewed=False, lock_options=None, measure=True,
-             write_plan=True, progress=None, window=None, out_file=None, plan=None, lock_regions=True):
+             write_plan=True, progress=None, window=None, out_file=None, plan=None, lock_regions=True,
+             object_keeps=True):
     """Build the assembly. Returns the report (also written beside the video and into plan.json).
 
     window=(lo, hi): only source frames lo..hi (inclusive), with the source's audio under them,
@@ -333,7 +336,8 @@ def assemble(plan_file, hand_back=12, fmt="video/h264-mp4", crf=12, pix_fmt="yuv
     marked chosen, "as if this take were chosen"); plan_file still locates the job.
     lock_regions: the regional lock (character and background each locked, through the right
     take's feathered SAM3 mask) wherever both takes have their masks; a split's repair
-    {"regions": false} turns it off there. The lock is always cut-aware (swap_join)."""
+    {"regions": false} turns it off there. The lock is always cut-aware (swap_join).
+    object_keeps: paste the plan's object keeps (swap_keep) over the joined frames, last."""
     t_start = time.time()
     plan_file = resolve_plan(plan_file)
     job = os.path.dirname(plan_file)
@@ -510,6 +514,11 @@ def assemble(plan_file, hand_back=12, fmt="video/h264-mp4", crf=12, pix_fmt="yuv
     stem = os.path.splitext(os.path.basename(final))[0]
     video_only = os.path.join(out_dir, f"{stem}.video.part.{spec['extension']}")
     enc = StreamEncoder(video_only, w, h, fr, spec)
+    keeper = sk.KeepPaster(plan, job, source, fr, (w, h), f_lo, f_hi) if object_keeps else None
+    objc = (sk.ObjectCompositor(plan, job, source, fr, (w, h), f_lo, f_hi)
+            if sp.job_mode(plan) == sp.MODE_OBJECT else None)
+    for wtxt in (objc.warnings() if objc is not None else []):
+        flags.append({"code": "object_no_mask", "text": wtxt})      # shown in the report text and printed with it
 
     lum = np.zeros(N, np.float64)
     thumbs = {}
@@ -550,6 +559,10 @@ def assemble(plan_file, hand_back=12, fmt="video/h264-mp4", crf=12, pix_fmt="yuv
                         frame = sj.fade_frame_out(frame, r, right["ratios"][i], right["weights"][i])
                     else:
                         frame = sj.fade_frame(frame, r, right["ratios"][i], right["weights"][i])
+                if objc is not None:                # an object job: the source, the take inside the target's mask
+                    frame = objc.apply(f, frame)
+                if keeper and keeper.covers(f):
+                    frame = keeper.apply(f, frame)
                 enc.write(frame)
                 lum[f] = sj.luma(frame)
                 if f in seam_frames:
@@ -659,7 +672,9 @@ def assemble(plan_file, hand_back=12, fmt="video/h264-mp4", crf=12, pix_fmt="yuv
     report = {"file": final, "frames": out_info["frames"], "window": None if window is None else [f_lo, f_hi], "fps": fr, "size": [w, h], "format": fmt, "crf": int(crf),
               "pix_fmt": pix_fmt, "plan_rev": plan.get("rev"), "job": plan.get("job"),
               "takes": {c["id"]: {"take": t and t["id"], "state": st} for c, (t, st) in zip(chunks, eff)},
-              "joins": rows, "flags": flags, "checks": checks, "seconds": round(time.time() - t_start, 1),
+              "joins": rows, "flags": flags, "checks": checks,
+              "object_keeps": keeper.report() if keeper else {},
+              "object": objc.report() if objc is not None else None, "seconds": round(time.time() - t_start, 1),
               "created": sp.now()}
     with open(os.path.join(out_dir, f"{stem}.report.json"), "w", encoding="utf-8") as f:
         json.dump(report, f, indent=1)

@@ -126,6 +126,170 @@ def level_gains(out_frames, pin_frames, masks=None, contrast=True):
     return np.stack([scale, offset]), step, clamped
 
 
+# pin detail match (2026-10-29): the same pin round trip that darkens a frame also softens it. The 2642-frame test job
+# (14 chunks, 0.75 MP): frame 0 of every take kept only ~0.78 of its pin's fine detail (Laplacian variance, room patch;
+# 0.64-0.94 over 13 joins), flat inside each chunk, so the room's texture fell ~75% by the last chunk while the mean and
+# the spread (level_gains) held. The take's fine band (luma minus its own blur) is boosted so its pinned frames carry the
+# pin's band energy; the next chunk then pins to a frame that kept its detail.
+DETAIL_SIGMA = 1.2              # px: the blur that splits the fine band off
+DETAIL_CLAMP = (0.0, 0.8)       # k of f + k * band(f): at most ~1.8x the band, never softer than rendered
+DETAIL_MIN = 0.01               # a k below this is not worth a pass
+DETAIL_LOCAL = 48               # px: the blur of the local band-energy ratio (the room's wall lost less than its sofa:
+DETAIL_LOCAL_SPAN = (0.5, 1.5)  # one gain for the room over-sharpened the wall 25-45% while the sofa came back ~8% short)
+# the anchor (2026-10-29): matching each chunk to its pin only stops the loss at the join, not the shortfall left at every
+# join (the 14-chunk test job, pin-matched: wall 76 -> 48, sofa 209 -> 105 by the last chunk). The target is then the job's
+# first full chunk (the one rendered with no pin, so no round trip in it): its room's band energy per pixel.
+ANCHOR_MIN_LENGTH = 100         # frames: the reference is the first chunk with a chosen take at least this long and no pins at all
+PERSON_Q = (1, 5, 15, 30, 50, 70, 85, 95, 99)   # the person's colour anchor: per channel, her pixels' brightness quantiles
+PERSON_MAX = 24                 # levels: the most a quantile is moved (a pose change is not a fade)
+PERSON_MIN_PX = 3000            # her pixels needed on each side to measure
+ANCHOR_SAMPLES = 8              # frames of the reference take the target is measured on
+
+
+def person_lut(frames, masks, ref_frames, ref_masks):
+    """The per-channel LUT [3, 256] that moves the person's brightness quantiles (per channel) in frames toward the
+    reference's, each by at most PERSON_MAX levels, and the mean absolute move; None when too few of her pixels are
+    measured. Her colour drifts down a chain of pinned chunks (the 14-chunk test job: her red coat fell ~56 -> ~40 and her
+    saturation 141 -> 108 by the last chunk) in a way a mean + spread match to the pin cannot hold; the quantiles
+    separate the dark reds from the skin, so they are moved apart."""
+    import cv2
+
+    def pix(fs, ms):
+        out = []
+        for f, m in zip(fs, ms):
+            sel = cv2.erode(np.asarray(m).astype(np.uint8), np.ones((5, 5), np.uint8)).astype(bool)
+            if sel.any():
+                out.append(f[sel][:: max(1, int(sel.sum()) // 40000)])
+        return np.concatenate(out) if out else np.zeros((0, 3), np.uint8)
+
+    a, r = pix(frames, masks), pix(ref_frames, ref_masks)
+    if len(a) < PERSON_MIN_PX or len(r) < PERSON_MIN_PX:
+        return None
+    x = np.arange(256, dtype=np.float32)
+    lut = np.zeros((3, 256), np.float32)
+    moves = []
+    for ch in range(3):
+        qa = np.percentile(a[:, ch], PERSON_Q).astype(np.float32)
+        qr = np.percentile(r[:, ch], PERSON_Q).astype(np.float32)
+        d = np.clip(qr - qa, -PERSON_MAX, PERSON_MAX)
+        qa, ui = np.unique(qa, return_index=True)
+        d = d[ui]
+        if len(qa) < 2:
+            lut[ch] = x
+            continue
+        lut[ch] = np.clip(x + np.interp(x, qa, d), 0, 255)
+        moves.append(float(np.abs(d).mean()))
+    return np.round(lut).astype(np.uint8), float(np.mean(moves)) if moves else 0.0
+
+
+def anchor_sample(plan, job, size):
+    """(frames, room masks) sampled from the job's reference take for the detail anchor, or None: the first chunk (by
+    render start) whose chosen take is >= ANCHOR_MIN_LENGTH frames, has no start pin and has a saved source mask."""
+    import cv2
+    best = None
+    for c in plan.get("chunks") or []:
+        if sp.is_kept(c) or not c.get("chosen"):
+            continue
+        _c, t = sp.find_take(plan, c["chosen"])
+        if t is None or int(t.get("frames") or 0) < ANCHOR_MIN_LENGTH                 or (t.get("pins") or {}).get("start") or (t.get("pins") or {}).get("end"):
+            continue
+        if not (t.get("files") or {}).get("mask_src"):
+            continue
+        if best is None or int(t["render"][0]) < int(best["render"][0]):
+            best = t
+    if best is None:
+        return None
+    fr = int(round(float(plan["source"]["fps"])))
+    n = int(best["frames"])
+    pick = sorted({int(round(x)) for x in np.linspace(0, n - 1, ANCHOR_SAMPLES + 2)[1:-1]})
+    frames, masks = [], []
+    for i in pick:
+        f = next(iter(tl._iter_frames(os.path.join(job, best["file"]), fr, i, i + 1)), None)
+        m = next(iter(tl._iter_frames(os.path.join(job, best["files"]["mask_src"]), fr, i, i + 1)), None)
+        if f is None or m is None:
+            continue
+        f = cv2.resize(f, tuple(size), interpolation=cv2.INTER_AREA) if (f.shape[1], f.shape[0]) != tuple(size) else f
+        m = cv2.resize(m, tuple(size), interpolation=cv2.INTER_AREA) if (m.shape[1], m.shape[0]) != tuple(size) else m
+        frames.append(f)
+        masks.append(m[..., 0] < 128)               # the source mask is the person: the room is the rest
+    return (frames, masks, best["id"], [~x for x in masks]) if frames else None
+
+
+def _fine_band(lum, sigma=DETAIL_SIGMA):
+    import cv2
+    return lum - cv2.GaussianBlur(lum, (0, 0), sigma)
+
+
+def detail_gain(out_frames, pin_frames, masks=None, sigma=DETAIL_SIGMA, spatial=False, anchor=None):
+    """k such that out + k * band(out) has the pin's fine-band energy (luma, over the masked pixels of the given frames).
+    The band of the boosted frame is band + k * band(band), so the energy is a quadratic in k, solved exactly. Returns
+    (k clamped to DETAIL_CLAMP, the unclamped amplitude ratio pin / take, a map), or None when no pixel is measured. A
+    take already as detailed as its pin gets k = 0. The map is None unless spatial and masks are given: then it is an
+    [h, w] float32 k per pixel from the LOCAL ratio of the two band energies (a DETAIL_LOCAL px blur, over the masked
+    pixels only), scaled so its centre is k and held within DETAIL_LOCAL_SPAN x k (the camera may move: the map is
+    measured on the pinned frames and applied to the whole take). With anchor = (frames, room masks) the target energy is
+    theirs, per pixel, instead of the pin's (the map's shape still comes from the pin)."""
+    import cv2
+    a = b = c = ep = 0.0
+    n = 0
+    eo_loc = ep_loc = den_loc = None
+    for i, (o, p) in enumerate(zip(out_frames, pin_frames)):
+        lo = cv2.cvtColor(np.ascontiguousarray(o), cv2.COLOR_RGB2GRAY).astype(np.float32)
+        lp = cv2.cvtColor(np.ascontiguousarray(p), cv2.COLOR_RGB2GRAY).astype(np.float32)
+        sel = slice(None)
+        if masks is not None:
+            # eroded: the person's edge moves between the pin and the render and is not texture
+            sel = cv2.erode(np.asarray(masks[i]).astype(np.uint8), np.ones((9, 9), np.uint8)).astype(bool)
+        bo = _fine_band(lo, sigma)
+        bb = _fine_band(bo, sigma)
+        bp = _fine_band(lp, sigma)
+        if spatial and masks is not None:
+            mf = sel.astype(np.float32)
+            blur = lambda x: cv2.GaussianBlur(x.astype(np.float32), (0, 0), DETAIL_LOCAL)
+            e1, e2, e3 = blur(bo * bo * mf), blur(bp * bp * mf), blur(mf)
+            eo_loc = e1 if eo_loc is None else eo_loc + e1
+            ep_loc = e2 if ep_loc is None else ep_loc + e2
+            den_loc = e3 if den_loc is None else den_loc + e3
+        bo, bb, bp = bo[sel].astype(np.float64), bb[sel].astype(np.float64), bp[sel].astype(np.float64)
+        n += int(bo.size)
+        a += float(np.sum(bo ** 2))
+        b += float(np.sum(bo * bb))
+        c += float(np.sum(bb ** 2))
+        ep += float(np.sum(bp ** 2))
+    if n == 0 or a <= 0 or c <= 0:
+        return None
+    ratio_pin = float(np.sqrt(ep / a))
+    if anchor is not None:
+        e_ref, n_ref = 0.0, 0
+        for f, m in zip(anchor[0], anchor[1]):
+            bf = _fine_band(cv2.cvtColor(np.ascontiguousarray(f), cv2.COLOR_RGB2GRAY).astype(np.float32), sigma)
+            sel = cv2.erode(np.asarray(m).astype(np.uint8), np.ones((9, 9), np.uint8)).astype(bool)
+            e_ref += float(np.sum(bf[sel].astype(np.float64) ** 2))
+            n_ref += int(sel.sum())
+        if n_ref:
+            ep = e_ref / n_ref * n
+    ratio = float(np.sqrt(ep / a))
+    if ep <= a:
+        return 0.0, ratio, None
+    k = float(np.clip((-b + np.sqrt(b * b - c * (a - ep))) / c, *DETAIL_CLAMP))
+    kmap = None
+    if eo_loc is not None and ratio_pin > 1.001 and k > 0:
+        r = np.sqrt((ep_loc + 1.0) / (eo_loc + 1.0))
+        r = np.where(den_loc < 0.02 * len(out_frames), ratio_pin, r)       # too little room near here: the centre
+        kmap = np.clip(k * (r - 1.0) / (ratio_pin - 1.0), DETAIL_LOCAL_SPAN[0] * k, DETAIL_LOCAL_SPAN[1] * k)
+        kmap = np.minimum(kmap, DETAIL_CLAMP[1]).astype(np.float32)
+    return k, ratio, kmap
+
+
+def boost_detail(f, k):
+    """uint8 RGB frame f with its luma fine band boosted by k (a scalar or an [h, w] map): the same amount added to every
+    channel, so colour is untouched and chroma noise is not amplified."""
+    import cv2
+    lum = cv2.cvtColor(np.ascontiguousarray(f), cv2.COLOR_RGB2GRAY).astype(np.float32)
+    delta = _fine_band(lum) * np.asarray(k, np.float32)
+    return np.clip(f.astype(np.float32) + delta[..., None] + 0.5, 0, 255).astype(np.uint8)
+
+
 LEVEL_MIN_REGION = 0.02         # a region smaller than this share of the frame takes the other region's gains
 
 
@@ -365,7 +529,7 @@ def _reserve_dir(plan_file, chunk_id, want):
 
 def save_take(chunk, images, source_mask=None, output_mask=None, marked_guide=None, take_codec=CODEC_LOSSLESS,
               crf=12, score=True, mouth_sync=True, review_clip=True, prompt=None, extra_pnginfo=None, progress=None,
-              level_match=False):
+              level_match=False, detail_match=False, detail_anchor=False, person_anchor=False):
     """Everything the node does. Returns (take entry, take folder, report)."""
     t0 = time.time()
     desc = chunk
@@ -393,22 +557,37 @@ def save_take(chunk, images, source_mask=None, output_mask=None, marked_guide=No
     src = desc["source"]
     fr = int(round(float(src["fps"])))
     W, H = int(src["width"]), int(src["height"])
+    crop = desc.get("crop")                 # an object job's cropped render: pasted back into the source frame here
+    RW, RH = (crop[2] - crop[0], crop[3] - crop[1]) if crop else (W, H)
     flags = []
     ih, iw = int(images.shape[1]), int(images.shape[2])
-    resize = (iw, ih) != (W, H)
+    resize = (iw, ih) != (RW, RH)
     if resize:
-        flags.append({"code": "resized", "text": f"the render came back {iw}x{ih}; resized to the source's {W}x{H}"})
+        flags.append({"code": "resized", "text": f"the render came back {iw}x{ih}; resized to {RW}x{RH}"})
         print(f"[SeamStitch] Swap Take: warning - {flags[-1]['text']}")
+    src_frames = None
+    if crop:
+        try:
+            from . import swap_keep as sk
+        except ImportError:
+            import swap_keep as sk
+        src_frames = sk._SeqFrames(src["path"], fr, 0)
 
     def raw_u8(i):
         import cv2
         f = to_u8(images[i])
         if resize:
-            f = cv2.resize(f, (W, H), interpolation=cv2.INTER_AREA if iw > W else cv2.INTER_CUBIC)
+            f = cv2.resize(f, (RW, RH), interpolation=cv2.INTER_AREA if iw > RW else cv2.INTER_CUBIC)
+        if crop:
+            full = src_frames.read(r0 + i).copy()
+            full[crop[1]:crop[3], crop[0]:crop[2]] = f
+            f = full
         return f
 
     # the pin level match: measured on every pinned take, applied when level_match is on
     level, gains, person_gains = {}, {"start": None, "end": None}, {"start": None, "end": None}
+    detail = {"k": 0.0, "person_k": 0.0, "map": None}
+    plut = None
     for side in ("start", "end"):
         try:
             pf = pin_frames_u8(plan, job, desc, side, (W, H))
@@ -440,7 +619,9 @@ def save_take(chunk, images, source_mask=None, output_mask=None, marked_guide=No
         # the start pin only: the take is levelled to the chunk before it. An end pin is the next chunk's take, which can
         # be an older one from before a fix (the 60 s test job's c7, 2026-10-16: ramping to a stale, drifted c8 darkened c7's
         # end 12-18% and muddied the couch); its step is measured and flagged, and Assemble's lock smooths that join
-        applied = bool(level_match) and not clamped and side == "start"
+        # (2026-10-30: a chunk with NO start pin, a backward chain from a free chunk, is levelled to its end pin: that pin is
+        # the take just rendered and chosen, not a stale one)
+        applied = bool(level_match) and not clamped and (side == "start" or "start" not in level)
         level[side] = {"step": round(step, 2), "gains": [round(float(x), 4) for x in g[0]],
                        "offsets": [round(float(x), 2) for x in g[1]], "applied": applied}
         if g_person is not None:
@@ -449,7 +630,55 @@ def save_take(chunk, images, source_mask=None, output_mask=None, marked_guide=No
         if applied:
             gains[side] = g
             person_gains[side] = g_person if g_person is not None else g
-        if side == "end" and abs(step) > LEVEL_FLAG:
+        # the fine detail the same round trip took, measured on the same pinned frames
+        if side == "start":
+            anch = None
+            try:
+                dm = None
+                if source_mask is not None and int(source_mask.shape[0]) >= 1:
+                    pm = [_soft_mask(source_mask, i, (W, H)) > 0.5 for i in idx]
+                    share = float(np.mean([m.mean() for m in pm]))
+                    if LEVEL_MIN_REGION <= share <= 1 - LEVEL_MIN_REGION:
+                        dm = (pm, [~m for m in pm])
+                if (detail_anchor or person_anchor) and dm:
+                    try:
+                        anch = anchor_sample(plan, job, (W, H))
+                    except Exception as e:
+                        print(f"[SeamStitch] Swap Take: detail anchor skipped: {e}")
+                d_room = detail_gain(outs, pins_, dm[1] if dm else None, spatial=True,
+                                     anchor=anch[:2] if anch and detail_anchor else None)
+                d_person = detail_gain(outs, pins_, dm[0]) if dm else None
+                if d_room is not None:
+                    kr = d_room[0]
+                    kp = d_person[0] if d_person is not None else kr
+                    level[side]["detail"] = {"ratio": round(d_room[1], 3), "k": round(kr, 3), "person_k": round(kp, 3),
+                                             "applied": bool(detail_match) and max(kr, kp) >= DETAIL_MIN}
+                    if anch and detail_anchor:
+                        level[side]["detail"]["anchor"] = anch[2]
+                    if level[side]["detail"]["applied"]:
+                        detail["k"], detail["person_k"], detail["map"] = kr, kp, d_room[2]
+            except Exception as e:
+                print(f"[SeamStitch] Swap Take: detail match skipped: {e}")
+            if person_anchor and anch and source_mask is not None:
+                try:
+                    pick = sorted({int(round(v)) for v in np.linspace(0, keep - 1, ANCHOR_SAMPLES + 2)[1:-1]})
+                    pg = person_gains["start"] if person_gains["start"] is not None else gains["start"]
+                    fs, ms = [], []
+                    for i in pick:
+                        f = raw_u8(i)
+                        if pg is not None:
+                            f = np.clip(f.astype(np.float32) * pg[0].astype(np.float32) + pg[1].astype(np.float32) + 0.5,
+                                        0, 255).astype(np.uint8)
+                        fs.append(f)
+                        ms.append(_soft_mask(source_mask, i, (W, H)) > 0.5)
+                    res = person_lut(fs, ms, anch[0], anch[3])
+                    if res is not None:
+                        plut = res[0] if res[1] >= 1.0 else None
+                        level[side]["person_anchor"] = {"moved": round(res[1], 2), "applied": plut is not None,
+                                                        "ref": anch[2]}
+                except Exception as e:
+                    print(f"[SeamStitch] Swap Take: person colour anchor skipped: {e}")
+        if side == "end" and abs(step) > LEVEL_FLAG and not applied:
             flags.append({"code": "level_end", "text": f"ends {abs(step):.1f} levels {'darker' if step < 0 else 'brighter'} "
                           f"than the next chunk's take it's pinned to: that take may be from before a fix; re-roll "
                           f"the next chunk after this one"})
@@ -458,6 +687,35 @@ def save_take(chunk, images, source_mask=None, output_mask=None, marked_guide=No
                           f"than its {side} pin and wasn't levelled ("
                           + ("level_match is off" if not level_match else "too large a difference to be the pin's")
                           + "): the next chunk pinned to it carries the step"})
+
+    # no start pin (a straight-cut chunk, or one pinned onto the original): the anchors still hold it to the job's first
+    # full chunk, measured on frames sampled across the take (there is no pinned frame to measure)
+    if "start" not in level and source_mask is not None and int(source_mask.shape[0]) >= 1 \
+            and ((detail_match and detail_anchor) or person_anchor):
+        try:
+            anch = anchor_sample(plan, job, (W, H))
+            if anch and anch[2].split("-")[0] != desc["chunk"]:         # the reference chunk is not matched to itself
+                pick = sorted({int(round(v)) for v in np.linspace(0, keep - 1, ANCHOR_SAMPLES + 2)[1:-1]})
+                outs = [raw_u8(i) for i in pick]
+                pm = [_soft_mask(source_mask, i, (W, H)) > 0.5 for i in pick]
+                share = float(np.mean([m.mean() for m in pm]))
+                if LEVEL_MIN_REGION <= share <= 1 - LEVEL_MIN_REGION:
+                    free = {"ref": anch[2]}
+                    if detail_match and detail_anchor:
+                        d = detail_gain(outs, outs, [~m for m in pm], anchor=anch[:2])
+                        if d is not None:
+                            free["detail"] = {"ratio": round(d[1], 3), "k": round(d[0], 3),
+                                              "applied": d[0] >= DETAIL_MIN}
+                            if free["detail"]["applied"]:
+                                detail["k"] = detail["person_k"] = d[0]
+                    if person_anchor:
+                        res = person_lut(outs, pm, anch[0], anch[3])
+                        if res is not None:
+                            plut = res[0] if res[1] >= 1.0 else None
+                            free["person_anchor"] = {"moved": round(res[1], 2), "applied": plut is not None}
+                    level["anchor"] = free
+        except Exception as e:
+            print(f"[SeamStitch] Swap Take: anchor (no pin) skipped: {e}")
 
     regional = any(person_gains[k] is not None and gains[k] is not None and not np.array_equal(person_gains[k], gains[k])
                    for k in gains)
@@ -476,6 +734,18 @@ def save_take(chunk, images, source_mask=None, output_mask=None, marked_guide=No
                 else:
                     f = np.clip(f.astype(np.float32) * g[0].astype(np.float32) + g[1].astype(np.float32) + 0.5, 0,
                                 255).astype(np.uint8)
+            if plut is not None and source_mask is not None:
+                m = _soft_mask(source_mask, i, (W, H))[..., None]
+                g2 = np.stack([plut[c][f[..., c]] for c in range(3)], axis=-1).astype(np.float32)
+                f = np.clip(f.astype(np.float32) + m * (g2 - f.astype(np.float32)) + 0.5, 0, 255).astype(np.uint8)
+            if detail["k"] >= DETAIL_MIN or detail["person_k"] >= DETAIL_MIN:
+                room_k = detail["map"] if detail["map"] is not None else detail["k"]
+                if source_mask is not None and (detail["person_k"] != detail["k"] or detail["map"] is not None):
+                    m = _soft_mask(source_mask, i, (W, H))
+                    kmap = room_k * (1 - m) + detail["person_k"] * m
+                else:
+                    kmap = room_k
+                f = boost_detail(f, kmap)
             yield f
 
     tid, tdir = _reserve_dir(plan_file, desc["chunk"], desc["take"])
@@ -555,6 +825,8 @@ def save_take(chunk, images, source_mask=None, output_mask=None, marked_guide=No
                 "prompt_sha1": desc["prompt_sha1"], "settings": settings, "files": files, "scores": scores,
                 "gpu_s": round(t0 - float(desc.get("started") or t0)), "save_s": None, "flags": flags, "level": level,
                 "nonce": desc.get("nonce"), "planner_rev": desc.get("plan_rev")}
+        if crop:
+            take["crop"] = list(crop)
     except BaseException:
         shutil.rmtree(tdir, ignore_errors=True)
         raise
@@ -637,9 +909,26 @@ class SeamStitchSwapTake:
                     "was pinned to at its start (the same moment): a pinned frame comes out of H3 2-3 levels darker and "
                     "a little harsher, and with each chunk pinned to the last the picture slid darker and muddier chunk "
                     "by chunk. With the person's mask wired (source_mask) the room and the person are matched apart. "
-                    "Only the start pin is followed: an end that lands more than 1 level off the next chunk's take gets "
+                    "Only the start pin is followed (a chunk with no start pin follows its end pin instead): an end that lands more than 1 level off the next chunk's take gets "
                     "a level_end flag (that take may be older), and a start too far off to be the pin's (or level_match "
                     "off) gets a level flag."}),
+                "detail_match": ("BOOLEAN", {"default": True, "tooltip":
+                    "The pin round trip also softens a frame: each chunk kept only ~0.78 of its pin's fine detail, and "
+                    "with each chunk pinned to the last the room's texture faded ~75% over a 2642-frame job (it looked "
+                    "washed out) while the level match held. Before the take is saved, its fine detail (the band a "
+                    "1-2 px blur removes, luma only) is boosted, up to 1.6x, until its pinned frames carry the pin's "
+                    "detail; the room and the person (source_mask) are measured apart. It restores crispness, it "
+                    "cannot redraw lost texture. Only a take that has a start pin is touched."}),
+                "detail_anchor": ("BOOLEAN", {"default": True, "tooltip":
+                    "Aim detail_match at the job's first full chunk (rendered with no pin) instead of at the pin. Matching "
+                    "only the pin stops the loss at each join but not the shortfall left at every join, which still "
+                    "added up (wall 76 -> 48, sofa 209 -> 105 over 14 chunks); matched to the first chunk it cannot "
+                    "build up. The room is measured by the source mask, so a job without one falls back to the pin."}),
+                "person_anchor": ("BOOLEAN", {"default": True, "tooltip":
+                    "Her colour fades down a chain of pinned chunks (the red coat went from ~56 to ~40 and her saturation "
+                    "fell 141 -> 108 over 14 chunks) in a way matching each chunk to its pin cannot hold. The brightness "
+                    "quantiles of her pixels (per channel, by the source mask) are moved toward the job's first full "
+                    "chunk's, by at most 24 levels. Needs source_mask and a reference chunk (rendered with no pin)."}),
             },
             "hidden": {"prompt": "PROMPT", "extra_pnginfo": "EXTRA_PNGINFO"},
         }
@@ -654,6 +943,7 @@ class SeamStitchSwapTake:
 
     def save(self, chunk, images, take_codec=CODEC_LOSSLESS, crf=12, score=True, mouth_sync=True, review_clip=True,
              source_mask=None, output_mask=None, marked_guide=None, free_memory_after=True, level_match=True,
+             detail_match=True, detail_anchor=True, person_anchor=True,
              prompt=None, extra_pnginfo=None):
         pbar = None
         try:
@@ -667,7 +957,7 @@ class SeamStitchSwapTake:
                 pbar.update_absolute(int(100 * i / n), 100)
 
         take, tdir, report = save_take(chunk, images, source_mask, output_mask, marked_guide, take_codec, crf, score,
-                                       mouth_sync, review_clip, prompt, extra_pnginfo, progress, level_match)
+                                       mouth_sync, review_clip, prompt, extra_pnginfo, progress, level_match, detail_match, detail_anchor, person_anchor)
         lines = [f"{take['id']}: {take['frames']} frames {take['render'][0]}-{take['render'][1]}, seed {take['seed']}"
                  + (f", pose IoU {take['scores']['pose_iou']}" if take["scores"].get("pose_iou") is not None else "")
                  + (f", mouth {take['scores']['mouth']}" if take["scores"].get("mouth") is not None else "")]
@@ -678,6 +968,24 @@ class SeamStitchSwapTake:
                 lines.append(f"  level ({side} pin): started {x['step']:+.1f} levels off its pin"
                              + (f" (the person {x['person_step']:+.1f})" if "person_step" in x else "") + "; "
                              + ("levelled" if x["applied"] else "not levelled"))
+                pa = x.get("person_anchor")
+                if pa:
+                    lines.append(f"  person colour ({side} pin): " + (f"moved toward {pa['ref']} by {pa['moved']:.1f} levels on "
+                                 f"average" if pa["applied"] else "already within 1 level of it"))
+                dt = x.get("detail")
+                if dt:
+                    lines.append(f"  detail ({side} pin): kept {dt['ratio']:.2f} of its pin's fine detail; "
+                                 + (f"aimed at {dt['anchor']}, " if dt.get("anchor") else "")
+                                 + (f"boosted x{1 + dt['k']:.2f} (the person x{1 + dt['person_k']:.2f})"
+                                    if dt["applied"] else "not boosted"))
+        fa = lv.get("anchor")
+        if fa:
+            if fa.get("detail"):
+                lines.append(f"  detail (no pin): {fa['detail']['ratio']:.2f}x the room detail of {fa['ref']}; "
+                             + (f"boosted x{1 + fa['detail']['k']:.2f}" if fa["detail"]["applied"] else "not boosted"))
+            if fa.get("person_anchor"):
+                lines.append("  person colour (no pin): " + (f"moved toward {fa['ref']} by {fa['person_anchor']['moved']:.1f} "
+                             "levels on average" if fa["person_anchor"]["applied"] else "already within 1 level of it"))
         quality = ss.chunk_flags(take["scores"])
         for j in report["joins"]:
             fl = j.get("frame_luma") or {}

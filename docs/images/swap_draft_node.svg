@@ -1,6 +1,6 @@
-<svg width="620" height="349" viewBox="0 0 620 349" xmlns="http://www.w3.org/2000/svg" font-family="Segoe UI, Helvetica, Arial, sans-serif">
-<rect x="0" y="0" width="620" height="349" fill="#1a1a1a"/>
-<rect x="24" y="10" width="572" height="329" rx="10" fill="#2a2a2a" stroke="#454545" stroke-width="1.5"/>
+<svg width="620" height="517" viewBox="0 0 620 517" xmlns="http://www.w3.org/2000/svg" font-family="Segoe UI, Helvetica, Arial, sans-serif">
+<rect x="0" y="0" width="620" height="517" fill="#1a1a1a"/>
+<rect x="24" y="10" width="572" height="497" rx="10" fill="#2a2a2a" stroke="#454545" stroke-width="1.5"/>
 <path d="M 24 40 Q 24 10 34 10 L 586 10 Q 596 10 596 40 Z" fill="#2f6fa5"/>
 <text x="38" y="30" fill="#ffffff" font-size="14" font-weight="600">SeamStitch Swap Draft Prompts</text>
 <rect x="25" y="39" width="570" height="24" fill="#242424" opacity="0.4"/>
@@ -10,36 +10,270 @@
 <text x="584" y="55.0" fill="#e8e8e8" font-size="12" text-anchor="end">report</text>
 <circle cx="24" cy="75.0" r="5.5" fill="#64b5f6" stroke="#1a1a1a" stroke-width="1.5"/>
 <text x="36" y="79.0" fill="#e8e8e8" font-size="12" font-style="italic">sheet</text>
-<line x1="34" y1="96" x2="586" y2="96" stroke="#454545" stroke-width="1"/>
-<rect x="34" y="99" width="552" height="19" rx="4" fill="#3a3a3a" stroke="#555" stroke-width="1"/>
-<text x="42" y="112" fill="#9a9a9a" font-size="11">chunks</text>
-<text x="578" y="112" fill="#e8e8e8" font-size="11" text-anchor="end">empty only</text>
-<rect x="25" y="120" width="570" height="24" fill="#242424" opacity="0.4"/>
+<rect x="25" y="87" width="570" height="24" fill="#242424" opacity="0.4"/>
+<circle cx="24" cy="99.0" r="5.5" fill="#64b5f6" stroke="#1a1a1a" stroke-width="1.5"/>
+<text x="36" y="103.0" fill="#e8e8e8" font-size="12" font-style="italic">sheet_2</text>
+<line x1="34" y1="120" x2="586" y2="120" stroke="#454545" stroke-width="1"/>
 <rect x="34" y="123" width="552" height="19" rx="4" fill="#3a3a3a" stroke="#555" stroke-width="1"/>
-<text x="42" y="136" fill="#9a9a9a" font-size="11">qwen_model</text>
-<text x="578" y="136" fill="#e8e8e8" font-size="11" text-anchor="end">Qwen3-VL-8B-Unredacted-MAX (Captioner)</text>
+<text x="42" y="136" fill="#9a9a9a" font-size="11">chunks</text>
+<text x="578" y="136" fill="#e8e8e8" font-size="11" text-anchor="end">empty only</text>
+<rect x="25" y="144" width="570" height="24" fill="#242424" opacity="0.4"/>
 <rect x="34" y="147" width="552" height="19" rx="4" fill="#3a3a3a" stroke="#555" stroke-width="1"/>
-<text x="42" y="160" fill="#9a9a9a" font-size="11">quantization</text>
-<text x="578" y="160" fill="#e8e8e8" font-size="11" text-anchor="end">None (FP16)</text>
-<rect x="25" y="168" width="570" height="24" fill="#242424" opacity="0.4"/>
+<text x="42" y="160" fill="#9a9a9a" font-size="11">qwen_model</text>
+<text x="578" y="160" fill="#e8e8e8" font-size="11" text-anchor="end">Qwen3-VL-8B-Unredacted-MAX (Captioner)</text>
 <rect x="34" y="171" width="552" height="19" rx="4" fill="#3a3a3a" stroke="#555" stroke-width="1"/>
-<text x="42" y="184" fill="#9a9a9a" font-size="11">frames_per_chunk</text>
-<text x="578" y="184" fill="#e8e8e8" font-size="11" text-anchor="end">24</text>
+<text x="42" y="184" fill="#9a9a9a" font-size="11">quantization</text>
+<text x="578" y="184" fill="#e8e8e8" font-size="11" text-anchor="end">None (FP16)</text>
+<rect x="25" y="192" width="570" height="24" fill="#242424" opacity="0.4"/>
 <rect x="34" y="195" width="552" height="19" rx="4" fill="#3a3a3a" stroke="#555" stroke-width="1"/>
-<text x="42" y="208" fill="#9a9a9a" font-size="11">transcribe</text>
-<text x="578" y="208" fill="#e8e8e8" font-size="11" text-anchor="end">True</text>
-<rect x="25" y="216" width="570" height="24" fill="#242424" opacity="0.4"/>
+<text x="42" y="208" fill="#9a9a9a" font-size="11">frames_per_chunk</text>
+<text x="578" y="208" fill="#e8e8e8" font-size="11" text-anchor="end">24</text>
 <rect x="34" y="219" width="552" height="19" rx="4" fill="#3a3a3a" stroke="#555" stroke-width="1"/>
-<text x="42" y="232" fill="#9a9a9a" font-size="11">word_timings</text>
+<text x="42" y="232" fill="#9a9a9a" font-size="11">transcribe</text>
 <text x="578" y="232" fill="#e8e8e8" font-size="11" text-anchor="end">True</text>
+<rect x="25" y="240" width="570" height="24" fill="#242424" opacity="0.4"/>
 <rect x="34" y="243" width="552" height="19" rx="4" fill="#3a3a3a" stroke="#555" stroke-width="1"/>
-<text x="42" y="256" fill="#9a9a9a" font-size="11">template</text>
-<text x="578" y="256" fill="#e8e8e8" font-size="11" text-anchor="end">character replace (Ref2VA, timeline)</text>
-<rect x="25" y="264" width="570" height="24" fill="#242424" opacity="0.4"/>
+<text x="42" y="256" fill="#9a9a9a" font-size="11">word_timings</text>
+<text x="578" y="256" fill="#e8e8e8" font-size="11" text-anchor="end">True</text>
 <rect x="34" y="267" width="552" height="19" rx="4" fill="#3a3a3a" stroke="#555" stroke-width="1"/>
-<text x="42" y="280" fill="#9a9a9a" font-size="11">extra_instructions</text>
-<text x="578" y="280" fill="#e8e8e8" font-size="11" text-anchor="end"></text>
+<text x="42" y="280" fill="#9a9a9a" font-size="11">template</text>
+<text x="578" y="280" fill="#e8e8e8" font-size="11" text-anchor="end">character replace (Ref2VA, timeline, lean)</text>
+<rect x="25" y="288" width="570" height="24" fill="#242424" opacity="0.4"/>
 <rect x="34" y="291" width="552" height="19" rx="4" fill="#3a3a3a" stroke="#555" stroke-width="1"/>
-<text x="42" y="304" fill="#9a9a9a" font-size="11">max_tokens</text>
-<text x="578" y="304" fill="#e8e8e8" font-size="11" text-anchor="end">2048</text>
+<text x="42" y="304" fill="#9a9a9a" font-size="11">extra_instructions</text>
+<text x="578" y="304" fill="#e8e8e8" font-size="11" text-anchor="end"></text>
+<rect x="34" y="315" width="552" height="19" rx="4" fill="#3a3a3a" stroke="#555" stroke-width="1"/>
+<text x="42" y="328" fill="#9a9a9a" font-size="11">max_tokens</text>
+<text x="578" y="328" fill="#e8e8e8" font-size="11" text-anchor="end">2048</text>
+<rect x="25" y="336" width="570" height="24" fill="#242424" opacity="0.4"/>
+<rect x="34" y="339" width="552" height="19" rx="4" fill="#3a3a3a" stroke="#555" stroke-width="1"/>
+<text x="42" y="352" fill="#9a9a9a" font-size="11">free_memory_after</text>
+<text x="578" y="352" fill="#e8e8e8" font-size="11" text-anchor="end">True</text>
+<rect x="34" y="363" width="552" height="19" rx="4" fill="#3a3a3a" stroke="#555" stroke-width="1"/>
+<text x="42" y="376" fill="#9a9a9a" font-size="11">qwen_questions</text>
+<text x="578" y="376" fill="#e8e8e8" font-size="11" text-anchor="end">Qwen's questions, one per ### section. Edit a section to change that question for every draft run of this node; delete a section, or clear the whole box, to use the built-in one. Keep the {names in braces}: the node fills them in (an edit with a name the built-in doesn't have is ignored, with a warning). Text above the first ### is ignored.
+
+### subject (the character sheet -> the subject line (once per job))
+This picture is a character sheet: one character, shown from one or more angles. Write exactly three labelled lines and nothing else:
+
+name: a short descriptive name for the character, 2-4 words, lower case (for example "bearded sailor" or "silver robot knight").
+appearance: ONE sentence, a comma-separated list from head to toe that names every visible detail, in this order: apparent age and build; face and make-up (skin, cheeks, nose, lips, eyes; name make-up and face paint as make-up, for example "white face paint" or "black eye make-up", never as skin colour or as shadows or circles under the eyes); hair (colour, length, style, fringe); anything on or above the head, with its colours; anything at the neck; the top or dress (colour, neckline, sleeves, trims, buttons, bows, belts); the skirt or trousers (layers, colours); gloves or arm pieces (length, colours, cuffs); legwear; footwear; anything attached to the body (for example wings or a tail). Start with "a young woman", "an old man", "a boy", or similar.
+pronoun: she, he or they.
+
+Rules: describe only the character's own body, clothes and what is worn on the body. Never name an object held in the hands or lying near the character: no props. Concrete visual detail only (colour, material, shape, pattern), no mood, personality or story.
+
+### subject_2 (the 2 references template: the second picture of the character (once per job))
+This picture is a second reference of the same character: a close-up of the face, or another view. Write exactly one labelled line and nothing else:
+
+detail: ONE sentence saying what this picture shows of the character that a full-length view shows less clearly: the face (skin, eyes, lips), the hair, or a close look at the costume or an accessory, with colours, materials and shapes.
+
+Rules: describe only the character's own face, body and clothes. Never name an object held in the hands or lying near the character. Concrete visual detail only (colour, material, shape, pattern), no mood or story.
+
+### objects (what the person handles in the chunk)
+These are {n} frames sampled in order from one video clip. Write exactly two labelled lines and nothing else:
+
+person: yes if a person is visible in any frame, otherwise no.
+objects: a comma-separated list of the distinct objects you can see (furniture, boxes, packaging, papers, devices, tools, anything held or handled), each ONCE, as a short plain noun phrase with its colour. Include only what is clearly visible. Do not list the person, their clothes or body parts, the walls, the floor or the light.
+
+### who (timeline: who the main person is)
+These are {n} frames from one video clip. Who is the main person or character in it: the one most in focus, the largest, or the one doing the most? Prefer a person or a human-like character over an animal or a creature. Never name them, even when a name is written on screen. Answer in a few words that tell them apart from anyone else in the clip by how they look (build, hair, clothes), never by what they hold or do, which changes from shot to shot; for example "a man in a black t-shirt", "a girl in a blue dress" or "a cartoon boy in a white hat". Answer "none" only if no person or character appears in any of the frames.
+
+### scene (timeline: the clip, the camera, the others, the sounds)
+These are {n} frames from one clip of a video{talk}. The main person is {who}. Write exactly four labelled lines and nothing else:
+
+video_1: ONE sentence about the main person, not anyone else: where the main person is and what they sit or stand on, what is in front of them, the background and its colour (and what is in it: a crowd or audience, seating, screens, a scoreboard, banners, and any caption or logo laid over the picture, said as "a caption" or "a logo" without its words), the light (hard or soft, and the side it comes from, judged by where the shadows fall), the visual style (for example live-action phone video, or 2D cartoon animation), what the main person is doing, and the camera: whether it looks down on them, is level with them or looks up at them, whether it moves, and where their head sits in the frame. Don't describe their face, hair or clothes.
+sounds: ONE sentence: the sounds through the clip, in order{sounds_hint}.
+background: what is behind the people, as a short list separated by semicolons (for example "a crowd in tiered seating; an electronic scoreboard; a caption"), a caption or logo without its words, or "none".
+others: every other person who takes part in what happens (not a crowd or spectators in the background, and not a screen, sign, scoreboard or object), each in a few words by how they look and which side of the frame they are on, saying left, centre or right (for example "a man in a striped jacket on the right"), separated by semicolons; or "none".
+
+Never name anyone, even when a name is written on screen: describe people by how they look.
+
+### moment (timeline: one picture every half second)
+This is one frame from a video. The main person in this video is {who}. Answer in exactly six short labelled lines and nothing else:
+
+person: "yes" if that main person is visible in this frame, otherwise "no".
+pose: how that person sits, stands or moves, in a few words (for example "kneeling on the grass").
+look: where that person looks: "at the camera", "down", "to the side", or at what (for example "at the object in their hands").
+hands: what that person's hands do and hold, and where a held object is, as one full phrase with "a" and "the", starting with a verb (for example "holds a small black device with a red ring up beside the face with the right hand"). Name every object by what it looks like: colour, shape, size and any coloured parts.
+others: anyone else in the frame and what they do, in a few words, or "none".
+frame: what the frame shows, in a few words.
+
+Describe only the main person in pose, look and hands, never anyone else. Never quote printed text or brand names.
+
+### touch (timeline: the moment question's extra line when someone else is in the clip (it goes in before the moment question's "frame:" line))
+touch: where the main person and anyone else in the frame touch each other, as one phrase that calls the main person "the person" and the other by how they look (for example "the person's right hand holds the left hand of the man in the suit" or "the hand of the man in the suit rests on the person's back"), or "none" if they don't touch or no one else is in the frame.
+
+### recheck (timeline: is the person there at all)
+This is one frame from a video. Is {who} in this frame at all, even partly: only the top of the head, the back, a shoulder, an arm or the hands, seen from above, from behind or turned away? Answer only "yes" or "no".
+
+### relation (timeline: how her body sits against the other person, once a shot)
+These are {n} frames from one continuous shot of a video, in order. The main person is {who}; the other person is {other}. In ONE sentence, say how the main person's body is placed against the other person through the shot (for example lying across them, kneeling over them, beside them, behind them, facing them, holding them), calling the main person "the person" and the other "the other person". Answer only "none" if they stay apart and don't touch. Never name anyone.
+
+### other_look (timeline: how the person the scene missed looks)
+These are {n} frames from one video clip. Besides the main person ({who}), there is {other}. Describe {other} in a few words by how they look: clothes, colours and hair (for example "a woman in a blue singlet" or "a man in a grey suit"). Never name anyone. Answer only with the description.
+
+### large_shot (the large-model template: each shot in one call)
+This is one continuous shot ({secs:.1f} seconds) from a film clip. In an edit of the clip, one person in it is replaced by a new character; everyone else stays exactly as filmed. The pictures below are from this shot, in time order, each after its time in the shot.
+
+The person who is replaced: {who}. Below this person is called "{subj}".
+The other people in the clip, by label (use only these labels for them):
+{cast}
+{objects}{lines}
+Look at every picture before you answer: a pose that changes partway through the shot matters as much as the first picture. Then answer with one JSON object and nothing else:
+
+{{"main_visible": true or false (is {who} in any of the pictures, even only partly: the hands, an arm, the back of the head),
+"frame": "what the shot shows, in a few words",
+"others_visible": [the labels of the other people visible in any picture of this shot: check each listed person against every picture],
+"beside": "who is directly beside {subj} and on which side of the frame, by label, or none",
+"description": "2 to 4 sentences, present tense, about {subj} only, in the order things happen: how {subj} sits, stands, slumps or leans (and against what or whom), each change of pose and roughly when it comes (at the start, then, by the end), where {subj} looks, and what each hand does and holds (an object by its colour, shape and size; hands out of view get no sentence, and a hand holds only what you can see in it)"}}
+
+Rules for "description": start with "{Subj}"; call {subj} only "{subj}" and the other people only by their labels; {dialogue_rule}describe only what the pictures show; give each object one name and keep it (an object you can't make out is named by its colour and shape, never guessed); keep each sentence under 30 words; don't describe {poss} face, hair or clothes; don't name anyone or quote printed text; don't mention pictures, frames, times, "the person" or the replacement.{extra}
+
+### large_bg_shot (the large-model background template: each shot of the kept person in one call)
+This is one continuous shot ({secs:.1f} seconds) from a video. In an edit of the video, the person in it, {who}, is kept exactly as filmed and only the background behind them is replaced by a new place. Below, this person is called "<Subject 2>". The pictures below are from this shot, in time order, each after its time in the shot.
+{objects}{lines}
+Look at every picture before you answer: a movement partway through the shot matters as much as the first picture. Then answer with one JSON object and nothing else:
+
+{{"main_visible": true or false (is <Subject 2> in any of the pictures, even only partly),
+"frame": "what the shot shows, in a few words",
+"description": "1 to 4 sentences, present tense, about <Subject 2> only, in the order things happen: when <Subject 2> enters or leaves the frame and from which side, where in the frame <Subject 2> is, which way <Subject 2> faces and moves, how <Subject 2> sits, stands or walks, what each hand does and holds (an object by its colour, shape and size; hands out of view get no sentence), and where <Subject 2> looks"}}
+
+Rules for "description": start with "<Subject 2>", and after that call <Subject 2> "{subj}" or "<Subject 2>"; {dialogue_rule}describe only what the pictures show; never describe the backdrop, the walls, the floor or the light behind <Subject 2>: they are replaced; what <Subject 2> sits, lies or leans on is replaced too, so name it without its colour, pattern or material ("the sofa", "a cushion"); don't say how close the shot is or how much of <Subject 2> shows (no close-up, medium shot, wide shot, full view, waist up); write only what happens (nothing like "no one enters" or "no significant motion"); don't name anyone or quote printed text; don't mention pictures, frames, times or the replacement.{extra}
+
+### large_bg_clip (the large-model background template: the camera, pronoun and sounds)
+These are {n} pictures from one clip of a video, one from each shot, in order{talk}. In an edit of the clip, {who} is kept exactly as filmed and only the background behind them is replaced by a new place. Write exactly three labelled lines and nothing else:
+
+pronoun: she, he or they, for {who}.
+video_1: ONE sentence about the clip as a whole: the camera's angle and height, whether the camera moves at all (and how, if it does), where in the frame {who} is, and where {who} moves through the frame (enters, crosses, leaves). Don't say how close the shot is or how much of {who} shows (no close-up, medium shot, wide shot, full view, waist up). Don't describe the backdrop, the wall or the floor: they are replaced.
+sounds: ONE sentence: the sounds through the clip, in order{sounds_hint}.
+
+Say only what is there: leave out anything the lines ask about that the pictures don't show.
+
+### who2 (the 2 characters background template: who the two people are)
+These are {n} frames from one video clip. Who are the TWO main people or characters in it: the two most in focus, the largest, or doing the most? Prefer people or human-like characters over animals or creatures. Never name them, even when a name is written on screen. Answer with exactly two short descriptions separated by a semicolon, each telling that person apart from the other by how they look (build, hair, clothes), never by what they hold or do, which changes from shot to shot, and the first one the person who is further to the left in the frames; for example "a man in a black t-shirt; a woman in a red dress". Answer "none" only if fewer than two people or characters appear in the frames.
+
+### large_bg2_clip (the 2 characters background template: the camera, pronouns and sounds)
+These are {n} pictures from one clip of a video, one from each shot, in order{talk}. In an edit of the clip, two people, {who2} and {who3}, are kept exactly as filmed and only the background behind them is replaced by a new place. Write exactly three labelled lines and nothing else:
+
+pronoun: two words, one for {who2} and then one for {who3}, each she, he or they (for example "he she").
+video_1: ONE sentence about the clip as a whole: the camera's angle and height, whether the camera moves at all (and how, if it does), where in the frame each of the two people is, and where each moves through the frame (enters, crosses, leaves). Don't say how close the shot is or how much of them shows (no close-up, medium shot, wide shot, full view, waist up). Don't describe the backdrop, the wall or the floor: they are replaced.
+sounds: ONE sentence: the sounds through the clip, in order{sounds_hint}.
+
+Say only what is there: leave out anything the lines ask about that the pictures don't show.
+
+### large_bg2_shot (the 2 characters background template: each shot, both people)
+This is one continuous shot ({secs:.1f} seconds) from a video. In an edit of the video, the two people in it are kept exactly as filmed and only the background behind them is replaced by a new place. Below, the first person, {who2}, is called "<Subject 2>" and the second person, {who3}, is called "<Subject 3>". The pictures below are from this shot, in time order, each after its time in the shot.
+{objects}{lines}
+Look at every picture before you answer: a movement partway through the shot matters as much as the first picture. Then answer with one JSON object and nothing else:
+
+{{"visible_2": true or false (is <Subject 2> in any of the pictures, even only partly),
+"visible_3": true or false (is <Subject 3> in any of the pictures, even only partly),
+"frame": "what the shot shows, in a few words",
+"description_2": "1 to 3 sentences, present tense, about <Subject 2> only, in the order things happen: when <Subject 2> enters or leaves the frame and from which side, where in the frame <Subject 2> is, which way <Subject 2> faces and moves, how <Subject 2> sits, stands or walks, what each hand does and holds (an object by its colour, shape and size; hands out of view get no sentence), and where <Subject 2> looks",
+"description_3": "the same for <Subject 3>, about <Subject 3> only",
+"together": "ONE sentence on how <Subject 2> and <Subject 3> are placed against each other through the shot (for example side by side with <Subject 2> on the left, facing each other, one behind the other, touching, one holding the other), or "none" if they stay apart and don't touch"}}
+
+Rules for the descriptions: start each with its own label, "<Subject 2>" or "<Subject 3>", and call each person only by that label; {dialogue_rule}describe only what the pictures show; never describe the backdrop, the walls, the floor or the light behind them: they are replaced; what they sit, lie or lean on is replaced too, so name it without its colour, pattern or material ("the sofa", "a cushion"); don't say how close the shot is or how much of them shows (no close-up, medium shot, wide shot, full view, waist up); write only what happens (nothing like "no one enters" or "no significant motion"); don't name anyone or quote printed text; don't mention pictures, frames, times or the replacement.{extra}
+
+### one_call (the one-call template)
+You are writing part of a prompt for a video-edit model. You are shown {n} pictures, frames sampled in order from one clip of a source video ({secs:.1f} seconds). In the edit, the person in the clip is replaced by a character, called "{subj}" below, who does exactly what the person does.
+
+The clip has {k} shot{k_s}. Shot by shot, the pictures that show it and the words spoken in it:
+{shot_lines}
+{objects_line}{prev_line}
+Write exactly three labelled parts and nothing else.
+
+video_1: ONE sentence about the source clip as a whole: where the person is, the setting and background, the light, what the person is doing overall, and the camera's angle and framing. Don't describe the person's face, hair or clothes.
+
+shots: {k} block{k_s}, one per shot, in order, each on its own line starting with "[Shot n]". For each shot describe only what its own pictures show: how {subj} sits or stands and leans, where {subj} looks, what each hand does, which object {subj} picks up, holds, shows or puts down, and how that changes through the shot. Shots differ: never repeat a sentence from one shot in another. {dialogue_rule}Present tense, 1 to 4 sentences per shot.
+
+sounds: ONE sentence: the sounds through the clip, in order{sounds_hint}.
+
+Rules:
+- Describe only what the pictures show. Name an object only in a shot whose pictures show it, by what it looks like (colour, shape, size). Never quote printed text, logos or brand names.
+- {Subj} is wherever the person is in the frame, as the pictures show it, and looks where the person looks.
+- {Poss} hands hold only what the person's hands hold.
+- Don't describe {poss} appearance or costume, and don't mention pictures, frames, times, "the person" or the replacement.{extra}
+
+### per_shot (the per-shot template: each shot)
+You are shown {n} pictures, frames sampled in order from one continuous shot ({secs:.1f} seconds) of a video. In the edit, the person in it is replaced by a character, called "{subj}" below, who does exactly what the person does.{part}
+{objects_line}{lines_block}
+Write 1 to 5 sentences, present tense, describing only what these pictures show {subj} doing, in the order it happens from the first picture to the last (the last pictures matter as much as the first): how {subj} sits or stands and leans, where {subj} looks, what each hand does, which object {subj} picks up, holds up, shows or puts down, and where {subj} holds it (for example close to the face). {dialogue_rule}
+
+Rules: name an object only if these pictures show it, by what it looks like (colour, shape, size); never quote printed text, logos or brand names; {subj} is wherever the person is in the frame, as these pictures show it, and looks where the person looks; {poss} hands hold only what the person's hands hold; don't describe {poss} appearance or costume; don't mention pictures, frames, times, "the person" or the replacement.{extra} Output only the sentences.
+
+### per_shot_chunk (the per-shot template: the clip and its sounds)
+You are shown {n} pictures, frames sampled in order from one clip of a source video ({secs:.1f} seconds). Write exactly two labelled lines and nothing else:
+
+video_1: ONE sentence about the clip as a whole: where the person is and what they sit or stand on, the background, the light and where it comes from, what the person is doing overall, and the camera: whether it looks down on the person from above, is level with them or looks up at them, whether it moves, and where the person's head sits in the frame (for example near the top edge, or in the centre). Don't describe the person's face, hair or clothes.
+sounds: ONE sentence: the sounds through the clip, in order{sounds_hint}.
+
+### bg_place (background replace: the place on the sheet)
+This picture shows a place: a set, a room or an outdoor scene. Write exactly two labelled lines and nothing else:
+
+name: a short name for the place, 2-4 words, lower case (for example "coffee-shop" or "ship-themed diner").
+features: ONE sentence, a comma-separated list of what the place is made of, from back to front: the walls (colours, stripes, panels), windows and doors, fixtures and fittings, furniture and counters, signs and decorations, and the light (its colour and where it comes from).
+
+Rules: concrete visual detail only (colour, material, shape, pattern), no mood or story. Never quote printed text, logos or brand names. Don't describe any person.
+
+### bg_place_2 (background replace with 2 references: the second picture of the place (once per job))
+This picture is a second reference of the same place as the first reference. Write exactly two labelled lines and nothing else:
+
+view: "closer" if it shows part of the place close up (a surface, a piece of furniture, a fitting), "angle" if it shows the place from another side or angle, or "same" if it shows the place from about the same view as a whole.
+detail: ONE sentence saying what this picture shows of the place: for a closer view, the surface or object seen close up, its colours, materials and pattern, and the light on it; for another angle, what that side of the place has; for the same view, the walls, furniture, fittings and light it shows most clearly.
+
+Rules: concrete visual detail only (colour, material, shape, pattern), no mood or story. Never quote printed text, logos or brand names. Don't describe any person.
+
+### bg_draft (background replace: the chunk)
+You are writing part of a prompt for a video-edit model. You are shown {n} pictures, frames sampled in order from one clip of a source video ({secs:.1f} seconds). In the edit, the person in the clip, called "{who}" below, is kept exactly as they are: only the background behind them is replaced by a new place. In some pictures {who} may be only partly in frame or not in frame at all.
+
+The clip has {k} shot{k_s}. Shot by shot, the pictures that show it and the words spoken in it:
+{shot_lines}
+Write exactly four labelled parts and nothing else.
+
+pronoun: she, he or they, for {who}.
+
+video_1: ONE sentence about the source clip as a whole: the camera's angle and height, whether the camera moves at all (and how, if it does), where in the frame {who} is, and where {who} moves through the frame (enters, crosses, leaves). Don't say how close the shot is or how much of {who} shows (no close-up, medium shot, wide shot, full view, waist up). Don't describe the backdrop, the wall or the floor: they are replaced.
+
+shots: {k} block{k_s}, one per shot, in order, each on its own line starting with "[Shot n]". For each shot describe, in the order it happens, only what its own pictures show: when {who} enters or leaves the frame and from which side, where in the frame {who} is, which way {who} faces and walks, what each hand does, where {who} looks, and the stretches where {who} is out of frame. {dialogue_rule}Present tense, 1 to 5 sentences per shot, each sentence about {who} by name.
+
+sounds: ONE sentence: the sounds through the clip, in order{sounds_hint}.
+
+Rules:
+- Describe only what the pictures show. Never quote printed text, logos or brand names.
+- Never describe the backdrop, the wall, the floor or the light behind {who}: the new place replaces them.
+- Write only what happens: leave out what doesn't happen (nothing like "no one enters" or "no significant motion").
+- Don't mention pictures, images, frames, times or the replacement.{extra}
+</text>
+<rect x="25" y="384" width="570" height="24" fill="#242424" opacity="0.4"/>
+<rect x="34" y="387" width="552" height="19" rx="4" fill="#3a3a3a" stroke="#555" stroke-width="1"/>
+<text x="42" y="400" fill="#9a9a9a" font-size="11">template_form</text>
+<text x="578" y="400" fill="#e8e8e8" font-size="11" text-anchor="end">subject_definitions:
+{subject_definitions}
+
+summary:
+{summary}
+
+retention_analysis:
+{retention_analysis}
+
+detailed_description:
+{detailed_description}
+
+overall_soundscape:
+{overall_soundscape}
+
+non_diegetic_music:
+{non_diegetic_music}
+</text>
+<rect x="34" y="411" width="552" height="19" rx="4" fill="#3a3a3a" stroke="#555" stroke-width="1"/>
+<text x="42" y="424" fill="#9a9a9a" font-size="11">template_name</text>
+<text x="578" y="424" fill="#e8e8e8" font-size="11" text-anchor="end"></text>
+<rect x="25" y="432" width="570" height="24" fill="#242424" opacity="0.4"/>
+<rect x="34" y="435" width="552" height="19" rx="4" fill="#3a3a3a" stroke="#555" stroke-width="1"/>
+<text x="42" y="448" fill="#9a9a9a" font-size="11">template_example</text>
+<text x="578" y="448" fill="#e8e8e8" font-size="11" text-anchor="end"></text>
+<rect x="34" y="459" width="552" height="19" rx="4" fill="#3a3a3a" stroke="#555" stroke-width="1"/>
+<text x="42" y="472" fill="#9a9a9a" font-size="11">template_base</text>
+<text x="578" y="472" fill="#e8e8e8" font-size="11" text-anchor="end">(automatic: the job's own template)</text>
 </svg>

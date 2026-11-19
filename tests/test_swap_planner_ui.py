@@ -59,6 +59,39 @@ def test_detect_cuts_finds_a_hard_cut(tmp_path):
     assert spl.detect_cuts(path, FR) == [20, 45]
 
 
+@pytest.mark.parametrize("ext,vcodec", [("mp4", ["-c:v", "libx264", "-preset", "ultrafast", "-qp", "0"]),
+                                        ("mkv", ["-c:v", "ffv1"])])
+def test_detect_cuts_lands_on_the_new_shot_at_29_97(tmp_path, ext, vcodec):
+    """test clip (2026-10-17): a 29.97 fps source planned at 30 had its cuts read as round(t * 30), one
+    late past frame ~500 (523 -> 524), so each chunk opened on the last frame of the shot before. A cut is the
+    first frame of the new shot on the decoder's own 30 fps timeline, the frames a chunk is cut from."""
+    import subprocess
+    import timeline as tl
+    from test_timeline import _ffmpeg
+    frames = _clip(289, 40, seed=1) + _clip(234, 210, seed=2) + _clip(523, 90, seed=3) + _clip(60, 160, seed=4)
+    path = str(tmp_path / f"ntsc.{ext}")       # native cuts at 289, 523 and 1046
+    subprocess.run([_ffmpeg(), "-v", "error", "-y", "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{W_}x{H_}",
+                    "-r", "30000/1001", "-i", "-", *vcodec, "-pix_fmt", "yuv444p" if ext == "mp4" else "gbrp", "-g", "1",
+                    path], input=np.stack(frames).tobytes(), check=True)
+    seen = [f.astype(np.int16).mean() for f in tl._iter_frames(path, 30, 0, None)]
+    truth = [i for i in range(1, len(seen)) if abs(seen[i] - seen[i - 1]) > 25]
+    assert truth == [289, 523, 1047]           # the decoder's 30 fps frames: 1046 is shown from 1047
+    assert spl.detect_cuts(path, 30) == truth
+    assert spl.detect_cuts(path, 30) != [289, 524, 1047]     # the old round(t * 30)
+
+
+def test_first_index_after_matches_the_decoder_rule():
+    import timeline as tl
+    # integer rate, exact stamps: the frame after k-1 is index k
+    assert [tl.first_index_after((k - 1) / 25, 0.0, 25, 1 / 25000) for k in (1, 20, 999)] == [1, 20, 999]
+    # MKV's whole-millisecond stamps sit early (48 fps: 83.333 ms stored as 83 ms); the tick tolerance holds them
+    assert tl.first_index_after(0.083, 0.0, 48, 1 / 1000) == 5
+    # 29.97 read at 30: native 522 (17.4174 s) is shown up to index 522, so the shot after it starts at 523
+    assert tl.first_index_after(522 * 1001 / 30000, 0.0, 30, 1 / 30000) == 523
+    # 60 fps read at 30: native 101 (index 50.5) is dropped, the next shot is seen from index 51
+    assert tl.first_index_after(100 / 60, 0.0, 30, 1 / 60000) == 51
+
+
 def test_detect_and_plan_is_one_step_and_keeps_worked_splits():
     p = _plan978(cuts=())
     spl.apply_op(p, {"op": "add_cut", "frame": 785, "from": "detected", "confirmed": False})
@@ -430,3 +463,42 @@ def test_the_strip_lists_each_line_with_its_speakers(tmp_path):
     assert out["lines"] == [{"who": "<Subject 2>", "id": "S1", "text": "Yeah,"},
                             {"who": "an off-screen male voice", "id": "S2", "text": "Bye."}]
     assert out["speakers"] == ["<Subject 1>", "<Subject 2>", "an off-screen male voice", "an off-screen female voice"]
+
+
+def test_a_shot_marked_as_nobody_caches_an_empty_mask_the_render_reuses(nodes):
+    # test clip 2026-10-17: SAM3 on a shot without the target marked a background and a shadow
+    p = sp.load_plan(nodes["plan"])
+    c = p["chunks"][1]
+    r0, r1 = c["render"]
+    root = str(nodes["dir"].parent.parent)
+    r = spl.do_op({"job": "t", "op": "empty_mask", "chunk": c["id"], "range": [r0, r1]}, root)
+    seg = r["plan"]["masks"][-1]
+    n = r1 - r0 + 1
+    assert seg["range"] == [r0, r1] and seg["empty"] == list(range(r0, r1 + 1)) and seg["chunk"] == c["id"]
+    assert tuple(seg["size"]) == spl.mark_size(p["source"])
+    out = _run(nodes, "render", chunk=c["id"], seed=3)["result"]
+    assert out[18] is True and float(out[17][:n].max()) == 0.0
+    with pytest.raises(sp.PlanError, match="outside the source"):
+        spl.do_op({"job": "t", "op": "empty_mask", "range": [0, 10 ** 6]}, root)
+
+
+def test_mark_size_is_the_one_megapixel_scale_sam3_sees():
+    assert spl.mark_size({"width": 1280, "height": 720}) == (1365, 768)
+
+
+def test_reroll_tooltip_seed_text_is_not_a_string_method():
+    """Q4 fault 4 (2026-11-17): seed_mode "new" is a string, and "new".fixed is String.prototype.fixed (a function), so
+    the tooltip read "Seed: fixed function fixed()". The expression is evaluated by node for each seed_mode shape."""
+    import re
+    import shutil
+    import subprocess
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node not on PATH")
+    js = open(os.path.join(os.path.dirname(__file__), "..", "js", "swap_planner.js"), encoding="utf-8").read()
+    m = re.search(r"Seed: \$\{(c\.seed_mode.*?\? `fixed \$\{c\.seed_mode\.fixed\}` : \"new\")\}`", js)
+    assert m, "the re-roll tooltip's seed expression moved: update this test"
+    script = ("const f = (c) => " + m.group(1) + "; "
+              "console.log(JSON.stringify([f({seed_mode: 'new'}), f({}), f({seed_mode: {fixed: 7}}), f({seed_mode: {fixed: 0}})]))")
+    out = subprocess.run([node, "-e", script], capture_output=True, text=True, check=True).stdout.strip()
+    assert out == '["new","new","fixed 7","fixed 0"]'

@@ -52,6 +52,9 @@ try:
     NODE_DISPLAY_NAME_MAPPINGS["SeamStitchTimeline"] = "SeamStitch Timeline"
     NODE_CLASS_MAPPINGS["SeamStitchResultPreview"] = SeamStitchResultPreview
     NODE_DISPLAY_NAME_MAPPINGS["SeamStitchResultPreview"] = "SeamStitch Result Preview"
+    from .batch_splice import SeamStitchBatchSplice
+    NODE_CLASS_MAPPINGS["SeamStitchBatchSplice"] = SeamStitchBatchSplice
+    NODE_DISPLAY_NAME_MAPPINGS["SeamStitchBatchSplice"] = "SeamStitch Batch Splice"
 except Exception as e:
     logging.getLogger(__name__).warning(f"[SeamStitch] Timeline / Result Preview not loaded: {e}")
 
@@ -88,6 +91,45 @@ try:
 except Exception as e:
     logging.getLogger(__name__).warning(f"[SeamStitch] Swap Draft Prompts not loaded: {e}")
 
+# SeamStitch Timeline Prompt: the 27B drafts the Timeline's prompt (Swap Draft's GGUF runner).
+try:
+    from .timeline_prompt import SeamStitchTimelinePrompt
+    NODE_CLASS_MAPPINGS["SeamStitchTimelinePrompt"] = SeamStitchTimelinePrompt
+    NODE_DISPLAY_NAME_MAPPINGS["SeamStitchTimelinePrompt"] = "SeamStitch Timeline Prompt (27B)"
+except Exception as e:
+    logging.getLogger(__name__).warning(f"[SeamStitch] Timeline Prompt not loaded: {e}")
+
+# SeamStitch Swap Zone Latent: an object add's latent (a zone regenerated, the rest and the audio held).
+# Needs core ComfyUI's MiniMax H3 support; a ComfyUI without it drops only this node.
+try:
+    from .swap_zone import SeamStitchSwapZoneLatent, SeamStitchSwapZoneFirst, SeamStitchSwapZoneGuides, SeamStitchAnchorHold
+    NODE_CLASS_MAPPINGS["SeamStitchSwapZoneLatent"] = SeamStitchSwapZoneLatent
+    NODE_DISPLAY_NAME_MAPPINGS["SeamStitchSwapZoneLatent"] = "SeamStitch Swap Zone Latent"
+    NODE_CLASS_MAPPINGS["SeamStitchSwapZoneFirst"] = SeamStitchSwapZoneFirst
+    NODE_DISPLAY_NAME_MAPPINGS["SeamStitchSwapZoneFirst"] = "SeamStitch Swap Zone First Frame"
+    NODE_CLASS_MAPPINGS["SeamStitchSwapZoneGuides"] = SeamStitchSwapZoneGuides
+    NODE_DISPLAY_NAME_MAPPINGS["SeamStitchSwapZoneGuides"] = "SeamStitch Swap Zone Guides"
+    NODE_CLASS_MAPPINGS["SeamStitchAnchorHold"] = SeamStitchAnchorHold
+    NODE_DISPLAY_NAME_MAPPINGS["SeamStitchAnchorHold"] = "SeamStitch Anchor Hold (stop before H3)"
+except Exception as e:
+    logging.getLogger(__name__).warning(f"[SeamStitch] Swap Zone Latent not loaded: {e}")
+
 WEB_DIRECTORY = "js"
 
 __all__ = ["NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS", "WEB_DIRECTORY"]
+
+# SeamStitchVosrPolish: optional VOSR 2.0 sharpen step; calls the ComfyUI-VOSR2 pack's nodes at run time.
+try:
+    from .vosr_polish import SeamStitchVosrPolish
+    NODE_CLASS_MAPPINGS["SeamStitchVosrPolish"] = SeamStitchVosrPolish
+    NODE_DISPLAY_NAME_MAPPINGS["SeamStitchVosrPolish"] = "SeamStitch VOSR Polish"
+except Exception as e:
+    logging.getLogger(__name__).warning(f"[SeamStitch] VOSR Polish not loaded: {e}")
+
+# SeamStitch Frame Grab: a first and a last frame out of a video (or a connected batch) as lossless images.
+try:
+    from .frame_grab import SeamStitchFrameGrab
+    NODE_CLASS_MAPPINGS["SeamStitchFrameGrab"] = SeamStitchFrameGrab
+    NODE_DISPLAY_NAME_MAPPINGS["SeamStitchFrameGrab"] = "SeamStitch Frame Grab (first / last)"
+except Exception as e:
+    logging.getLogger(__name__).warning(f"[SeamStitch] Frame Grab not loaded: {e}")

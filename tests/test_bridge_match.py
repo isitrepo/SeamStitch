@@ -186,3 +186,40 @@ def test_flicker_like_the_sources_own_is_kept():
     bridge = _frames(6, (100, 90, 80), 20, [0, 1.5, 0, -1.5, 0, 1.5])
     out, rows = bm.match_bridge(bridge, left, right)
     assert all(abs(c) < 0.05 for r in rows for c in r["flicker_cut"])
+
+
+def _solve_reference(rgb, target, iters=22):
+    """_solve as it was before the buffer-reusing trial: a full-size array allocated for every trial."""
+    f = rgb.astype(np.float32)
+    blur = cv2.GaussianBlur(f, (0, 0), bm.SIGMA)
+    lo, hi = bm.AMOUNT
+    if bm.detail(bm._q(bm._unsharp(f, blur, hi))) <= target:
+        return hi, bm._unsharp(f, blur, hi)
+    if bm.detail(bm._q(bm._unsharp(f, blur, lo))) >= target:
+        return lo, bm._unsharp(f, blur, lo)
+    for _ in range(iters):
+        mid = (lo + hi) / 2
+        if bm.detail(bm._q(bm._unsharp(f, blur, mid))) < target:
+            lo = mid
+        else:
+            hi = mid
+    return lo, bm._unsharp(f, blur, lo)
+
+
+@pytest.mark.parametrize("target_scale", [0.3, 1.0, 3.0, 1000.0, 0.0001])   # in range, and past both ends
+def test_solve_matches_the_original_expression_byte_for_byte(target_scale):
+    frame = _texture(5, 0.9)
+    target = bm.detail(frame) * target_scale
+    a_new, f_new = bm._solve(frame, target)
+    a_old, f_old = _solve_reference(frame, target)
+    assert a_new == a_old and np.array_equal(f_new, f_old)
+
+
+def test_matching_frames_on_several_threads_gives_the_same_bytes_and_rows():
+    left = np.stack([_texture(i, 0.7) for i in range(6)])
+    right = np.stack([_texture(10 + i, 0.0, (110, 96, 92)) for i in range(6)])
+    bridge = np.stack([_texture(20 + i, 1.3, (114, 92, 88)) for i in range(9)])
+    one, rows_one = bm.match_bridge(bridge, left, right, workers=1)
+    many, rows_many = bm.match_bridge(bridge, left, right, workers=4)
+    assert np.array_equal(one, many) and rows_one == rows_many
+    assert [r["frame"] for r in rows_many] == list(range(9))               # in frame order

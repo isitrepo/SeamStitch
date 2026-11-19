@@ -65,7 +65,9 @@ import torch
 try:
     from . import timeline as tl
     from .audio_splice import frame_sample, match_format, splice_audio
+    from . import batch_splice as bs
 except ImportError:
+    import batch_splice as bs
     import timeline as tl
     from audio_splice import frame_sample, match_format, splice_audio
 
@@ -482,6 +484,11 @@ class SeamStitchResultPreview:
         master = _view_params(result)
         timeline_path = (f"{master['subfolder']}/{master['filename']}" if master['subfolder'] else master['filename']) \
             if master and master["type"] == "output" else result
+        try:   # beside the result: what a batch splice needs to lay its bridge back into the cut
+            if master and master["type"] == "output":
+                bs.write_seam_record(result, source_video_path, fr, out_fr, int(start_frame), int(end_frame), a)
+        except Exception as e:
+            print(f"[SeamStitch] Result: seam record not written: {e}")
         carried = None
         try:
             rec = tl.carry_joins(source_video_path, result, timeline_path, int(start_frame), int(end_frame), a, out_fr)

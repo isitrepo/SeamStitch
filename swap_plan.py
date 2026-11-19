@@ -163,7 +163,112 @@ def chunk_target(plan, chunk):
 # the strip; it drives SAM3's paint mask (inverted for background), the drafter's template and subject, and which
 # takes count. A plan from before the switch carries "invert" instead.
 MODE_CHARACTER, MODE_BACKGROUND = "character", "background"
-MODES = (MODE_CHARACTER, MODE_BACKGROUND)
+# object replace (2026-10-20): the job's source is usually a finished swap's assembly. The target is a thing ("the
+# painting on the wall") or the place a new thing goes ("his left shoulder"); the sheet is the new object. Rendered
+# like a character job (the target marked), but its assembly is the SOURCE everywhere except inside the target's own
+# mask, grown and feathered, where the take is pasted (swap_keep.ObjectCompositor): the rest of the frame can't drift.
+MODE_OBJECT = "object"
+MODES = (MODE_CHARACTER, MODE_BACKGROUND, MODE_OBJECT)
+OBJECT_REPLACE, OBJECT_ADD = "replace", "add"
+OBJECT_ACTIONS = (OBJECT_REPLACE, OBJECT_ADD)
+# grow is wider for an added object: it is drawn ON the target (a bird on a shoulder) and reaches past its mask
+# crop (2026-10-20, test-clip painting): rendered whole-frame, H3 left the painting alone and re-cast the man in front of
+# it instead, the people being what its training swaps. An object job renders a crop around the target (the union of
+# its cached masks over the chunk, each side padded by CROP_PAD of its own length, at least CROP_MIN px), so the object fills
+# the picture H3 sees; Swap Take pastes the render back into the source frame at that box.
+# fill "picture" (2026-10-21, test-clip painting -> a car photo): a flat target (a painting, a poster, a screen) takes
+# the picture itself, fitted over the target's box per shot and matched to its light, through the target's mask, with
+# no render: H3, cropped or not, drew a real car and re-cast the man in front. "render" = the H3 take (3D things).
+OBJECT_FILLS = ("render", "picture")
+OBJECT_DEFAULTS = {"action": OBJECT_REPLACE, "grow": 12, "feather": 6, "level": "ring", "crop": True, "fill": "render",
+                   "picture": "", "cutout": None, "size": 1.3, "sink": 0.12, "light": 1.8, "paste_grow": 12,
+                   "shadow": 0.0, "colour": 0.0, "soften": 0.0, "grain": False, "guide": "composite", "from_take": "",
+                   "crop_pad": 0.35, "paste": "mask", "text": "", "use_picture": True, "keep_people": True,
+                   "zone_grow": 40, "zone_shape": "ellipse", "zone_aspect": 1.0, "zone_dx": 0.0, "zone_dy": 0.0,
+                   "zone_spare": False, "zone_touch_dx": 0.0, "zone_touch_dy": 0.0, "zone_touch_r": 0.0,
+                   "anchor": "qwen", "anchor_at": 0.0, "enter_at": 0.0, "anchor_picture": "", "zone_keys": [], "brief": ""}
+# the plain way (2026-10-21, request: "make use of what MiniMax's reference options can do"): the people declared as kept
+# subjects (keep_people), the object from the picture or from text alone (text, use_picture false), the whole frame
+# rendered, no crop, no marking, and the take used as it is (paste "frame") rather than only inside the target's mask.
+# an add's guide (2026-10-21 tests): "composite" = the cut-out on every frame, refined img2img (object_refine on);
+# "pins" = the cut-out on the first and last frames only, as the main render's start / end pins (H3 animates it
+# between them; the source is the guide video); "take" = a take of this chunk (from_take) refined again img2img
+# (a second, gentler pass over a wider crop). crop_pad: the crop's padding, each side, of its own length.
+# "placeholder" (2026-10-21, the last H3-native try at adding): a flat grey silhouette of the cut-out drawn on the
+# target in every frame and marked as the thing to edit, so H3 gets its own job - replace the marked thing - on a
+# small region, with the people declared kept.
+#
+# "zone" (2026-10-24, the sticker look of "composite"): no cut-out is pasted. A ZONE is drawn around where the object goes,
+# on every frame (swap_keep.ZoneGuide: from the target's cached masks), and H3 redraws only that zone in the context of
+# everything around it (swap_zone.SeamStitchSwapZoneLatent), the rest of the crop and the audio held. One anchor picture
+# (the thing drawn into a single frame, e.g. by Qwen Image Edit) pins who/what it is; before enter_at the zone stays
+# empty. zone_dx / zone_dy move the zone from the target's top-centre, in target widths; size is its height in target
+# widths, zone_aspect its width over its height; zone_grow pads it in pixels. zone_spare takes the target's own pixels
+# out of the zone (a person added beside someone: she must stay as filmed); zone_touch_* puts a circle back on the target
+# (centre from its top-centre, radius, in target widths) where the new thing touches it (a hand on her shoulder).
+# anchor_at / enter_at are seconds from the render's start. anchor: "qwen" (Qwen Image Edit draws the thing into the
+# plate frame, from the chunk's anchor text: its own, else zone_anchor_text), "composite" (the cut-out of Picture 1 placed
+# on that frame, no model) or "picture" (anchor_picture: your own finished anchor frame, a file in ComfyUI's input folder).
+OBJECT_GUIDES = ("composite", "pins", "take", "placeholder", "zone")
+ZONE_SHAPES = ("ellipse", "box", "mask")
+ANCHOR_MODES = ("qwen", "composite", "picture")
+# "add" with a cut-out (the graph's BiRefNet of Picture 1, saved into the job by the Planner): the render's guide is the
+# cut-out composited on the target (swap_keep.CompositeGuide), refined by H3 img2img; size = its height in target widths,
+# sink = how far its feet sit into the target, light = its luma against the scene's, paste_grow = px around its alpha.
+PICTURE_GROW, PICTURE_FEATHER, PICTURE_SOFTEN = 1, 1.0, 0.7
+CROP_PAD = 0.35
+CROP_MIN = 256
+OBJECT_ADD_GROW = 60
+
+
+def object_composite(plan):
+    """An object job that adds a cut-out: rendered from the composite guide, pasted back through the cut-out's alpha."""
+    if job_mode(plan) != MODE_OBJECT:
+        return False
+    o = object_settings(plan)
+    return (o["action"] == OBJECT_ADD and o.get("fill") == "render" and o.get("guide") != "zone"
+            and bool((o.get("cutout") or {}).get("rgb")))
+
+
+def object_zone(plan):
+    """An object job that adds a thing by redrawing a zone (guide "zone"): no cut-out is composited."""
+    if job_mode(plan) != MODE_OBJECT:
+        return False
+    o = object_settings(plan)
+    return o["action"] == OBJECT_ADD and o.get("fill") == "render" and o.get("guide") == "zone"
+
+
+# A zone add's zone can be locked to a spot from a source frame on: "zone_keys" is a list of {"frame": n, <ZONE_KEY_FIELDS>}, and
+# from each key's frame the zone holds that spot until the next key (before the first key, the job's own numbers hold).
+ZONE_KEY_FIELDS = ("size", "zone_aspect", "zone_dx", "zone_dy", "zone_touch_dx", "zone_touch_dy", "zone_touch_r")
+
+
+def zone_key_at(o, frame):
+    """The zone key holding on source frame `frame` (the last one at or before it), or None."""
+    k = None
+    for key in sorted((o or {}).get("zone_keys") or [], key=lambda x: x["frame"]):
+        if key["frame"] <= frame:
+            k = key
+    return k
+
+
+def zone_at(o, frame):
+    """The object settings as they hold on source frame `frame`: the zone numbers of the key in force laid over them."""
+    k = zone_key_at(o, frame)
+    if k is None:
+        return o
+    r = dict(o)
+    r.update({f: k[f] for f in ZONE_KEY_FIELDS if f in k})
+    return r
+
+
+def object_settings(plan):
+    o = dict(OBJECT_DEFAULTS)
+    given = (plan or {}).get("object") or {}
+    if given.get("action") == OBJECT_ADD and "grow" not in given:
+        o["grow"] = OBJECT_ADD_GROW
+    o.update({k: v for k, v in given.items() if k in OBJECT_DEFAULTS})
+    return o
 
 
 def job_mode(plan):
@@ -189,7 +294,8 @@ def job_guide(plan):
 def chunk_invert(plan, chunk):
     """Mark everything but the target instead of the target: a background replace, or a character replace whose
     guide marks the backdrop. One per job."""
-    return job_mode(plan) == MODE_BACKGROUND or job_guide(plan) == GUIDE_BACKDROP
+    m = job_mode(plan)
+    return m == MODE_BACKGROUND or (m == MODE_CHARACTER and job_guide(plan) == GUIDE_BACKDROP)
 
 
 def take_mode(take):
@@ -286,7 +392,9 @@ def warnings(frames, splits, cuts=(), settings=None, chunks=None, keep=()):
         if L > s["trained_max"]:
             out.append(dict(where, code="trained", text=f"render {L} frames is over H3's trained range ({s['trained_max']})"))
         elif L > s["ceiling"]:
-            out.append(dict(where, code="ceiling", text=f"render {L} frames is over the tested ceiling ({s['ceiling']}): two-pass renders failed or crashed ComfyUI at 226 (B5b), 243 and 260 frames (B5a), at the 1 MP refine (system RAM)"))
+            # what longer renders did: a character swap kept the source person and lost cuts at 294 frames and held at
+            # 124-175 (test clip, single pass, 2026-10-17); two-pass renders crashed at 226-260 (B5a/B5b, 1 MP refine)
+            out.append(dict(where, code="ceiling", text=f"render {L} frames is over the ceiling ({s['ceiling']}): at 294 frames a character swap kept the source person and lost cuts (held at 124-175); two-pass renders crashed ComfyUI at 226-260 frames. Add a split"))
     for i, c in enumerate(chunks[1:], start=1):
         sp = c["left"]
         J = sp["frame"]
@@ -635,6 +743,54 @@ def mask_cover(plan, a, b, target=""):
     return out
 
 
+# Object keep: a thing the swap must not change (test clip, 2026-10-20: H3 drew his white shoes black in c10 and as a
+# pink sock in c11). The source's own pixels of it are pasted over the takes through its SAM3 mask (a mark run with
+# the keep's target, kind "keep"), grown and feathered, at assembly. Nothing is re-rendered. A keep is
+# {"id", "target", "range": [a, b], "grow", "feather", "level", "on"}; grow and feather are in source pixels.
+KEEP_GROW = 6
+KEEP_FEATHER = 4
+KEEP_LEVEL_RING, KEEP_LEVEL_NONE = "ring", "none"
+KEEP_LEVELS = (KEEP_LEVEL_RING, KEEP_LEVEL_NONE)
+# as filmed by default: on test clip c10 the ring around the shoe still held the black shoe the take drew, so "ring"
+# sat on its clamp (0.85) and greyed the shoe; the source's own white matched by eye (2026-10-20)
+KEEP_LEVEL_DEFAULT = KEEP_LEVEL_NONE
+
+
+def object_keeps(plan, on_only=True):
+    out = []
+    for k in plan.get("object_keeps") or []:
+        if on_only and not k.get("on", True):
+            continue
+        out.append(dict({"grow": KEEP_GROW, "feather": KEEP_FEATHER, "level": KEEP_LEVEL_DEFAULT, "on": True}, **k))
+    return out
+
+
+def keep_segments(plan, keep, a, b):
+    """The cached masks of a keep's target over source frames a..b (clipped to the keep's range), newest first per
+    frame: [(segment, f0, f1), ...] in frame order. Frames no mask covers are left out (nothing is pasted there)."""
+    lo, hi = max(int(a), int(keep["range"][0])), min(int(b), int(keep["range"][1]))
+    segs = sorted((m for m in plan.get("masks") or [] if m.get("target", "") == keep["target"]),
+                  key=lambda m: str(m.get("created", "")), reverse=True)
+    out, f = [], lo
+    while f <= hi:
+        seg = next((m for m in segs if m["range"][0] <= f <= m["range"][1]), None)
+        if seg is None:
+            nxt = [int(m["range"][0]) for m in segs if f < int(m["range"][0]) <= hi]
+            if not nxt:
+                break
+            f = min(nxt)
+            continue
+        f1 = min(hi, int(seg["range"][1]))
+        for m in segs:
+            if m is seg:
+                break
+            if f < m["range"][0] <= f1:
+                f1 = int(m["range"][0]) - 1
+        out.append((seg, f, f1))
+        f = f1 + 1
+    return out
+
+
 def mask_coverage(plan, a, b, target=""):
     """How many of source frames a..b some cached mask segment for `target` covers (the strip's mask row)."""
     hit = set()
@@ -792,7 +948,7 @@ def find_take(plan, take_id):
 
 def next_take_id(chunk):
     n = 0
-    for t in chunk.get("takes", []):
+    for t in chunk.get("takes", []) + chunk.get("past_takes", []):
         try:
             n = max(n, int(str(t["id"]).rsplit("-t", 1)[1]))
         except (KeyError, IndexError, ValueError):
@@ -896,3 +1052,19 @@ def update_plan(path, fn, expect_rev=None):
 
 def snapshot(plan):
     return copy.deepcopy(plan)
+
+
+def zone_anchor_text(plan, chunk=None):
+    """What Qwen is asked to draw into the anchor frame: the chunk's own anchor_text, else a plain sentence from the
+    job's target and where the zone sits (zone_dx < 0 = left of the target). Picture 2 / the sheet is image 2."""
+    own = ((chunk or {}).get("anchor_text") or "").strip()
+    if own:
+        return own
+    o = object_settings(plan)
+    target = (plan.get("target") or "").strip() or "the person"
+    target = target if target.lower().startswith(("the ", "a ", "an ", "his ", "her ")) else f"the {target}"
+    brief = (o.get("brief") or "").strip().rstrip(".")
+    where = f"as described: {brief}" if brief else "at a natural place in the room"     # the zone is only where H3 redraws: it never says where
+    return (f"Add the person or thing from image 2 into image 1, {where}, so that all of it is inside the picture, at a natural "
+            f"size, with its feet or base resting where it would in this room. Keep {target}, the room, the furniture and the "
+            f"lighting exactly as they are. Light the new thing with the same light as the scene, with sharp fine detail.")

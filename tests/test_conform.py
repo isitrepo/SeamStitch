@@ -454,10 +454,9 @@ def test_a_saved_timeline_workflow_still_maps(request):
     Preview node's widgets_values maps onto the same names as before."""
     import timeline as tl
     import result_preview as rp
-    path = os.path.join("<ComfyUI>/user/default/workflows",
-                        "Seamstitch - Timeline 3.json")
+    path = os.environ.get("SEAMSTITCH_TEST_TIMELINE_WORKFLOW", "")   # a saved Timeline 3 workflow .json
     if not os.path.isfile(path):
-        pytest.skip("Timeline 3 workflow not on this machine")
+        pytest.skip("set SEAMSTITCH_TEST_TIMELINE_WORKFLOW to a saved Timeline 3 workflow to run this")
     w = json.load(open(path, encoding="utf-8"))
     t = _widget_names(tl.SeamStitchTimeline.INPUT_TYPES())
     p = _widget_names(rp.SeamStitchResultPreview.INPUT_TYPES())

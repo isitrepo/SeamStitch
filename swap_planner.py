@@ -73,13 +73,23 @@ ACTIONS = (ACTION_RENDER, ACTION_ASSEMBLE, ACTION_DRAFT, ACTION_MARK, ACTION_NON
 # tracked up front and cached per range); 17-18 a render run's cached source mask, when one covers it; 19-20 the
 # first pass's size in the source's shape (H3's width / height).
 RETURN_TYPES = (CHUNK_TYPE, "IMAGE", "AUDIO", "STRING", "INT", "INT", "IMAGE", "IMAGE", "INT", "INT", "INT",
-                "INT", "STRING", "STRING", "STRING", MARK_TYPE, "IMAGE", "MASK", "BOOLEAN", "INT", "INT")
+                "INT", "STRING", "STRING", "STRING", MARK_TYPE, "IMAGE", "MASK", "BOOLEAN", "INT", "INT", "BOOLEAN",
+                "MASK", "BOOLEAN", "INT", "INT", "STRING", "IMAGE", "BOOLEAN")
 RETURN_NAMES = ("chunk", "images", "audio", "prompt", "seed", "length", "start_pins", "end_pins", "width",
                 "height", "frame_rate", "source_frame_rate", "options", "draft_plan", "assemble_plan",
-                "mark_chunk", "mark_images", "source_mask", "has_source_mask", "render_width", "render_height")
+                "mark_chunk", "mark_images", "source_mask", "has_source_mask", "render_width", "render_height",
+                "object_refine", "object_zone", "zone_on", "anchor_frame", "enter_frame", "anchor_prompt", "anchor_image",
+                "anchor_qwen")
 OUT_OPTIONS, OUT_DRAFT, OUT_ASSEMBLE = 12, 13, 14
 OUT_MARK_CHUNK, OUT_MARK_IMAGES, OUT_SOURCE_MASK, OUT_HAS_MASK = 15, 16, 17, 18
 OUT_RENDER_W, OUT_RENDER_H = 19, 20
+OUT_OBJECT_REFINE = 21          # an object add with a cut-out: images are the composite, for the H3 img2img refine
+# 22-25, an object add with guide "zone": the zone per frame at the images' size (white = H3 redraws it), whether this
+# render is one, the frame the anchor picture is drawn into, and the frame the thing enters (the zone stays empty before)
+OUT_OBJECT_ZONE, OUT_ZONE_ON, OUT_ANCHOR_FRAME, OUT_ENTER_FRAME = 22, 23, 24, 25
+# 26-28: what Qwen is asked to draw into the anchor frame (the chunk's anchor text, else a plain sentence), the anchor
+# picture of the "composite" and "picture" anchors (a frame of the render's size), and whether Qwen draws the anchor
+OUT_ANCHOR_PROMPT, OUT_ANCHOR_IMAGE, OUT_ANCHOR_QWEN = 26, 27, 28
 # H3's first pass: about 0.3 MP (736 x 416 for 16:9). The example graph had 736 x 416 fixed, so a portrait source
 # (the 720 x 1280 wrestling clip, 2026-10-09) was generated landscape and stretched to 9:16 by the resize.
 PASS1_AREA = 736 * 416
@@ -328,6 +338,10 @@ def apply_op(plan, body):
         c = _chunk(plan, body["chunk"])
         c["prompt"] = body.get("prompt") or ""
         c["prompt_state"] = "edited" if c["prompt"].strip() else "empty"
+    elif op == "set_anchor_text":
+        # a zone add's Qwen instruction for one chunk ("" = the plain sentence swap_plan.zone_anchor_text writes)
+        c = _chunk(plan, body["chunk"])
+        c["anchor_text"] = (body.get("text") or "").strip()
     elif op == "set_line_speaker":
         # who says one dialogue line of the chunk's prompt (the strip's picker, where the drafter couldn't tell)
         try:
@@ -462,6 +476,116 @@ def apply_op(plan, body):
     elif op == "delete_mask":
         mid = body.get("mask")
         plan["masks"] = [m for m in plan.get("masks", []) if m.get("id") != mid]
+    elif op in ("add_object_keep", "set_object_keep"):
+        # an object kept from the source (swap_plan.object_keeps): {"target", "range": [a, b] | "chunk", "grow",
+        # "feather", "level", "on"}; set_object_keep names its "id" and changes only what it is given
+        keeps = plan.setdefault("object_keeps", [])
+        if op == "add_object_keep":
+            ids = [int(k["id"][1:]) for k in keeps if str(k.get("id", "")).startswith("k") and k["id"][1:].isdigit()]
+            k = {"id": f"k{(max(ids) if ids else 0) + 1:03d}"}
+        else:
+            k = next((x for x in keeps if x.get("id") == body.get("id")), None)
+            if k is None:
+                raise sp.PlanError(f"no object keep {body.get('id')!r}")
+        if "target" in body or op == "add_object_keep":
+            t = (body.get("target") or "").strip()
+            if not t:
+                raise sp.PlanError("an object keep needs a target: what to keep, e.g. \"white shoe\"")
+            if t == (plan.get("target") or "").strip():
+                raise sp.PlanError(f"{t!r} is the job's replace target: an object keep names something else")
+            k["target"] = t
+        if body.get("chunk"):
+            k["range"] = list(_chunk(plan, body["chunk"])["deliver"])
+        elif "range" in body or op == "add_object_keep":
+            r = body.get("range") or [0, int(plan["source"]["frames"]) - 1]
+            a, b = int(r[0]), int(r[1])
+            if not 0 <= a <= b < int(plan["source"]["frames"]):
+                raise sp.PlanError(f"object keep range {a}-{b} is outside the source")
+            k["range"] = [a, b]
+        for key, lo, hi in (("grow", 0, 200), ("feather", 0, 100)):
+            if key in body:
+                k[key] = max(lo, min(hi, int(body[key])))
+        if "level" in body:
+            if body["level"] not in sp.KEEP_LEVELS:
+                raise sp.PlanError(f"level is one of {', '.join(sp.KEEP_LEVELS)}")
+            k["level"] = body["level"]
+        if "on" in body:
+            k["on"] = bool(body["on"])
+        if op == "add_object_keep":
+            keeps.append(k)
+        res["keep"] = dict(k)
+    elif op == "set_object":
+        # an object job's settings (swap_plan.object_settings): {"action": "replace"|"add", "grow", "feather", "level"}
+        o = dict(plan.get("object") or {})
+        if "action" in body:
+            if body["action"] not in sp.OBJECT_ACTIONS:
+                raise sp.PlanError(f"action is one of {', '.join(sp.OBJECT_ACTIONS)}")
+            o["action"] = body["action"]
+        for key, lo, hi in (("grow", 0, 400), ("feather", 0, 100), ("paste_grow", 0, 200)):
+            if key in body:
+                o[key] = max(lo, min(hi, int(body[key])))
+        for key, lo, hi in (("size", 0.1, 5.0), ("sink", -0.5, 0.8), ("light", 0.2, 5.0), ("shadow", 0.0, 1.0),
+                            ("colour", 0.0, 1.0), ("soften", 0.0, 10.0), ("crop_pad", 0.0, 2.0)):
+            if key in body:
+                o[key] = max(lo, min(hi, float(body[key])))
+        if "grain" in body:
+            o["grain"] = bool(body["grain"])
+        if "guide" in body:
+            if body["guide"] not in sp.OBJECT_GUIDES:
+                raise sp.PlanError(f"guide is one of {', '.join(sp.OBJECT_GUIDES)}")
+            o["guide"] = body["guide"]
+        if "from_take" in body:
+            o["from_take"] = (body.get("from_take") or "").strip()
+        if "paste" in body:
+            if body["paste"] not in ("mask", "frame"):
+                raise sp.PlanError("paste is mask or frame")
+            o["paste"] = body["paste"]
+        if "text" in body:
+            o["text"] = (body.get("text") or "").strip()
+        for key in ("use_picture", "keep_people", "crop", "zone_spare"):
+            if key in body:
+                o[key] = bool(body[key])
+        for key, lo, hi in (("zone_aspect", 0.1, 10.0), ("zone_dx", -5.0, 5.0), ("zone_dy", -5.0, 5.0),
+                            ("zone_touch_dx", -5.0, 5.0), ("zone_touch_dy", -5.0, 5.0), ("zone_touch_r", 0.0, 3.0),
+                            ("anchor_at", 0.0, 600.0), ("enter_at", 0.0, 600.0)):
+            if key in body:
+                o[key] = max(lo, min(hi, float(body[key])))
+        if "zone_grow" in body:
+            o["zone_grow"] = max(0, min(400, int(body["zone_grow"])))
+        if "brief" in body:                            # what to add, in the user's words: the drafter writes both prompts from it
+            o["brief"] = " ".join(str(body.get("brief") or "").split())[:600]
+        if "zone_keys" in body:                        # the zone locked to a spot from a frame on (swap_plan.zone_at)
+            lim = {"size": (0.1, 5.0), "zone_aspect": (0.1, 10.0), "zone_dx": (-5.0, 5.0), "zone_dy": (-5.0, 5.0),
+                   "zone_touch_dx": (-5.0, 5.0), "zone_touch_dy": (-5.0, 5.0), "zone_touch_r": (0.0, 3.0)}
+            keys = {}
+            for k in body["zone_keys"] or []:
+                fr = max(0, int(k["frame"]))
+                keys[fr] = dict({"frame": fr}, **{f: max(lim[f][0], min(lim[f][1], float(k[f]))) for f in sp.ZONE_KEY_FIELDS if f in k})
+            o["zone_keys"] = [keys[f] for f in sorted(keys)]
+        if "zone_shape" in body:
+            if body["zone_shape"] not in sp.ZONE_SHAPES:
+                raise sp.PlanError(f"zone_shape is one of {', '.join(sp.ZONE_SHAPES)}")
+            o["zone_shape"] = body["zone_shape"]
+        if "anchor_picture" in body:
+            o["anchor_picture"] = (body.get("anchor_picture") or "").strip()
+        if "anchor" in body:
+            if body["anchor"] not in sp.ANCHOR_MODES:
+                raise sp.PlanError(f"anchor is one of {', '.join(sp.ANCHOR_MODES)}")
+            o["anchor"] = body["anchor"]
+        if "level" in body:
+            if body["level"] not in sp.KEEP_LEVELS:
+                raise sp.PlanError(f"level is one of {', '.join(sp.KEEP_LEVELS)}")
+            o["level"] = body["level"]
+        if "fill" in body:
+            if body["fill"] not in sp.OBJECT_FILLS:
+                raise sp.PlanError(f"fill is one of {', '.join(sp.OBJECT_FILLS)}")
+            o["fill"] = body["fill"]
+        if "picture" in body:
+            o["picture"] = (body.get("picture") or "").strip()
+        plan["object"] = o
+        res["object"] = sp.object_settings(plan)
+    elif op == "remove_object_keep":
+        plan["object_keeps"] = [k for k in plan.get("object_keeps") or [] if k.get("id") != body.get("id")]
     elif op == "clear_all":
         # start fresh: every cut, split, kept stretch and prompt goes (one chunk over the whole source).
         # Nothing is erased: chunks with takes or prompts are listed under removed_chunks (their take
@@ -669,6 +793,186 @@ def _op_delete_mask(plan, body, jd):
     return {"op": "delete_mask", "mask": m["id"], "trash": where}
 
 
+def _stash_takes(c):
+    """A chunk's takes out of play: listed under past_takes (next_take_id counts those, so no id is reused)."""
+    have = {t["id"] for t in c.get("past_takes", [])}
+    c.setdefault("past_takes", []).extend(t for t in c.get("takes") or [] if t["id"] not in have)
+    c["takes"] = []
+
+
+# ---------------------------------------------------------------------------
+# a chunk's take as that chunk's own source. The job keeps ONE source file (everything downstream reads it), so the
+# edit is a patched copy of the original: lossless, the original's audio, and the chosen chunks' frames replaced by
+# the take's. Built once per set of edits (kept by a hash of them: flipping back and forth reuses the files), with
+# no joins, grades or fades: that is assembly's work, on the takes, as ever.
+# ---------------------------------------------------------------------------
+
+def _patched_key(orig, overrides):
+    h = hashlib.sha1(json.dumps([orig["path"], orig.get("mtime_ns"), orig.get("size"),
+                                 sorted((cid, o["file"], o["render"][0], o["range"]) for cid, o in overrides.items())],
+                                default=str).encode()).hexdigest()
+    return h[:12]
+
+
+def build_patched_source(jd, orig, overrides, progress=None):
+    """The original with each override's frames (take file, offset = its render start) in its range. Returns the new
+    source facts; a file already built for the same edits is reused."""
+    try:
+        from . import swap_assemble as sa
+    except ImportError:
+        import swap_assemble as sa
+    out_dir = os.path.join(jd, "source")
+    os.makedirs(out_dir, exist_ok=True)
+    key = _patched_key(orig, overrides)
+    for f in os.listdir(out_dir):
+        if f.startswith(f"patched_{key}.") and ".part" not in f:
+            return source_facts(os.path.join(out_dir, f))
+    fr, N = int(round(float(orig["fps"]))), int(orig["frames"])
+    w, h = int(orig["width"]), int(orig["height"])
+    spec = sa._format_spec("video/ffv1-mkv", 0, "yuv420p")
+    final = os.path.join(out_dir, f"patched_{key}.{spec['extension']}")
+    video_only = os.path.join(out_dir, f"patched_{key}.video.part.{spec['extension']}")
+    rd_orig = sa.FrameReader(orig["path"], fr, 0, (w, h))
+    spans = sorted((int(o["range"][0]), int(o["range"][1]), sa.FrameReader(os.path.join(jd, o["file"]), fr, int(o["render"][0]), (w, h)))
+                   for o in overrides.values())
+    enc = sa.StreamEncoder(video_only, w, h, fr, spec)
+    try:
+        for f in range(N):
+            rd = next((r for a, b, r in spans if a <= f <= b), rd_orig)
+            enc.write(rd.read(f))
+            if progress and f % 50 == 0:
+                progress(f, N)
+        enc.close()
+        if orig.get("audio"):
+            sa._mux_audio(video_only, orig["path"], final, spec)
+        else:
+            os.replace(video_only, final)
+    except BaseException:
+        for p in (video_only, final):
+            try:
+                os.remove(p)
+            except OSError:
+                pass
+        raise
+    finally:
+        if os.path.exists(video_only):
+            try:
+                os.remove(video_only)
+            except OSError:
+                pass
+    facts = source_facts(final)
+    if facts["frames"] != N:
+        os.replace(final, final + ".refused")
+        raise PlannerError(f"the patched source has {facts['frames']} frames, not {N}: refused")
+    return facts
+
+
+def do_chunk_source(body, out_dir=None):
+    """op chunk_source {chunk, take?}: the chunk's take (default: the one in use) becomes the picture the chunk renders
+    from, so the next change builds on it. op chunk_source_revert {chunk}: back to the original for that chunk. chunk
+    "all": every chunk that has a take (or every edited chunk, for the revert) in one go. The
+    chunk's earlier takes, prompt and masks are put aside (nothing erased) and come back on a revert. The patched file
+    is built outside the plan lock (a minute for a long clip); the plan edit after it is quick."""
+    jd, pp = job_paths(body.get("job", ""), out_dir)
+    revert = body["op"] == "chunk_source_revert"
+    plan = sp.load_plan(pp)
+    if any(c.get("state") == "rendering" for c in plan.get("chunks", [])):
+        raise sp.PlanError("a chunk is rendering: change a source once it's in")
+    base = dict(plan.get("overrides") or {})
+    orig = plan.get("source_orig") or plan["source"]
+    mode = sp.job_mode(plan)
+    every = body["chunk"] == "all"
+    cids, skipped = [], {}
+    if every:
+        for c in plan.get("chunks", []):
+            if revert:
+                if c["id"] in base:
+                    cids.append(c["id"])
+            elif sp.is_kept(c):
+                skipped[c["id"]] = "kept as the original"
+            elif sp.effective_take(c, mode)[0] is None:
+                skipped[c["id"]] = "no take"
+            else:
+                cids.append(c["id"])
+        if not cids:
+            raise sp.PlanError("no chunk to change" + (f" ({skipped})" if skipped else ""))
+    else:
+        cids = [_chunk(plan, body["chunk"])["id"]]
+    for cid in cids:
+        c = sp.find_chunk(plan, cid)
+        if revert:
+            if cid not in base:
+                raise sp.PlanError(f"chunk {cid} renders from the original already")
+            base.pop(cid)
+            continue
+        take = None
+        if body.get("take") and not every:
+            take = next((t for t in c.get("takes", []) if t["id"] == body["take"]), None)
+        else:
+            take = sp.effective_take(c, mode)[0]
+        why = None
+        if take is None:
+            why = "has no take to use as its source"
+        elif not sp.take_covers(take, *c["deliver"]):
+            why = f"take {take['id']} renders {take['render']}, which doesn't cover the chunk {c['deliver']}"
+        elif not os.path.isfile(os.path.join(jd, take["file"])):
+            why = f"take {take['id']}'s file is missing"
+        if why:
+            if not every:
+                raise sp.PlanError(f"chunk {cid} {why}")
+            skipped[cid] = why
+            continue
+        base[cid] = {"take": take["id"], "file": take["file"], "render": list(take["render"]), "range": list(c["deliver"])}
+    cids = [cid for cid in cids if revert or cid in base]
+    facts = build_patched_source(jd, orig, base) if base else orig
+
+    def upd(p):
+        if (p.get("overrides") or {}) != (plan.get("overrides") or {}):
+            raise sp.PlanError("another chunk's source changed while this one was built: try again")
+        stash = p.setdefault("override_stash", {})
+        for cid in cids:
+            ch = sp.find_chunk(p, cid)
+            r0, r1 = ch["render"]
+            if revert:
+                back = stash.pop(cid, {})
+                mine = {t["id"] for t in back.get("takes") or []}                 # (older flips stashed the takes: they come back)
+                ch["past_takes"] = [t for t in ch.get("past_takes", []) if t["id"] not in mine]
+                ch["takes"] = sorted(list(back.get("takes") or []) + list(ch.get("takes") or []), key=lambda t: t["id"])
+                if back.get("takes"):
+                    ch["chosen"] = back.get("chosen")
+                ch.update(draft=back.get("draft"), prompt=back.get("prompt") or "")
+                if back.get("drafted"):                                   # the draft's own record (warnings, time) comes back too
+                    ch["drafted"] = back["drafted"]
+                ch["state"] = "takes" if ch["takes"] else None
+                ch["prompt_state"] = back.get("prompt_state") or ("edited" if ch["prompt"].strip() else "empty")
+                p["masks"] = (p.get("masks") or []) + [m for m in back.get("masks") or [] if m not in (p.get("masks") or [])]
+            else:
+                drop = [m for m in p.get("masks") or [] if m["range"][0] <= r1 and r0 <= m["range"][1]]
+                # the takes stay listed and the choice stays (user: "not giving the option for the previous images"): only the
+                # prompt, the draft and the cached masks (they outline the old picture) are put aside
+                stash[cid] = {"takes": [], "chosen": ch.get("chosen"), "prompt": ch.get("prompt"),
+                              "prompt_state": ch.get("prompt_state"), "draft": ch.get("draft"), "drafted": ch.get("drafted"),
+                              "masks": drop,
+                              "stashed": sp.now()}
+                p["masks"] = [m for m in p.get("masks") or [] if m not in drop]
+                ch.update(prompt="", prompt_state="empty", draft=None, drafted=None)
+            for k in ("rendering", "error", "failed", "anchor_text"):
+                ch.pop(k, None)
+        if base:
+            p["overrides"], p["source_orig"] = base, orig
+            p["source"] = dict(facts, patched=True)
+        else:
+            p.pop("overrides", None)
+            p.pop("source_orig", None)
+            p["source"] = orig
+        p["assembled"] = p.get("assembled") or []
+        sp.rebuild_chunks(p)
+    plan = sp.update_plan(pp, upd)
+    return {"ok": True, "rev": plan["rev"], "result": {"op": body["op"], "chunks": cids, "skipped": skipped,
+                                                       "overrides": sorted(base), "source": plan["source"]["path"]},
+            "warnings": plan.get("warnings", []), "plan": plan, "text": plan_text(plan)}
+
+
 FILE_OPS = {"delete_take": _op_delete_take, "restore_take": _op_restore_take, "use_take": _op_use_take,
             "delete_mask": _op_delete_mask}
 
@@ -679,26 +983,32 @@ FILE_OPS = {"delete_take": _op_delete_take, "restore_take": _op_restore_take, "u
 # ---------------------------------------------------------------------------
 
 def detect_scenes(path, fps, low=WEAK_THRESHOLD):
-    """ffmpeg's scene score for every frame scoring > low, as [(frame, score)] (frame c = the first of a new shot)."""
+    """ffmpeg's scene score for every frame scoring > low, as [(frame, score)] (frame c = the first of a new shot,
+    numbered on the decoder's timeline at `fps`, the frames a chunk is cut from). Every frame's time is read, so
+    the score lands where the frame before it stops showing (tl.first_index_after), not at round(t * fps): a
+    29.97 fps source planned at 30 had every cut past frame ~500 one frame late."""
     ff = tl._ffmpeg_exe()
     p = subprocess.run([ff, "-hide_banner", "-nostats", "-i", path, "-an", "-vf",
-                        f"select='gt(scene,{float(low)})',metadata=print:key=lavfi.scene_score", "-f", "null", "-"],
+                        "select='gte(scene,0)',metadata=print:key=lavfi.scene_score", "-f", "null", "-"],
                        capture_output=True)
     if p.returncode != 0:
         raise PlannerError(f"cut detection failed: {p.stderr.decode(errors='replace')[-600:]}")
-    base = float(tl.probe(path, fps).get("base_time") or 0.0)
-    out, t = {}, None
+    info = tl.probe(path, fps)
+    base, tb = float(info.get("base_time") or 0.0), info.get("time_base")
+    out, t, prev = {}, None, None
     for line in p.stderr.decode(errors="replace").splitlines():
-        m = re.search(r"pts_time:\s*([0-9.]+)", line)
+        m = re.search(r"pts_time:\s*(-?[0-9.]+)", line)
         if m:
             t = float(m.group(1))
             continue
         m = re.search(r"lavfi\.scene_score=([0-9.]+)", line)
         if m and t is not None:
-            f = int(round((t - base) * float(fps)))
-            if f > 0:
-                out[f] = max(out.get(f, 0.0), float(m.group(1)))
-            t = None
+            sc = float(m.group(1))
+            if prev is not None and sc > float(low):
+                f = tl.first_index_after(prev, base, fps, tb)
+                if f > 0:
+                    out[f] = max(out.get(f, 0.0), sc)
+            prev, t = t, None
     return sorted(out.items())
 
 
@@ -800,6 +1110,105 @@ def free_job_name(stem, out_dir=None):
     return name
 
 
+def mark_size(source):
+    """The size a mark run's mask comes out at: the render group scales the source to 1 MP (2^20 pixels) for SAM3."""
+    s = (float(2 ** 20) / (int(source["width"]) * int(source["height"]))) ** 0.5
+    return int(round(int(source["width"]) * s)), int(round(int(source["height"]) * s))
+
+
+def do_empty_mask(body, out_dir=None):
+    """A "nobody here" mark over a range (the strip's Mark menu): an empty mask, cached as a mark run's is, for a shot
+    the target isn't in. SAM3 run on such a shot marks something anyway (test clip, 2026-10-17: the dark background
+    behind a held ticket, a shadow on a wall, both of which the render would have repainted as the character); with
+    an empty mark the shot is left as filmed. Sized like the job's other masks, so the stitched cover holds."""
+    try:
+        from . import swap_mask as sm       # swap_mask imports this module
+    except ImportError:
+        import swap_mask as sm
+    jd, pp = job_paths(body.get("job", ""), out_dir)
+    plan = sp.load_plan(pp)
+    a, b = int(body["range"][0]), int(body["range"][1])
+    if not 0 <= a <= b < int(plan["source"]["frames"]):
+        raise sp.PlanError(f"range {a}-{b} is outside the source (0-{int(plan['source']['frames']) - 1})")
+    sizes = [tuple(m["size"]) for m in plan.get("masks", []) if m.get("size")]
+    w, h = sizes[-1] if sizes else mark_size(plan["source"])
+    c = sp.find_chunk(plan, body["chunk"]) if body.get("chunk") else \
+        next((x for x in plan["chunks"] if x["deliver"][0] <= a <= x["deliver"][1]), None)
+    n = b - a + 1
+    mark = {"format": MARK_FORMAT, "plan": pp, "job": plan["job"], "range": [a, b], "frames": n,
+            "source": plan["source"], "chunk": c["id"] if c else None,
+            "target": sp.chunk_target(plan, c) if c else (plan.get("target") or ""), "nonce": uuid.uuid4().hex,
+            "started": time.time()}
+    entry = sm.save_mask(mark, torch.zeros((n, h, w)), save_preview=False, fill_holes_frames=0)
+    plan = sp.load_plan(pp)
+    return {"ok": True, "rev": plan["rev"], "result": {"op": "empty_mask", "mask": entry["id"]},
+            "warnings": plan.get("warnings", []), "plan": plan, "text": plan_text(plan)}
+
+
+UNDO_KEEP = 50
+# Not edits of the strip: they never go on the undo stack.
+UNDO_SKIP = {"create", "undo", "render_failed", "rescore", "empty_mask", "clear_state", "source"}
+
+
+def _undo_file(jd):
+    return os.path.join(jd, "undo.json")
+
+
+def undo_stack(jd):
+    try:
+        with open(_undo_file(jd), encoding="utf8") as f:
+            d = json.load(f)
+        return d if isinstance(d, list) else []
+    except (OSError, ValueError):
+        return []
+
+
+def _undo_save(jd, stack):
+    sp._atomic_write(_undo_file(jd), json.dumps(stack[-UNDO_KEEP:], indent=1))
+
+
+def _op_label(body):
+    """A short line for the undo button: what the edit was."""
+    bits = [str(body.get("op"))]
+    for k in ("split", "chunk", "cut", "mask", "take", "mode", "frame", "to"):
+        if body.get(k) is not None:
+            bits.append(f"{k} {body[k]}")
+    return " ".join(bits)[:120]
+
+
+def do_undo(jd, pp):
+    """Put the plan back as it was before the last strip edit: the plan saved in history/ before that edit, with every take the
+    chunks have now (renders since stay; a chunk the old plan did not have is kept under removed_chunks, as delete_split does)."""
+    stack = undo_stack(jd)
+    if not stack:
+        raise PlannerError("nothing to undo")
+    ent = stack[-1]
+    hf = os.path.join(jd, "history", f"plan_{ent['rev']}.json")
+    if not os.path.isfile(hf):
+        raise PlannerError(f"revision {ent['rev']} is no longer in history (only the last {sp.HISTORY_KEEP} saves are kept)")
+    with open(hf, encoding="utf8") as f:
+        prev = json.load(f)
+
+    def upd(p):
+        cur = {c["id"]: c for c in p.get("chunks", [])}
+        for c in prev.get("chunks", []):
+            cc = cur.pop(c["id"], None)
+            if cc is not None:
+                c["takes"] = cc.get("takes") or []
+                ids = {t["id"] for t in c["takes"]}
+                if c.get("chosen") not in ids:
+                    c["chosen"] = cc.get("chosen") if cc.get("chosen") in ids else c.get("chosen")
+        for cc in cur.values():
+            if cc.get("takes"):
+                prev.setdefault("removed_chunks", []).append(dict(cc, removed=sp.now()))
+        prev["rev"] = p.get("rev", 0)
+        return prev
+    plan = sp.update_plan(pp, upd)
+    _undo_save(jd, stack[:-1])
+    return {"ok": True, "rev": plan["rev"], "result": {"op": "undo", "undid": ent.get("label"), "restored_rev": ent["rev"]},
+            "warnings": plan.get("warnings", []), "plan": plan, "text": plan_text(plan)}
+
+
 def do_op(body, out_dir=None):
     """The op route's body: create a job, or apply one edit under the plan lock."""
     job = body.get("job", "")
@@ -807,8 +1216,14 @@ def do_op(body, out_dir=None):
     if body.get("op") == "create":
         plan = create_job(job, body.get("source", ""), body.get("settings"), out_dir)
         return {"ok": True, "rev": plan["rev"], "plan": plan, "text": plan_text(plan)}
+    if body.get("op") == "undo":
+        return do_undo(jd, pp)
+    if body.get("op") in ("chunk_source", "chunk_source_revert"):
+        return do_chunk_source(body, out_dir)
     if body.get("op") == "rescore":
         return do_rescore(body, out_dir)
+    if body.get("op") == "empty_mask":
+        return do_empty_mask(body, out_dir)
     if body.get("op") == "source":
         def upd(p):
             if any(c.get("takes") for c in p.get("chunks", [])):
@@ -818,15 +1233,79 @@ def do_op(body, out_dir=None):
         plan = sp.update_plan(pp, upd, body.get("rev"))
         return {"ok": True, "rev": plan["rev"], "plan": plan, "text": plan_text(plan)}
     out = {}
+    before = {}
 
     def upd(p):
+        before["rev"] = p.get("rev")
         if body.get("op") in FILE_OPS:
             out.update(FILE_OPS[body["op"]](p, body, jd))
         else:
             out.update(apply_op(p, body))
     plan = sp.update_plan(pp, upd, body.get("rev"))
+    if body.get("op") not in UNDO_SKIP and before.get("rev") is not None:
+        _undo_save(jd, undo_stack(jd) + [{"rev": before["rev"], "op": body.get("op"), "label": _op_label(body), "at": sp.now()}])
     return {"ok": True, "rev": plan["rev"], "result": out, "warnings": plan.get("warnings", []), "plan": plan,
             "text": plan_text(plan)}
+
+
+_ZONE_GUIDES = {}
+
+
+def do_zone_preview(job, frame, out_dir=None):
+    """Where an object add's zone sits on one source frame, in source pixels, for the strip's zone editor: the zone's shape and
+    geometry, the touch circle, the target's anchor point and `fw` (one target-width in px: the unit of every zone number). The
+    guide (the target's cached masks over the chunk's render range) is built once per chunk and masks version; the settings are read
+    fresh, so a number typed in the strip moves the picture without a rebuild."""
+    try:
+        from . import swap_keep as sk
+    except ImportError:
+        import swap_keep as sk
+    jd, pp = job_paths(job, out_dir)
+    plan = sp.load_plan(pp)
+    if not sp.object_zone(plan):
+        raise PlannerError("the job is not an object add that redraws a zone")
+    frame = int(frame)
+    c = next((x for x in plan.get("chunks", []) if x["deliver"][0] <= frame <= x["deliver"][1]), None)
+    if c is None:
+        raise PlannerError(f"frame {frame} is in no chunk")
+    src = plan["source"]
+    fr, (w, h) = int(round(float(src["fps"]))), (int(src["width"]), int(src["height"]))
+    target = (sp.chunk_target(plan, c) or "").strip()
+    masks_key = tuple((m.get("id"), m.get("created")) for m in plan.get("masks") or [])
+    key = (os.path.abspath(jd), c["id"], target, tuple(c["render"]), masks_key)
+    g = _ZONE_GUIDES.get(key)
+    if g is None:
+        if len(_ZONE_GUIDES) > 8:
+            _ZONE_GUIDES.clear()
+        g = _ZONE_GUIDES[key] = sk.ZoneGuide(plan, jd, fr, (w, h), int(c["render"][0]), int(c["render"][1]), target)
+    g.o = sp.object_settings(plan)
+    o = g.o
+    out = {"ok": True, "frame": frame, "chunk": c["id"], "w": w, "h": h, "target": target, "found": False,
+           "settings": {k: o.get(k) for k in ("size", "zone_aspect", "zone_grow", "zone_dx", "zone_dy", "zone_shape", "zone_spare",
+                                              "zone_touch_dx", "zone_touch_dy", "zone_touch_r", "sink", "anchor_at", "enter_at")}}
+    ok = sp.zone_key_at(o, frame)
+    out["keys"] = [k["frame"] for k in sorted(o.get("zone_keys") or [], key=lambda x: x["frame"])]
+    out["key"] = ok["frame"] if ok else None
+    out["settings"].update({f: sp.zone_at(o, frame).get(f) for f in sp.ZONE_KEY_FIELDS})
+    a = g.anchors.get(frame)
+    if a is None or not g.first_width:
+        out["why"] = ("no mask of " + (repr(target) if target else "the target") + " on this frame: mark the chunk first"
+                      if not g.anchors else "the target is not found on this frame")
+        return out
+    fw = float(g.first_width)
+    out.update(found=True, fw=fw, anchor=[float(a[0]), float(a[1]), float(a[2])])
+    if o.get("zone_shape") == "mask":
+        out["zone"] = {"shape": "mask"}
+    else:
+        oe = sp.zone_at(o, frame)
+        cx, cy, rx, ry = sk.zone_geometry(a, fw, oe)
+        out["zone"] = {"shape": o.get("zone_shape") or "ellipse", "cx": cx, "cy": cy, "rx": rx, "ry": ry}
+    oe = sp.zone_at(o, frame)
+    r = float(oe.get("zone_touch_r", 0.0))
+    if r > 0:
+        out["touch"] = {"x": a[0] + float(oe.get("zone_touch_dx", 0.0)) * fw, "y": a[1] + float(oe.get("zone_touch_dy", 0.0)) * fw, "r": r * fw}
+    return out
+
 
 
 def do_rescore(body, out_dir=None):
@@ -1027,7 +1506,8 @@ def plan_view(job, out_dir=None):
         j["verdict"] = j["flags"]["verdict"]
     return {"path": pp, "job_dir": jd, "subfolder": os.path.relpath(jd, output_dir_or(out_dir)).replace("\\", "/"),
             "plan": plan, "joins": joins, "status": chunk_status(plan, jd), "warnings": plan.get("warnings", []),
-            "quality": ss.legend(), "text": plan_text(plan), "source_view": _source_view_safe(plan, jd)}
+            "quality": ss.legend(), "text": plan_text(plan), "source_view": _source_view_safe(plan, jd),
+            "undo": (lambda st: {"n": len(st), "last": st[-1].get("label") if st else None})(undo_stack(jd))}
 
 
 def _source_view_safe(plan, jd):
@@ -1095,6 +1575,11 @@ def resolve_pins(plan, k):
                 pins["end"] = {"source": True, "frames": f}                    # anchored onto the original
             elif t is not None and sp.take_covers(t, *f):
                 pins["end"] = {"take": t["id"], "frames": f}
+            elif t is not None and sp.take_covers(t, r1 + 1, r1 + K):
+                # the take after was rendered from its own first frame (its left split was a cut then), so it has no
+                # picture under this chunk's last frame: pin the end to the frames just after it, one frame late
+                pins["end"] = {"take": t["id"], "frames": [r1 + 1, r1 + K]}
+                notes.append(f"end: {chunks[k + 1]['id']}'s take starts after this chunk, so the end is pinned to the frame after it")
             elif t is not None:
                 notes.append(f"end: {chunks[k + 1]['id']}'s take doesn't cover {f[0]}-{f[1]}: free end")
     return pins, notes
@@ -1163,8 +1648,49 @@ def decode_frames(path, fr, first, count, size=None):
     return out
 
 
+def object_crop(plan, job_dir, r0, r1, target, w, h, extra=None, pad=None):
+    """An object job's render box in source pixels [x0, y0, x1, y1] (even sides): the union of the target's cached
+    masks over r0..r1, each side padded by sp.CROP_PAD of its own length (at least sp.CROP_MIN), inside the frame. None when no
+    mask covers the range or every one is empty."""
+    cover = sp.mask_cover(plan, r0, r1, target)
+    if not cover:
+        return None
+    fr = int(round(float(plan["source"]["fps"])))
+    box = None
+    for seg, f0, f1 in cover:
+        path = os.path.join(job_dir, seg["file"])
+        if not os.path.isfile(path):
+            return None
+        for f in tl._iter_frames(path, fr, f0 - int(seg["range"][0]), f1 - int(seg["range"][0]) + 1):
+            m = f[..., 0] > 127
+            if not m.any():
+                continue
+            mh, mw = m.shape
+            ys, xs = np.nonzero(m)
+            b = (xs.min() * w / mw, ys.min() * h / mh, (xs.max() + 1) * w / mw, (ys.max() + 1) * h / mh)
+            box = b if box is None else (min(box[0], b[0]), min(box[1], b[1]), max(box[2], b[2]), max(box[3], b[3]))
+    for b in extra or []:                       # an add's cut-out boxes: the crop holds the added object too
+        if b is not None:
+            box = tuple(b) if box is None else (min(box[0], b[0]), min(box[1], b[1]), max(box[2], b[2]), max(box[3], b[3]))
+    if box is None:
+        return None
+    box = (max(0.0, box[0]), max(0.0, box[1]), min(float(w), box[2]), min(float(h), box[3]))
+    bw, bh = box[2] - box[0], box[3] - box[1]
+    # each side padded by its own size: a strip along the frame's edge (a painting cut off by the framing) stays a strip
+    pad = sp.CROP_PAD if pad is None else float(pad)
+    cw = min(w, max(sp.CROP_MIN, bw * (1 + 2 * pad)))
+    ch = min(h, max(sp.CROP_MIN, bh * (1 + 2 * pad)))
+    cx, cy = (box[0] + box[2]) / 2, (box[1] + box[3]) / 2
+    x0 = int(max(0, min(w - cw, cx - cw / 2))) // 2 * 2
+    y0 = int(max(0, min(h - ch, cy - ch / 2))) // 2 * 2
+    x1, y1 = min(w, x0 + int(cw) // 2 * 2), min(h, y0 + int(ch) // 2 * 2)
+    return [x0, y0, x1, y1]
+
+
 def render_inputs(desc, job_dir, plan):
-    """Decode the render's frames (+ held), its audio and its pins. All at execution."""
+    """Decode the render's frames (+ held), its audio and its pins. All at execution. An object job renders a crop
+    around its target (desc["crop"], object_crop): the frames, the size and the cached mask are cropped, and no pins
+    (outside the target the assembly is the source)."""
     src = desc["source"]
     path = src["path"]
     if not os.path.isfile(path):
@@ -1174,10 +1700,120 @@ def render_inputs(desc, job_dir, plan):
     if int(info["frames"]) != int(src["frames"]):
         raise PlannerError(f"the source now has {info['frames']} frames at {fr} fps; the plan was made for {src['frames']}")
     w, h = int(info["width"]), int(info["height"])
+    src_w, src_h = w, h
     r0, r1 = desc["render"]
     n = r1 - r0 + 1
     held = int(desc["held"])
     frames = decode_frames(path, fr, r0, n)
+    desc["crop"] = None
+    desc["object_refine"] = False
+    guide = None
+    zone = None
+    pin_frames = None
+    if sp.object_composite(plan):
+        try:
+            from . import swap_keep as sk
+        except ImportError:
+            import swap_keep as sk
+        o = sp.object_settings(plan)
+        kind = o.get("guide") if o.get("guide") in sp.OBJECT_GUIDES else "composite"
+        guide = sk.CompositeGuide(plan, job_dir, fr, (w, h), r0, r1, (desc["options"] or {}).get("target", ""))
+        if kind == "take":                      # a second pass: this chunk's own take, refined again
+            _c, t = sp.find_take(plan, o.get("from_take") or "")
+            if t is None or [int(x) for x in t["render"]] != [r0, r1]:
+                raise PlannerError(f"object guide 'take': {o.get('from_take')!r} isn't a take of this chunk's render {r0}-{r1}")
+            frames = decode_frames(os.path.join(job_dir, t["file"]), fr, 0, n)
+            desc["object_refine"], desc["composite_frames"] = True, n
+        else:
+            comp, placed = frames.clone(), 0
+            for i in range(n):
+                f8 = (frames[i].numpy() * 255 + 0.5).astype(np.uint8)
+                out, a = guide.apply(r0 + i, f8)
+                if a is not None:
+                    comp[i] = torch.from_numpy(out).to(torch.float32).div_(255.0)
+                    placed += 1
+            desc["composite_frames"] = placed
+            if kind == "placeholder":           # a grey silhouette, marked: H3 replaces it with the object
+                grey = np.full_like(guide.cut_rgb, 128)
+                masks = torch.zeros((n, h, w), dtype=torch.float32)
+                for i in range(n):
+                    p_ = guide.place(r0 + i)
+                    if p_ is None:
+                        continue
+                    f8 = (frames[i].numpy() * 255 + 0.5).astype(np.uint8)
+                    out, a = sk.place_cutout(f8, grey, guide.cut_a, p_)
+                    frames[i] = torch.from_numpy(out).to(torch.float32).div_(255.0)
+                    masks[i] = torch.from_numpy((a > 0.5).astype(np.float32))
+                desc["placeholder_mask"] = masks
+            elif kind == "composite":
+                frames = comp
+                desc["object_refine"] = placed > 0
+            else:                               # "pins": the source is the guide; the composite pins its ends
+                k = max(1, int(desc.get("anchors") or 1))
+                pin_frames = (comp[:k], comp[n - k:])
+    elif sp.object_zone(plan):                  # a zone redrawn, no cut-out: the frames stay as filmed
+        try:
+            from . import swap_keep as sk
+        except ImportError:
+            import swap_keep as sk
+        zone = guide = sk.ZoneGuide(plan, job_dir, fr, (w, h), r0, r1, (desc["options"] or {}).get("target", ""))
+        if not zone.anchors:
+            raise PlannerError(f"chunk {desc['chunk']}: object add (zone) found no cached mask of its target over frames "
+                               f"{r0}-{r1}: mark the chunk first")
+        desc["object_zone"] = True
+    if sp.job_mode(plan) == sp.MODE_OBJECT and sp.object_settings(plan).get("crop", True):
+        desc["crop"] = object_crop(plan, job_dir, r0, r1, (desc["options"] or {}).get("target", ""), w, h,
+                                   extra=[guide.box(f) for f in range(r0, r1 + 1)] if guide is not None else None,
+                                   pad=float(sp.object_settings(plan).get("crop_pad", sp.CROP_PAD)))
+        if desc["crop"]:
+            x0, y0, x1, y1 = desc["crop"]
+            frames = frames[:, y0:y1, x0:x1, :].contiguous()
+            w, h = x1 - x0, y1 - y0
+            if any(desc["pins"].get(s) for s in ("start", "end")):
+                desc["pin_notes"].append("object job, cropped render: no pins (outside the target the assembly is the source)")
+            desc["pins"] = {"start": None, "end": None}
+            if pin_frames is not None:
+                pin_frames = tuple(p_[:, y0:y1, x0:x1, :].contiguous() for p_ in pin_frames)
+    if zone is not None:                        # the zone per frame, at the (cropped) frames' size
+        cx0, cy0, cx1, cy1 = desc["crop"] or (0, 0, src_w, src_h)
+        zmask = torch.zeros((n, cy1 - cy0, cx1 - cx0), dtype=torch.float32)
+        found = 0
+        for i in range(n):
+            m = zone.mask(r0 + i)
+            if m is not None:
+                zmask[i] = torch.from_numpy(m[cy0:cy1, cx0:cx1])
+                found += 1
+        if held:
+            zmask = torch.cat([zmask, zmask[-1:].expand(held, -1, -1)], 0)
+        desc["zone_mask"] = zmask.contiguous()
+        desc["zone_frames"] = found
+        o_ = sp.object_settings(plan)
+        a_at = max(0, min(n - 1, int(round(float(o_["anchor_at"]) * float(desc["render_fps"])))))
+        if o_["anchor"] == "picture":                       # your own finished anchor frame, fitted over the crop
+            try:
+                from . import swap_keep as sk
+            except ImportError:
+                import swap_keep as sk
+            try:
+                pic = sk.load_picture(o_.get("anchor_picture"), job_dir)
+            except ValueError:
+                raise PlannerError(f"chunk {desc['chunk']}: the anchor picture is not set: pick a file for the object's anchor "
+                                   f"picture (a file in ComfyUI's input folder)")
+            pic = sk.fit_cover(pic, cx1 - cx0, cy1 - cy0)
+            desc["anchor_image"] = torch.from_numpy(np.ascontiguousarray(pic)).to(torch.float32).div_(255.0)[None]
+        elif o_["anchor"] == "composite":                   # the cut-out of Picture 1 placed on the anchor frame, no model
+            if not (o_.get("cutout") or {}).get("rgb"):
+                raise PlannerError(f"chunk {desc['chunk']}: the composite anchor needs Picture 1's cut-out (the BiRefNet group): "
+                                   f"it has none")
+            try:
+                from . import swap_keep as sk
+            except ImportError:
+                import swap_keep as sk
+            cg = sk.CompositeGuide(plan, job_dir, fr, (src_w, src_h), r0, r1, (desc["options"] or {}).get("target", ""))
+            f8 = (decode_frames(path, fr, r0 + a_at, 1)[0].numpy() * 255 + 0.5).astype(np.uint8)    # the whole frame, before the crop
+            comp, _a = cg.apply(r0 + a_at, f8)
+            comp = comp[cy0:cy1, cx0:cx1]
+            desc["anchor_image"] = torch.from_numpy(np.ascontiguousarray(comp)).to(torch.float32).div_(255.0)[None]
     if held:
         frames = torch.cat([frames, frames[-1:].expand(held, -1, -1, -1)], 0).contiguous()
     total = n + held
@@ -1200,6 +1836,13 @@ def render_inputs(desc, job_dir, plan):
     desc["pass1"] = list(fit_size(w, h, mp) if mp > 0 else pass1_size(w, h))
     pin_size = tuple(desc["pass1"]) if mp > 0 else (w, h)
     pins = {}
+    if pin_frames is not None:                  # an object add's composite, pinned at both ends (guide "pins")
+        import torch.nn.functional as F_
+        for side, pf in zip(("start", "end"), pin_frames):
+            pins[side] = F_.interpolate(pf.permute(0, 3, 1, 2), size=(pin_size[1], pin_size[0]), mode="area").permute(0, 2, 3, 1).contiguous()
+        desc["pins"] = {"start": {"object_composite": True, "frames": [r0, r0 + int(pin_frames[0].shape[0]) - 1]},
+                        "end": {"object_composite": True, "frames": [r1 - int(pin_frames[1].shape[0]) + 1, r1]}}
+        return frames, audio, pins, (w, h, fr)
     for side in ("start", "end"):
         p = desc["pins"].get(side)
         if not p:
@@ -1218,23 +1861,58 @@ def render_inputs(desc, job_dir, plan):
     return frames, audio, pins, (w, h, fr)
 
 
+def save_cutout(plan_file, job_dir, image, mask):
+    """The graph's cut-out of Picture 1 into the job (object/cutout_rgb.png, object/cutout_mask.png) when it changed;
+    the plan's object.cutout names them. Returns the updated plan, or None when nothing changed."""
+    import cv2
+    rgb = (image[0].cpu().numpy() * 255 + 0.5).clip(0, 255).astype(np.uint8)
+    m = mask[0].cpu().numpy() if mask.dim() == 3 else mask.cpu().numpy()
+    a = (m * 255 + 0.5).clip(0, 255).astype(np.uint8)
+    sha = hashlib.sha1(rgb.tobytes() + a.tobytes()).hexdigest()
+    cur = (sp.load_plan(plan_file).get("object") or {}).get("cutout") or {}
+    if cur.get("sha1") == sha and os.path.isfile(os.path.join(job_dir, cur.get("rgb", ""))):
+        return None
+    d = os.path.join(job_dir, "object")
+    os.makedirs(d, exist_ok=True)
+    cv2.imencode(".png", cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR))[1].tofile(os.path.join(d, "cutout_rgb.png"))
+    cv2.imencode(".png", a)[1].tofile(os.path.join(d, "cutout_mask.png"))
+
+    def upd(p):
+        p["object"] = dict(p.get("object") or {}, cutout={"rgb": "object/cutout_rgb.png", "mask": "object/cutout_mask.png",
+                                                         "sha1": sha, "size": [int(rgb.shape[1]), int(rgb.shape[0])]})
+    return sp.update_plan(plan_file, upd)
+
+
 def mark_descriptor(plan, plan_file, run):
     """A mark run's descriptor: the range whose source mask is tracked and cached: a chunk's render
     range, one shot of it (the strip marks shot by shot: SAM3 doesn't find the target again after a
-    cut), or an explicit [a, b]. A chunk's run tracks the chunk's target."""
+    cut), or an explicit [a, b]. A chunk's run tracks the chunk's target; an object keep's run
+    ({"keep": id}) tracks the keep's target over the given range, else the keep's own."""
     src = plan["source"]
-    c = _chunk(plan, run["chunk"]) if run.get("chunk") else None
+    keep = None
+    if run.get("keep"):
+        keep = next((k for k in plan.get("object_keeps") or [] if k.get("id") == run["keep"]), None)
+        if keep is None:
+            raise PlannerError(f"no object keep {run['keep']!r}")
+    c = _chunk(plan, run["chunk"]) if run.get("chunk") and keep is None else None
     if c is not None and sp.is_kept(c):
         raise PlannerError(f"chunk {c['id']} {c['deliver']} is kept as the original: it needs no mask")
-    r0, r1 = (int(run["range"][0]), int(run["range"][1])) if run.get("range") else c["render"]
+    if run.get("range"):
+        r0, r1 = int(run["range"][0]), int(run["range"][1])
+    else:
+        r0, r1 = keep["range"] if keep is not None else c["render"]
     cid = c and c["id"]
     if not 0 <= r0 <= r1 < int(src["frames"]):
         raise PlannerError(f"mark range {r0}-{r1} is outside the source (0-{int(src['frames']) - 1})")
-    return {"format": MARK_FORMAT, "job": plan["job"], "plan": plan_file, "plan_rev": plan.get("rev"),
-            "chunk": cid, "range": [r0, r1], "frames": r1 - r0 + 1,
-            "target": sp.chunk_target(plan, c) if cid else (plan.get("target") or "").strip(),
-            "source": {k: src[k] for k in ("path", "frames", "fps", "width", "height", "audio")},
-            "nonce": run.get("nonce") or uuid.uuid4().hex, "started": time.time()}
+    d = {"format": MARK_FORMAT, "job": plan["job"], "plan": plan_file, "plan_rev": plan.get("rev"),
+         "chunk": cid, "range": [r0, r1], "frames": r1 - r0 + 1,
+         "target": keep["target"] if keep is not None else
+                   sp.chunk_target(plan, c) if cid else (plan.get("target") or "").strip(),
+         "source": {k: src[k] for k in ("path", "frames", "fps", "width", "height", "audio")},
+         "nonce": run.get("nonce") or uuid.uuid4().hex, "started": time.time()}
+    if keep is not None:
+        d.update(kind="keep", keep=keep["id"])
+    return d
 
 
 def cached_mask(plan, job_dir, r0, r1, held=0, target=""):
@@ -1323,6 +2001,10 @@ class SeamStitchSwapPlanner:
                     "and an old take further down the chain can't pull a chunk towards it. Your choices in the strip "
                     "stay yours: this only decides what a render pins to. Off: pins follow the chosen takes on both "
                     "sides, for re-rolling one chunk between two takes you've chosen."}),
+                "object_cutout": ("IMAGE", {"tooltip":
+                    "Object jobs that add a thing: the sheet's object cut out (BiRefNet of Picture 1, background black). "
+                    "With its mask, the render's guide is the cut-out placed on the target in every frame."}),
+                "object_cutout_mask": ("MASK", {"tooltip": "The cut-out's mask (BiRefNet's mask output)."}),
             },
         }
 
@@ -1348,7 +2030,7 @@ class SeamStitchSwapPlanner:
 
     def plan(self, job, source, target_render_frames=209, overlap_frames=12, anchor_frames=5, floor_frames=124,
              ceiling_frames=209, conform_to_24fps=True, run="", ui_state="", first_pass_megapixels=0.0,
-             forward_chain=False):
+             forward_chain=False, object_cutout=None, object_cutout_mask=None):
         widgets = {"target_render_frames": target_render_frames, "overlap_frames": overlap_frames,
                    "anchor_frames": anchor_frames, "floor_frames": floor_frames, "ceiling_frames": ceiling_frames,
                    "conform_to_24fps": conform_to_24fps, "first_pass_megapixels": first_pass_megapixels,
@@ -1363,7 +2045,9 @@ class SeamStitchSwapPlanner:
         plan = sp.load_plan(pp)
         if (source or "").strip():
             try:
-                same = _norm(tl.resolve_path(source.strip().strip('"'))) == _norm(plan["source"]["path"])
+                want = _norm(tl.resolve_path(source.strip().strip('"')))
+                # a job with a chunk "edit this" runs on a patched file; the widget still names the clip it started from
+                same = want in (_norm(plan["source"]["path"]), _norm((plan.get("source_orig") or {}).get("path") or ""))
             except Exception:
                 same = False
             if not same:
@@ -1377,6 +2061,9 @@ class SeamStitchSwapPlanner:
 
         out = _blocked()
         action = r["action"]
+        if action == ACTION_RENDER and object_cutout is not None and object_cutout_mask is not None \
+                and sp.job_mode(plan) == sp.MODE_OBJECT:
+            plan = save_cutout(pp, jd, object_cutout, object_cutout_mask) or plan
         if action == ACTION_RENDER:
             desc = render_descriptor(plan, pp, r)
             frames, audio, pins, (w, h, fr) = render_inputs(desc, jd, plan)
@@ -1390,16 +2077,52 @@ class SeamStitchSwapPlanner:
             plan = sp.update_plan(pp, mark)
             desc["plan_rev"] = plan["rev"]
             out[OUT_RENDER_W], out[OUT_RENDER_H] = desc["pass1"]          # set by render_inputs, with the pins' size
+            out[OUT_OBJECT_REFINE] = bool(desc.get("object_refine"))
+            zmask = desc.pop("zone_mask", None)
+            aimg = desc.pop("anchor_image", None)
+            o_ = sp.object_settings(plan)
+            out[OUT_ANCHOR_PROMPT] = sp.zone_anchor_text(plan, sp.find_chunk(plan, desc["chunk"])) if zmask is not None else ""
+            out[OUT_ANCHOR_QWEN] = zmask is not None and o_["anchor"] == "qwen"
+            out[OUT_ANCHOR_IMAGE] = aimg if aimg is not None else torch.zeros((1, 64, 64, 3), dtype=torch.float32)
+            tot_ = int(desc["length"])
+            out[OUT_ZONE_ON] = zmask is not None
+            out[OUT_OBJECT_ZONE] = zmask if zmask is not None else torch.zeros((1, 64, 64), dtype=torch.float32)
+            out[OUT_ANCHOR_FRAME] = max(0, min(tot_ - 1, int(round(float(o_["anchor_at"]) * desc["render_fps"]))))
+            out[OUT_ENTER_FRAME] = max(0, min(tot_ - 1, int(round(float(o_["enter_at"]) * desc["render_fps"]))))
+            if zmask is not None:
+                _say(f"[SeamStitch] Swap Planner:   object add (zone): the zone found on {desc['zone_frames']} frames; the anchor is "
+                     f"drawn into frame {out[OUT_ANCHOR_FRAME]}, the thing enters at frame {out[OUT_ENTER_FRAME]} "
+                     f"(the zone is empty before it)")
+            if desc.get("object_refine"):
+                _say(f"[SeamStitch] Swap Planner:   object add: the cut-out composited on {desc['composite_frames']} "
+                     f"frames (the refine group renders it img2img)")
             out[:13] = [desc, frames, audio, desc["prompt"], desc["seed"], desc["length"], pins["start"], pins["end"],
                         w, h, desc["render_fps"], fr, json.dumps(desc["options"])]
             m, why = cached_mask(plan, jd, desc["render"][0], desc["render"][1], desc["held"],
                                  desc["options"].get("target", ""))
+            ph = desc.pop("placeholder_mask", None)
+            if ph is not None:                  # the placeholder is what the guide marks, at the cached masks' size
+                size = next((tuple(x["size"]) for x in reversed(plan.get("masks") or []) if x.get("size")), None)
+                if size:
+                    import torch.nn.functional as F_
+                    ph = F_.interpolate(ph[:, None], size=(size[1], size[0]), mode="nearest")[:, 0]
+                held = int(desc["held"])
+                m = torch.cat([ph, ph[-1:].expand(held, -1, -1)], 0).contiguous() if held else ph
+                why = None
+                _say("[SeamStitch] Swap Planner:   object placeholder: the grey silhouette is the marked target")
+            if m is not None and desc.get("crop"):           # the object job's crop, in the mask's own size
+                x0, y0, x1, y1 = desc["crop"]
+                sw, sh = int(desc["source"]["width"]), int(desc["source"]["height"])
+                mh, mw = int(m.shape[1]), int(m.shape[2])
+                m = m[:, int(y0 * mh / sh):max(int(y0 * mh / sh) + 1, int(round(y1 * mh / sh))),
+                      int(x0 * mw / sw):max(int(x0 * mw / sw) + 1, int(round(x1 * mw / sw)))].contiguous()
+                _say(f"[SeamStitch] Swap Planner:   object crop {desc['crop']} ({x1 - x0}x{y1 - y0} of {sw}x{sh})")
             out[OUT_SOURCE_MASK] = m if m is not None else torch.zeros((1, 64, 64), dtype=torch.float32)
             out[OUT_HAS_MASK] = m is not None
             desc["source_mask"] = "cached" if m is not None else None
             _say(f"[SeamStitch] Swap Planner:   source mask: " + (f"cached ({m.shape[2]}x{m.shape[1]})" if m is not None
                                                                     else f"none ({why}): the render group tracks it"))
-            pin_s = ", ".join(f"{s} {'the source' if p.get('source') else p['take']} {p['frames'][0]}-{p['frames'][1]}"
+            pin_s = ", ".join(f"{s} {'the source' if p.get('source') else 'the object composite' if p.get('object_composite') else p['take']} {p['frames'][0]}-{p['frames'][1]}"
                               for s, p in desc["pins"].items() if p) or "none"
             _say(f"[SeamStitch] Swap Planner: {job}: render {desc['chunk']} (take {desc['take']}) frames "
                   f"{desc['render'][0]}-{desc['render'][1]}" + (f" + {desc['held']} held" if desc["held"] else "")
@@ -1494,6 +2217,16 @@ try:
     async def _plan_route(request):
         try:
             return web.json_response(plan_view(request.query.get("job", "")))
+        except Exception as e:
+            return web.json_response({"error": str(e)}, status=400)
+
+    @PromptServer.instance.routes.get("/seamstitch/swap/zone_preview")
+    async def _zone_preview_route(request):
+        try:
+            import asyncio
+            q = request.query
+            res = await asyncio.get_event_loop().run_in_executor(None, do_zone_preview, q.get("job", ""), q.get("frame", "0"))
+            return web.json_response(res)
         except Exception as e:
             return web.json_response({"error": str(e)}, status=400)
 

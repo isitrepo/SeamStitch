@@ -640,7 +640,7 @@ class SeamStitchRecombine:
         audio = self._splice_audio(original_video_path, original_audio_override, bridge_audio,
                                    audio_mode, audio_bridge_weight, audio_crossfade_ms, frame_rate,
                                    start_frame, end_frame, anchor_dropped + first_kept,
-                                   deduped.shape[0], insert=insert)
+                                   deduped.shape[0], insert=insert, source_lead=first_kept)
 
         if skip_encode:
             print("[SeamStitch] Recombine: skip_encode is on - splice returned, no video written.")
@@ -653,7 +653,7 @@ class SeamStitchRecombine:
     @staticmethod
     def _splice_audio(video_path, override, bridge_audio, audio_mode, audio_bridge_weight,
                       crossfade_ms, frame_rate, start_frame, end_frame, first_kept, kept,
-                      insert=False):
+                      insert=False, source_lead=None):
         with av.open(video_path) as container:
             v = container.streams.video[0] if container.streams.video else None
             a = container.streams.audio[0] if container.streams.audio else None
@@ -702,7 +702,7 @@ class SeamStitchRecombine:
                                   first_kept, kept, av_offset_s=av_offset, bridge=bridge,
                                   crossfade_ms=crossfade_ms,
                                   combined_weight=audio_bridge_weight if audio_mode == "combined" else None,
-                                  insert=insert)
+                                  insert=insert, source_lead=source_lead)
         for note in notes:
             print(f"[SeamStitch] audio: {note}")
         return {"waveform": out.unsqueeze(0), "sample_rate": sample_rate}

@@ -306,12 +306,18 @@ function buildTimeline(node) {
     const bPrevJoin = button("◂ join", "Jump to the previous Swap join mark ([) - moves the playhead only", () => stepJoin(-1));
     const bNextJoin = button("join ▸", "Jump to the next Swap join mark (]) - moves the playhead only", () => stepJoin(1));
     const bSwap = button("Swap job ▾", "Put a Swap job's assembly on the strip with its joins marked above the ruler (click a mark to jump or bridge it)", (ev) => openSwapMenu(ev));
+    const bFixAll = button("fix all ▾", "Bridge EVERY open Swap join with the same settings: one queued run per join, then one splice that lays them all into the cut", (ev) => openFixAllMenu(ev));
+    // Deeper seam context on / off: the one number behind it is context_frames (real frames pinned each side of the gap).
+    // The clip anchors take 1, 5, 22, 39 (17k+5); NORMAL is the usual 5, DEEP is 22. Setting the widget keeps this strip's
+    // bridge sizes and the node in step, because both read it.
+    const DEEP_K = 22, NORMAL_K = 5;
+    const bDeep = button("deeper", "", () => toggleDeep());
     const bIn = button("I", "Mark in: the replace range starts at the playhead", () => markIn());
     const bOut = button("O", "Mark out: the replace range ends at the playhead", () => markOut());
     const bClear = button("✕ mark", "Clear what is marked to regenerate", () => setTarget({}));
     const status = el("span", { marginLeft: "auto", color: C.dim, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "45%" });
     bar1.append(bPlay, bMode, el("span", { width: "6px" }), bZoomOut, bZoomIn, bFit, el("span", { width: "6px" }),
-        bAdd, bSwap, bPrevJoin, bNextJoin, bText, el("span", { width: "6px" }), bIn, bOut, bClear, status);
+        bAdd, bSwap, bPrevJoin, bNextJoin, bFixAll, bDeep, bText, el("span", { width: "6px" }), bIn, bOut, bClear, status);
 
     const canvas = el("canvas", { width: "100%", height: `${CANVAS_H}px`, display: "block", cursor: "default",
         borderRadius: "4px", touchAction: "none", flex: "0 0 auto" });
@@ -362,6 +368,23 @@ function buildTimeline(node) {
     const grid = () => gridW ? gridW.value : GRID_LTX;
     const ctxK = () => ctxW ? (ctxW.value | 0) : 0;
     const extN = () => extW ? (extW.value | 0) : 0;
+    function deepLabel() {
+        if (!ctxW) { bDeep.style.display = "none"; return; }
+        const k = ctxK(), on = k === DEEP_K;
+        bDeep.textContent = on ? `deeper: ON (${k})` : k === NORMAL_K ? `deeper: off (${k})` : `context ${k}`;
+        bDeep.style.background = on ? "#1f5e3a" : "#2a2f3a";
+        bDeep.title = `Deeper seam context: pin ${DEEP_K} real frames (about ${(DEEP_K / 24).toFixed(1)} s) each side of the gap instead of ${NORMAL_K}, so the bridge eases in and out of the real footage. `
+            + `Smoother joins, slower to generate; it does not make the new frames match what was there. Now: ${k} frames each side (the clip anchors accept 1, 5, 22 or 39). `
+            + `Click to switch; then pick the bridge size again (the sizes depend on this number).`;
+    }
+    function toggleDeep() {
+        if (!ctxW) return;
+        const next = ctxK() === DEEP_K ? NORMAL_K : DEEP_K;
+        ctxW.value = next;
+        if (ctxW.callback) ctxW.callback(next);
+        deepLabel();
+        toast(`context ${next} frames each side${next === DEEP_K ? " (deeper)" : ""}: pick the bridge size again, the grid sizes depend on it`, "ok");
+    }
 
     function clipFrames(e) { const inf = S.info[e.path]; return inf ? inf.frames : null; }
     function played(e) {
@@ -391,6 +414,7 @@ function buildTimeline(node) {
     function cutToStrip(c) { for (const x of layout()) if (x.e.kind === "clip" && c >= x.cut && c < x.cut + x.len) return x.strip + (c - x.cut); return totals().strip; }
 
     function save(clearTarget) {
+        S.batch = null;   // fix-all ticks are keyed to strip positions: any edit of the strip retires them
         seqW.value = formatSequence(S.entries);
         if (clearTarget && S.target.mode === "replace") { setTarget({}, true); toast("mark cleared - the strip changed under it", "warn"); }
         if (S.target.mode === "gap" && !S.entries.some(e => e.kind === "gap")) setTarget({}, true);
@@ -508,6 +532,7 @@ function buildTimeline(node) {
     }
 
     function refresh() {
+        deepLabel();
         updateRateLabel();
         drawCanvas();
         drawSelBar();
@@ -516,6 +541,7 @@ function buildTimeline(node) {
         emptyHint.style.display = hasClips ? "none" : "flex";
         const joins = joinMarks(layout(), S.swap, S.fr).length > 0;
         bPrevJoin.style.display = bNextJoin.style.display = joins ? "" : "none";
+        bFixAll.style.display = joins ? "" : "none";
         bMode.textContent = S.mode === "full" ? "full ●" : "quick";
         bMode.style.borderColor = S.mode === "full" ? C.ok : "#3b4252";
         updateOverlay();
@@ -553,14 +579,15 @@ function buildTimeline(node) {
             const x = Math.round(f2x(m.strip)) + 0.5;
             if (x < -10 || x > w + 10) continue;
             const hot = S.hover && S.hover.kind === "join" && S.hover.m.strip === m.strip;
-            const col = joinColour(m), r = (m.type === "straight" ? 3.5 : 5.5) * U * (hot ? 1.4 : 1);
+            const bsm = batchSeamFor(m.strip);
+            const col = bsm ? batchColour(bsm) : joinColour(m), r = (m.type === "straight" ? 3.5 : 5.5) * U * (hot ? 1.4 : 1) * (bsm && bsm.state === "running" ? 1.5 : 1);
             g.strokeStyle = col; g.globalAlpha = 0.45;
             g.beginPath(); g.moveTo(x, RULER_H); g.lineTo(x, TRACK_Y + TRACK_H); g.stroke(); g.globalAlpha = 1;
             g.fillStyle = col;
             g.beginPath(); g.moveTo(x - r, RULER_H - 2 * r); g.lineTo(x + r, RULER_H - 2 * r); g.lineTo(x, RULER_H); g.closePath();
-            if (m.fixed) { g.lineWidth = 1.5 * U; g.stroke(); g.lineWidth = 1; } else g.fill();
-            if (m.type !== "straight" || hot) {
-                const label = m.fixed ? `✓${m.frame}` : `${m.frame}`;
+            if (m.fixed || (bsm && bsm.state === "done")) { g.lineWidth = 1.5 * U; g.stroke(); g.lineWidth = 1; } else g.fill();
+            if (m.type !== "straight" || hot || bsm) {
+                const label = bsm ? `${batchMark(bsm)}${m.frame}` : m.fixed ? `✓${m.frame}` : `${m.frame}`;
                 g.font = font(9, true);
                 const lw = g.measureText(label).width;
                 if (x - lw / 2 > lastLabel + 4 || hot) {
@@ -912,7 +939,9 @@ function buildTimeline(node) {
     function joinLabel(m) {
         const chunks = m.left_chunk && m.right_chunk ? ` · ${m.left_chunk} → ${m.right_chunk}` : "";
         const fixed = m.fixed ? ` · fixed${m.fixed.ratio != null ? ` (${m.fixed.ratio.toFixed(2)}x)` : ""} in ${m.fixed.result}` : "";
-        return `Swap join at frame ${m.frame} · ${JOIN_KINDS[m.type] || m.type}${m.verdict ? ` · ${m.verdict}` : ""}${chunks}${fixed}`;
+        const bx = batchSeamFor(m.strip);
+        const batch = bx ? ` · fix all: ${bx.state}${bx.verdict ? ` - ${bx.verdict}${bx.ratio != null ? ` (${bx.ratio.toFixed(2)}x)` : ""}` : ""}` : "";
+        return `Swap join at frame ${m.frame} · ${JOIN_KINDS[m.type] || m.type}${m.verdict ? ` · ${m.verdict}` : ""}${chunks}${fixed}${batch}`;
     }
     // Returns false when the strip has no marks (so the [ / ] keys stay free on any other strip).
     function stepJoin(dir) {
@@ -952,6 +981,171 @@ function buildTimeline(node) {
             openGapAt(x.i + 1);
         } else openGapAt(x.i);
     }
+
+
+    // ------------------------------------------------------------ fix all open joins (batch)
+    // One queued run per open join (the Timeline's target set to that join, Result Preview saving
+    // into the batch's own folder), then one SeamStitch Batch Splice run that lays every bridge into
+    // the cut. The runs are independent - same graph, same settings, only the target differs -
+    // so a weak seam can be re-queued alone and the splice run again.
+    function openFixAllMenu(ev) {
+        const all = joinMarks(layout(), S.swap, S.fr), open = openMarks(all);
+        if (!open.length) { toast("no open join to fix", "warn"); return; }
+        popup(ev, [
+            { label: `${open.length} open join${open.length === 1 ? "" : "s"} (${all.length - open.length} fixed already) - same settings for each` },
+            ...bridgeItems("join", (b, a) => openFixAllChooser(open, b, a)).map(it => Object.assign(it, { text: it.text.replace("bridge this join", "fix all joins") })),
+        ]);
+    }
+    function batchTargets(open, before, after) {
+        const lastCut = totals().cut - 1, ok = [], skipped = [];
+        let prevEnd = -1;
+        for (const m of open.slice().sort((a, b) => a.strip - b.strip)) {
+            const c = stripToCut(m.strip), start = c - before, end = c + after - 1;
+            if (start < 1 || end > lastCut - 1) skipped.push({ m, why: "too close to the end of the cut" });
+            else if (start <= prevEnd) skipped.push({ m, why: "overlaps the join before it" });
+            else { ok.push({ m, target: { mode: "replace", start, end } }); prevEnd = end; }
+        }
+        return { ok, skipped };
+    }
+    async function fixAllJoins(open, before, after) {
+        const { ok, skipped } = batchTargets(open, before, after);
+        if (!ok.length) { toast("nothing to queue: " + (skipped[0] ? `join at ${skipped[0].m.frame} ${skipped[0].why}` : "no joins"), "err"); return; }
+        const previews = app.graph._nodes.filter(n => n.type === "SeamStitchResultPreview" && n.mode === 0);
+        if (!previews.length) {
+            const off = app.graph._nodes.filter(n => n.type === "SeamStitchResultPreview").length;
+            toast(off ? `${off} Result Preview node${off === 1 ? " is" : "s are"} bypassed or muted - switch one (and the generator group feeding it) on with Ctrl+B, then press fix all again`
+                : "no Result Preview node in this graph - the batch saves through it", "err");
+            return;
+        }
+        const id = `b${new Date().toISOString().replace(/[-:T]/g, "").slice(0, 14)}`;
+        const folder = `seamstitch_batch/${id}`;
+        const queue = Object.getPrototypeOf(api).queuePrompt || api.queuePrompt;
+        S.batch = { id, folder, splice: null, finished: false,
+            seams: ok.map(({ m, target }) => ({ strip: m.strip, frame: m.frame, target, state: "queued", prompt_id: null })) };
+        drawCanvas();
+        const keepTarget = targetW.value, keepPrefix = previews.map(n => n.widgets.find(w => w.name === "filename_prefix")?.value);
+        let done = 0;
+        try {
+            for (const { m, target } of ok) {
+                setTarget(target, true);
+                previews.forEach(n => { const w = n.widgets.find(w => w.name === "filename_prefix"); if (w) w.value = `${folder}/seam_${String(m.frame).padStart(6, "0")}`; });
+                const p = await app.graphToPrompt();
+                const res = await queue.call(api, 0, p, { partialExecutionTargets: previews.map(n => String(n.id)) });
+                if (res?.node_errors && Object.keys(res.node_errors).length) throw new Error(`node errors: ${JSON.stringify(res.node_errors).slice(0, 300)}`);
+                S.batch.seams[done].prompt_id = res?.prompt_id || null;
+                done++;
+                toast(`queued ${done} of ${ok.length}: join at frame ${m.frame}`, "ok");
+            }
+            // the splice goes last, so it runs after every seam (ComfyUI keeps the queue's order)
+            let sp = app.graph._nodes.find(n => n.type === "SeamStitchBatchSplice");
+            if (!sp) {
+                sp = window.LiteGraph.createNode("SeamStitchBatchSplice");
+                sp.pos = [node.pos[0] + node.size[0] + 40, node.pos[1] + node.size[1] + 40];
+                app.graph.add(sp);
+            }
+            const fw = sp.widgets.find(w => w.name === "batch_folder");
+            if (fw) fw.value = folder;
+            const p = await app.graphToPrompt();
+            const sres = await queue.call(api, 0, p, { partialExecutionTargets: [String(sp.id)] });
+            S.batch.splice = sres?.prompt_id || null;
+            toast(`queued ${done} seam run${done === 1 ? "" : "s"} + the splice into output/${folder}` +
+                (skipped.length ? ` · skipped ${skipped.map(x => `${x.m.frame} (${x.why})`).join(", ")}` : ""), skipped.length ? "warn" : "ok");
+        } catch (e) {
+            const msg = e?.response?.error?.message || e?.message || String(e);
+            if (S.batch) S.batch.seams.slice(done).forEach(x => { x.state = "not queued"; });
+            toast(`fix all: ${msg}${done ? ` (${done} seam run${done === 1 ? "" : "s"} already queued)` : ""}`, "err");
+        } finally {
+            setTarget(keepTarget ? JSON.parse(keepTarget) : {}, true);
+            previews.forEach((n, i) => { const w = n.widgets.find(w => w.name === "filename_prefix"); if (w && keepPrefix[i] !== undefined) w.value = keepPrefix[i]; });
+            app.graph?.setDirtyCanvas(true, true);
+            refresh();
+        }
+    }
+
+
+    // The joins to fix, ticked: all of them to begin with.
+    function openFixAllChooser(open, before, after) {
+        const rows = open.slice().sort((a, b) => a.strip - b.strip);
+        const box = el("div", { position: "fixed", inset: "0", background: "rgba(0,0,0,.55)", zIndex: 10000, display: "flex", alignItems: "center", justifyContent: "center" });
+        const card = el("div", { background: "#1f2330", border: "1px solid #3b4252", borderRadius: "8px", padding: "12px", width: "min(520px, 90vw)", color: C.text, fontFamily: "sans-serif", fontSize: "12px" });
+        const list = el("div", { maxHeight: "50vh", overflowY: "auto", margin: "8px 0", border: "1px solid #333", borderRadius: "4px" });
+        const checks = rows.map(m => {
+            const row = el("label", { display: "flex", alignItems: "center", gap: "8px", padding: "4px 8px", cursor: "pointer", borderBottom: "1px solid #2a2f3a" });
+            const cb = el("input"); cb.type = "checkbox"; cb.checked = true;
+            const dot = el("span", { width: "10px", height: "10px", borderRadius: "50%", background: joinColour(m), flex: "none" });
+            const chunks = m.left_chunk && m.right_chunk ? `  ${m.left_chunk} → ${m.right_chunk}` : "";
+            row.append(cb, dot, el("span", { flex: "1" }, `frame ${m.frame} · ${JOIN_KINDS[m.type] || m.type}${m.verdict ? ` · ${m.verdict}` : ""}${chunks}`));
+            list.append(row);
+            return { cb, m };
+        });
+        const go = button("", "", () => {
+            const picked = checks.filter(c => c.cb.checked).map(c => c.m);
+            box.remove();
+            if (picked.length) fixAllJoins(picked, before, after);
+        });
+        const count = () => { const n = checks.filter(c => c.cb.checked).length; go.textContent = `queue ${n} join${n === 1 ? "" : "s"}`; go.disabled = !n; };
+        checks.forEach(c => c.cb.onchange = count);
+        const setAll = (f) => { checks.forEach(c => c.cb.checked = f(c.m)); count(); };
+        const row = el("div", { display: "flex", gap: "6px", justifyContent: "flex-end", alignItems: "center" });
+        row.append(button("all", "Tick every join", () => setAll(() => true)),
+            button("red + amber", "Tick only the joins rated red or amber", () => setAll(m => m.verdict === "red" || m.verdict === "amber")),
+            button("none", "Untick everything", () => setAll(() => false)),
+            el("span", { flex: "1" }), button("cancel", "", () => box.remove()), go);
+        card.append(el("div", { fontWeight: "bold" }, `Fix which joins? ${before} + ${after} frames around each`), list, row);
+        box.append(card);
+        box.onpointerdown = (e) => { if (e.target === box) box.remove(); };
+        document.body.append(box);
+        count();
+    }
+
+    // Progress of a "fix all" batch, from ComfyUI's own events: each join's mark on the ruler goes
+    // grey (waiting) -> blue (working) -> ticked in the colour of how its splice rated.
+    const VERDICT_RANK = { "seamless": 0, "soft bump": 1, "hard cut": 2 };
+    const VERDICT_COLOUR = { "seamless": "#34d399", "soft bump": "#fbbf24", "hard cut": "#f87171" };
+    const VERDICT_MARK = { "seamless": "✓", "soft bump": "≈", "hard cut": "!" };
+    function batchSeamFor(strip) { return S.batch ? S.batch.seams.find(x => x.strip === strip) : null; }
+    function batchColour(x) {
+        return x.state === "done" ? (VERDICT_COLOUR[x.verdict] || "#34d399") : x.state === "running" ? "#60a5fa" : x.state === "failed" ? "#f87171" : "#9ca3af";
+    }
+    function batchMark(x) {
+        return x.state === "done" ? VERDICT_MARK[x.verdict] || "✓" : x.state === "running" ? "▶" : x.state === "failed" ? "✗" : "…";
+    }
+    function batchProgress() {
+        const b = S.batch;
+        if (!b) return;
+        const done = b.seams.filter(x => x.state === "done"), failed = b.seams.filter(x => x.state === "failed").length;
+        const hard = done.filter(x => x.verdict === "hard cut").length, soft = done.filter(x => x.verdict === "soft bump").length;
+        const run = b.seams.find(x => x.state === "running");
+        toast(`fix all: ${done.length} of ${b.seams.length} done${run ? ` · on frame ${run.frame}` : ""}` +
+            (done.length ? ` · ${done.length - soft - hard} clean, ${soft} soft, ${hard} hard` : "") +
+            (failed ? ` · ${failed} failed` : "") + (b.finished ? " · spliced into the cut" : ""), failed || hard ? "warn" : "ok");
+        drawCanvas();
+    }
+    function seamOfPrompt(id) { return S.batch && id ? S.batch.seams.find(x => x.prompt_id === id) : null; }
+    const onExecStart = (e) => { const x = seamOfPrompt(e.detail?.prompt_id); if (x) { x.state = "running"; batchProgress(); } };
+    const onExecuted = (e) => {
+        const x = seamOfPrompt(e.detail?.prompt_id), r = e.detail?.output?.seamstitch_result?.[0];
+        if (!x || !r) return;
+        const rows = (r.joins || []).filter(j => j.verdict);
+        const worst = rows.reduce((w, j) => (VERDICT_RANK[j.verdict] ?? -1) > (VERDICT_RANK[w?.verdict] ?? -1) ? j : w, null);
+        x.state = "done"; x.verdict = worst ? worst.verdict : null; x.ratio = worst ? worst.ratio : null; x.path = r.path;
+        batchProgress();
+    };
+    const onExecFail = (e) => {
+        const id = e.detail?.prompt_id, x = seamOfPrompt(id);
+        if (x && x.state !== "done") { x.state = "failed"; batchProgress(); }
+        else if (S.batch && id && id === S.batch.splice) toast("fix all: the splice run failed - see the console; the seams' results are still in " + S.batch.folder, "err");
+    };
+    const onExecSuccess = (e) => {
+        const id = e.detail?.prompt_id, x = seamOfPrompt(id);
+        if (x && x.state !== "done") { x.state = "done"; batchProgress(); }
+        if (S.batch && id && id === S.batch.splice) { S.batch.finished = true; batchProgress(); }
+    };
+    api.addEventListener("execution_start", onExecStart);
+    api.addEventListener("executed", onExecuted);
+    api.addEventListener("execution_error", onExecFail);
+    api.addEventListener("execution_interrupted", onExecFail);
+    api.addEventListener("execution_success", onExecSuccess);
 
     function openTextEditor() {
         const box = el("div", { position: "fixed", inset: "0", background: "rgba(0,0,0,.55)", zIndex: 10000, display: "flex", alignItems: "center", justifyContent: "center" });
@@ -1340,7 +1534,7 @@ function buildTimeline(node) {
         if ((S.needFit || S.fitted) && canvas.clientWidth > 100) fit(); else drawCanvas();
     }).observe(canvas);
     const onRemoved = node.onRemoved;
-    node.onRemoved = function () { window.removeEventListener("keydown", onKey, true); closePopup(); video.pause(); video.removeAttribute("src"); return onRemoved?.apply(this, arguments); };
+    node.onRemoved = function () { window.removeEventListener("keydown", onKey, true); for (const [ev, f] of [["execution_start", onExecStart], ["executed", onExecuted], ["execution_error", onExecFail], ["execution_interrupted", onExecFail], ["execution_success", onExecSuccess]]) api.removeEventListener(ev, f); closePopup(); video.pause(); video.removeAttribute("src"); return onRemoved?.apply(this, arguments); };
 
     // ------------------------------------------------------------ public
     node.ssTimeline = {

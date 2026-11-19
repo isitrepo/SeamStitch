@@ -179,7 +179,7 @@ def test_planner_render_run_emits_frames_audio_and_pins_from_the_takes(nodes):
 def test_planner_assemble_and_empty_runs_block_the_render(nodes):
     out = _run(nodes, "assemble")["result"]
     assert out[14] == nodes["plan"] and all(isinstance(o, spl.ExecutionBlocker) for o in out[:14] + out[15:])
-    assert len(out) == len(spl.RETURN_TYPES) == len(spl.RETURN_NAMES) == 21
+    assert len(out) == len(spl.RETURN_TYPES) == len(spl.RETURN_NAMES) == 29
     out = spl.SeamStitchSwapPlanner().plan("t", "", 39, 6, 5, 10, 260, True, "")["result"]
     assert all(isinstance(o, spl.ExecutionBlocker) for o in out)
     sp.update_plan(nodes["plan"], lambda p: p["chunks"][2].__setitem__("prompt", " "))
@@ -257,7 +257,7 @@ def test_take_asks_comfyui_to_free_its_memory_after_the_run(monkeypatch):
     monkeypatch.setattr(server.PromptServer, "instance", types.SimpleNamespace())
     assert st.request_free() is False                       # no queue (tests, an old ComfyUI): nothing breaks
     opt = st.SeamStitchSwapTake.INPUT_TYPES()["optional"]
-    assert list(opt)[-2:] == ["free_memory_after", "level_match"] and opt["free_memory_after"][1]["default"] is True
+    assert list(opt)[-5:] == ["free_memory_after", "level_match", "detail_match", "detail_anchor", "person_anchor"] and opt["free_memory_after"][1]["default"] is True
 
 
 def test_take_levels_itself_to_its_pin(nodes):
@@ -346,6 +346,43 @@ def test_take_levels_to_its_start_pin_only_and_flags_a_stale_end(nodes):
     assert abs(got[keep - 1].astype(np.float64).mean() - np.clip(exp_last * g + o, 0, 255).mean()) < 1.5   # not pulled to the dark take
 
 
+def test_end_pinned_chunk_with_no_start_pin_is_levelled_to_its_end_pin(nodes):
+    # 2026-10-30: a backward chain from a free chunk (each chunk end-pinned to the one after, no start pin) used to get only a
+    # level_end flag; with no start pin it now follows its end pin instead
+    import swap_take as st
+    p = sp.load_plan(nodes["plan"])
+    c = p["chunks"]
+    r = [x["render"] for x in c]
+    D = _clip(r[2][1] - r[2][0] + 1, 100, 0.5, seed=5)
+    _add_take(nodes, 2, D, r[2])
+    desc, images = _run(nodes, "render", chunk=c[1]["id"], seed=11)["result"][:2]
+    if not desc["pins"].get("end") or desc["pins"].get("start"):
+        pytest.skip("the fixture's splits don't give an end pin and no start pin")
+    keep = desc["length"] - desc["held"]
+    dark = torch.clamp(images * 0.9, 0, 1)
+    k0 = desc["pins"]["end"]["frames"][0] - r[2][0]
+    for j in range(len(desc["pins"]["end"]["frames"]) and (desc["pins"]["end"]["frames"][1] - desc["pins"]["end"]["frames"][0] + 1)):
+        dark[keep - 1 - j] = torch.from_numpy(D[k0 + (desc["pins"]["end"]["frames"][1] - desc["pins"]["end"]["frames"][0]) - j].astype(np.float32) / 255.0 * 0.9)
+    take, tdir, _ = st.save_take(desc, dark, review_clip=False, level_match=True)
+    assert take["level"]["end"]["applied"] is True and "level_end" not in [f["code"] for f in take["flags"]]
+    got = _frames(os.path.join(tdir, "take.mkv")).astype(np.float64)
+    pin = D[desc["pins"]["end"]["frames"][1] - r[2][0]].astype(np.float64)
+    assert abs(got[keep - 1].mean() - pin.mean()) < 1.5                  # the end now sits at the pin's level
+
+
+def test_anchor_reference_is_a_take_with_no_pins_at_all(nodes, monkeypatch):
+    # 2026-10-30: the detail / colour anchors aim at the first full chunk with no pins; an end-pinned take no longer qualifies
+    import swap_take as st
+    monkeypatch.setattr(st.tl, "_iter_frames", lambda path, fr, i0, i1: iter([np.full((8, 8, 3), 200, np.uint8)]))
+    take = lambda tid, a, b, end: {"id": tid, "render": [a, b], "frames": b - a + 1, "file": "x", "files": {"mask_src": "m"},
+                                   "pins": {"start": None, "end": ({"take": "b-t001"} if end else None)}}
+    plan = {"chunks": [{"id": "a", "render": [0, 199], "chosen": "a-t001", "takes": [take("a-t001", 0, 199, True)]},
+                       {"id": "b", "render": [200, 399], "chosen": "b-t001", "takes": [take("b-t001", 200, 399, False)]}],
+            "source": {"fps": 24}}
+    got = st.anchor_sample(plan, "job", (8, 8))
+    assert got is not None and got[2] == "b-t001"                    # a-t001 starts earlier but is end-pinned
+
+
 def test_level_match_matches_the_spread_too():
     # the 60 s test job's c3 -> c8 (2026-10-16): the mean held but the couch's contrast rose ~1.5-2 a chunk; the transform
     # now matches each channel's spread (standard deviation) at the pinned frame as well as its mean
@@ -359,3 +396,124 @@ def test_level_match_matches_the_spread_too():
     assert abs(fixed.mean() - pin.mean()) < 0.5 and abs(fixed.std() - pin.std()) < 0.5
     T2, _, _ = st.level_gains([out], [pin], contrast=False)       # the mean only: no offset
     assert np.allclose(T2[1], 0) and abs((out * T2[0]).mean() - pin.mean()) < 0.5
+
+
+def _fine_energy(f):
+    import cv2
+    lum = cv2.cvtColor(np.ascontiguousarray(f), cv2.COLOR_RGB2GRAY).astype(np.float32)
+    return float(np.mean((lum - cv2.GaussianBlur(lum, (0, 0), 1.2)) ** 2))
+
+
+def test_detail_anchor_aims_at_the_reference_not_the_pin():
+    # 2026-10-29: pin-matching leaves the shortfall at every join; the anchor's energy replaces the pin's
+    import cv2
+    import swap_take as st
+    ref = _clip(1, 100, seed=5)[0]
+    soft = cv2.addWeighted(ref, 0.7, cv2.GaussianBlur(ref, (0, 0), 0.9), 0.3, 0)
+    softer = cv2.GaussianBlur(ref, (0, 0), 1.0)
+    room = np.ones(ref.shape[:2], bool)
+    # the pin is as soft as the take (nothing to restore against it) but the reference is sharper
+    assert st.detail_gain([soft], [soft])[0] == 0.0
+    k, ratio, _ = st.detail_gain([soft], [soft], [room], anchor=([ref], [room]))
+    assert k > 0.05 and ratio > 1
+    assert st.detail_gain([ref], [soft], [room], anchor=([softer], [room]))[0] == 0.0     # never softened
+
+
+def test_detail_gain_restores_the_band_the_round_trip_took():
+    # 2026-10-29: each pinned take kept ~0.78 of its pin's fine detail; k boosts the take's fine band to the pin's energy
+    import cv2
+    import swap_take as st
+    pin = _clip(1, 100, seed=5)[0]
+    soft = cv2.addWeighted(pin, 0.7, cv2.GaussianBlur(pin, (0, 0), 0.9), 0.3, 0)     # ~0.8 of the band left
+    k, ratio, _ = st.detail_gain([soft], [pin])
+    assert 0.05 < k <= st.DETAIL_CLAMP[1] and 1 < ratio < 2
+    fixed = st.boost_detail(soft, k)
+    assert abs(_fine_energy(fixed) / _fine_energy(pin) - 1) < 0.1 < abs(_fine_energy(soft) / _fine_energy(pin) - 1)
+    # colour untouched: the same amount on every channel, so the channel differences survive
+    d = fixed.astype(np.int16) - soft.astype(np.int16)
+    assert np.abs((d[..., 0] - d[..., 1])).max() <= 1 and np.abs((d[..., 1] - d[..., 2])).max() <= 1
+    # already as detailed (or more): never softened
+    assert st.detail_gain([pin], [soft])[0] == 0.0 and st.detail_gain([pin], [pin])[0] == 0.0
+    # a region: only the masked pixels are measured
+    m = np.zeros(pin.shape[:2], bool)
+    m[:, : pin.shape[1] // 2] = True
+    mixed = soft.copy()
+    mixed[:, pin.shape[1] // 2:] = pin[:, pin.shape[1] // 2:]
+    assert st.detail_gain([mixed], [pin], [m])[0] > 0.05 and st.detail_gain([mixed], [pin], [~m])[0] < 0.01
+
+
+def test_take_keeps_its_pins_detail(nodes):
+    import cv2
+    import swap_take as st
+    p = sp.load_plan(nodes["plan"])
+    c = p["chunks"]
+    r = [x["render"] for x in c]
+    A = _clip(r[0][1] - r[0][0] + 1, 100, 0.5, seed=2)
+    _add_take(nodes, 0, A, r[0])
+    desc, images = _run(nodes, "render", chunk=c[1]["id"], seed=11)["result"][:2]
+    soft = torch.from_numpy(np.stack([cv2.addWeighted(u, 0.7, cv2.GaussianBlur(u, (0, 0), 0.9), 0.3, 0)
+                                      for u in ((x.numpy() * 255).astype(np.uint8) for x in images)])
+                            .astype(np.float32) / 255)
+    pin = A[r[1][0] - r[0][0]]
+    off, tdir_off, _ = st.save_take(desc, soft, review_clip=False, level_match=True)
+    assert off["level"]["start"]["detail"]["ratio"] > 1
+    assert off["level"]["start"]["detail"]["applied"] is False
+    on, tdir_on, _ = st.save_take(_run(nodes, "render", chunk=c[1]["id"], seed=12)["result"][0], soft, review_clip=False,
+                                  level_match=True, detail_match=True)
+    dt = on["level"]["start"]["detail"]
+    assert dt["applied"] and 0.05 < dt["k"] <= st.DETAIL_CLAMP[1]
+    e_pin = _fine_energy(pin)
+    e_off = _fine_energy(_frames(os.path.join(tdir_off, "take.mkv"))[0])
+    e_on = _fine_energy(_frames(os.path.join(tdir_on, "take.mkv"))[0])
+    assert abs(e_on / e_pin - 1) < abs(e_off / e_pin - 1) and abs(e_on / e_pin - 1) < 0.2
+
+
+def test_straight_cut_take_is_held_to_the_reference(nodes, monkeypatch):
+    # 2026-10-29: a chunk with no start pin (a straight cut) has no pinned frame, so the anchors measure frames sampled
+    # across the take against the job's first full chunk; the reference chunk itself is left alone
+    import cv2
+    import swap_take as st
+    p = sp.load_plan(nodes["plan"])
+    c = p["chunks"]
+    desc, images = _run(nodes, "render", chunk=c[1]["id"], seed=11)["result"][:2]
+    soft = torch.from_numpy(np.stack([cv2.addWeighted(u, 0.7, cv2.GaussianBlur(u, (0, 0), 0.9), 0.3, 0)
+                                      for u in ((x.numpy() * 255).astype(np.uint8) for x in images)])
+                            .astype(np.float32) / 255)
+    n, h, w = int(soft.shape[0]), int(soft.shape[1]), int(soft.shape[2])
+    mask = torch.zeros((n, h, w))
+    mask[:, :, : w // 3] = 1.0
+    sharp = _clip(1, 100, seed=5)[0]
+    sharp = cv2.resize(sharp, (w, h))
+    room = np.zeros((h, w), bool)
+    room[:, w // 3:] = True
+    ref = ([sharp] * 4, [room] * 4, "c9-t001", [~room] * 4)
+    monkeypatch.setattr(st, "anchor_sample", lambda *a, **k: ref)
+    take, tdir, _ = st.save_take(desc, soft, source_mask=mask, review_clip=False, level_match=True, detail_match=True,
+                                 detail_anchor=True, person_anchor=True)
+    fa = take["level"]["anchor"]
+    assert "start" not in take["level"] and fa["ref"] == "c9-t001" and fa["detail"]["applied"] and fa["detail"]["k"] > 0.05
+    monkeypatch.setattr(st, "anchor_sample", lambda *a, **k: ("c2-t001" and (ref[0], ref[1], c[1]["id"] + "-t001", ref[3])))
+    own, _t, _r = st.save_take(_run(nodes, "render", chunk=c[1]["id"], seed=12)["result"][0], soft, source_mask=mask,
+                               review_clip=False, detail_match=True, detail_anchor=True, person_anchor=True)
+    assert "anchor" not in own["level"]
+
+
+def test_detail_map_follows_where_the_detail_was_lost():
+    # 2026-10-29: the wall lost less than the sofa; one gain for the room over-sharpened the wall (+25-45%). The map is
+    # higher where the take lost more, and stays within 0.5-1.5 x k.
+    import cv2
+    import swap_take as st
+    pin = _clip(1, 100, seed=5)[0]
+    blur = cv2.addWeighted(pin, 0.5, cv2.GaussianBlur(pin, (0, 0), 0.9), 0.5, 0)        # lost a lot
+    mild = cv2.addWeighted(pin, 0.85, cv2.GaussianBlur(pin, (0, 0), 0.9), 0.15, 0)      # lost a little
+    take = mild.copy()
+    half = pin.shape[1] // 2
+    take[:, half:] = blur[:, half:]
+    room = np.ones(pin.shape[:2], bool)
+    k, ratio, kmap = st.detail_gain([take], [pin], [room], spatial=True)
+    assert kmap is not None and kmap.shape == pin.shape[:2] and kmap.dtype == np.float32
+    assert kmap[:, half + 20:].mean() > 1.05 * kmap[:, : half - 20].mean()
+    assert kmap.min() >= 0.5 * k - 1e-6 and kmap.max() <= min(1.5 * k, st.DETAIL_CLAMP[1]) + 1e-6
+    assert st.detail_gain([take], [pin], [room])[2] is None                              # not asked for
+    fixed = st.boost_detail(take, kmap)
+    assert abs(_fine_energy(fixed[:, half + 20:]) / _fine_energy(pin[:, half + 20:]) - 1) <         abs(_fine_energy(st.boost_detail(take, k)[:, half + 20:]) / _fine_energy(pin[:, half + 20:]) - 1)

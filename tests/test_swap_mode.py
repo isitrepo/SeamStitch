@@ -112,7 +112,8 @@ def test_each_mode_chooses_its_own_take_and_refuses_the_others(job):
 def test_the_strip_lists_only_the_jobs_mode_takes():
     src = open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "js", "swap_planner.js"),
                encoding="utf-8").read()
-    assert "(c.takes || []).filter(t => takeMode(t) === jobMode())" in src and "kept (switch to see" in src
+    # e57ef36 reworded the note from "kept (switch to see" to "kept (switch the job's mode to see" on purpose (Q4 fault 3, 2026-11-17)
+    assert "(c.takes || []).filter(t => takeMode(t) === jobMode())" in src and "kept (switch the job's mode to see" in src
 
 
 def test_the_view_menu_shows_the_character_and_the_background_mask():
